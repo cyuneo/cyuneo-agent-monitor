@@ -1,5 +1,5 @@
 {
-  "cli.help.intro": "Shows your Claude Code and Codex sessions and their agents, read from the session records on this computer.",
+  "cli.help.intro": "Shows your Claude Code, Codex, Copilot, Gemini CLI and Qwen Code sessions and their agents, read from the session records on this computer.",
   "cli.help.usage": "Usage",
   "cli.help.options": "Options",
   "cli.help.optionsArg": "options",
@@ -11,7 +11,7 @@
   "cli.opt.interval": "Seconds between refreshes with --watch (default {n})",
   "cli.opt.window": "Show sessions active in the last N minutes (default {n})",
   "cli.opt.stale": "Minutes without new records before an agent counts as inactive (default {n})",
-  "cli.opt.provider": "Which records to read: all, claude or codex (default all)",
+  "cli.opt.provider": "Which records to read: all, claude, codex, copilot, gemini or qwen (default all)",
   "cli.opt.here": "Only sessions whose folder is the current directory or inside it",
   "cli.opt.session": "Show one session in detail: timeline, result, changed files, errors and how to resume (ID or the start of it)",
   "cli.opt.today": "Also add up today's API-equivalent cost (reads all of today's records)",
@@ -26,7 +26,7 @@
   "cli.opt.help": "Show this help",
   "cli.opt.version": "Show the version",
 
-  "cli.empty": "No Claude Code or Codex sessions were active in the last {n} minutes.",
+  "cli.empty": "No Claude Code, Codex, Copilot, Gemini CLI or Qwen Code sessions were active in the last {n} minutes.",
   "cli.empty.here": "No sessions from {dir} were active in the last {n} minutes.",
   "cli.today": "Today ({label}): {usd}",
   "cli.seeDetail": "details: --session {id}",
@@ -49,7 +49,7 @@
   "cli.error.noValue": "{flag} doesn't take a value.",
   "cli.error.needsValue": "{flag} needs a value.",
   "cli.error.badNumber": "{flag} needs a positive number (got “{value}”).",
-  "cli.error.badProvider": "Unknown provider “{value}”. Use all, claude or codex.",
+  "cli.error.badProvider": "Unknown provider “{value}”. Use all, claude, codex, copilot, gemini or qwen.",
   "cli.error.seeHelp": "Run with --help to see the options.",
   "cli.error.source": "Couldn't read {source} records: {message}",
   "cli.error.noSession": "No session matches “{id}”. It may have been inactive for more than {n} minutes; try a larger --window.",

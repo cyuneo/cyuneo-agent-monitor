@@ -15,6 +15,12 @@ const i18nLib = require('../lib/i18n');
 const lampLib = require('../lib/lamp');
 const notify = require('../lib/notify');
 
+// Safety net: a system notification that reaches the real child_process.execFile is a test bug (counted, and the run
+// fails at the end); every one must go through a fake execFile
+const childProcess = require('child_process');
+let realExecs = 0;
+childProcess.execFile = () => { realExecs++; throw new Error('tests never run commands'); };
+
 const TMP_ROOT = process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir();
 fs.mkdirSync(TMP_ROOT, { recursive: true });
 const TMP = fs.mkdtempSync(path.join(TMP_ROOT, 'am-notify-'));
@@ -451,6 +457,7 @@ formatTests();
 
 Promise.all(pending).then(() => {
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+  if (realExecs) { results.push(false); console.log(`  FAIL  ${realExecs} command(s) reached the real child_process.execFile`); }
   const failed = results.filter((r) => !r).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
   process.exitCode = failed ? 1 : 0;

@@ -6,21 +6,34 @@
 //   globalState. The extension owns the selection and pushes it to the page; clicking a session shows it in the
 //   content area, and the selection sticks until the user clicks another one (or switches to another chat tab, followActiveChat).
 // - Sidebar overview tree agentMonitor.tree (lib/tree.js); overall lamp in the status bar; two viewing scopes (all / workspace).
-// - Scanning runs on a worker thread (lib/worker.js; messages: config / focus / refresh / storage / pause / resume / interval).
+// - Scanning runs on a worker thread (lib/worker.js; messages: config / focus / refresh / storage / history / pause / resume / interval).
 // - Windows share one scan (lib/shared-scan.js, agentMonitor.shareScanAcrossWindows): the leader window's worker scans and
 //   publishes its snapshots, the other windows (followers) keep their worker paused and render the leader's snapshots.
 //   While no VS Code window has focus, the scanning worker slows to agentMonitor.backgroundRefreshSeconds.
 // - "Needs you" notifications (lib/notify.js, agentMonitor.notifyNeedsYou): a toast in the focused window (not for the
 //   chat the user is looking at), or a system notification when no window has focus (Windows and remote windows: a toast
 //   in the window that gets focus next); a claim file makes sure only one window reports each wait.
+// - Threshold alerts, sounds and quiet hours (lib/alerts.js): after each render a threshold tracker gets all sessions,
+//   the quota snapshot and today's totals (agentMonitor.alerts.*); each crossing is claimed once across windows and shown
+//   like "needs you". Sounds (agentMonitor.sound.*, off by default) go with the needs-you notification and the alerts,
+//   and play for errors and for finished work (notify.createLampEventTracker); each is claimed once ('sound|' + id).
+//   Quiet hours (agentMonitor.quietHours.*) mute sounds, system notifications (then the message waits for the window
+//   that gets focus next) and push; the status bar tooltip says while they are on.
 // - Remote push (lib/push.js, lib/push-runtime.js, setup in lib/push-setup.js; off by default): after each render the
-//   push runtime gets all sessions and the quota snapshot; it claims each event in the same shared claim dir, so one
-//   window sends it whatever its role in the shared scan. agentMonitor.push.* settings are read from user settings only.
+//   push runtime gets all sessions, the quota snapshot and the threshold alerts; it claims each event in the same shared
+//   claim dir, so one window sends it whatever its role in the shared scan. agentMonitor.push.* settings are read from
+//   user settings only.
+// - Network access (lib/network.js, agentMonitor.network.allow, off by default, user settings only): every request goes
+//   through network.request(), which reads the switch here at call time; while it is off the extension makes no network
+//   request at all. The commands agentMonitor.network.allow / .block (swapped by the context key
+//   agentMonitor.networkAllowed) and agentMonitor.network.toggle change it.
 // - lib/compact.js registers the compact command agentMonitor.compact itself; here we only call activateCompact on
 //   activation and forward every snapshot to it. The handoff-note command agentMonitor.handoff is registered here and
 //   calls runHandoff exported by compact.js.
 // - lib/autocompact.js registers the auto-compact capacity command agentMonitor.setAutoCompact itself.
 // - Storage locations and usage: agentMonitor.storage opens the page in lib/storage-view.js; the scan runs in the worker.
+// - Usage history: agentMonitor.history opens the page in lib/history-view.js; the page asks the worker ({ type: 'history' })
+//   and gets its replies through onHistory. A follower window asks its own (paused) worker, which answers history anyway.
 // - Observed compaction points: whenever a snapshot shows a new auto-compaction, record it in globalState under
 //   "model|window" and pass it to the worker with the next config.
 // All UI text goes through lib/i18n.js + lib/format.js; no sentences in any language are built here.
@@ -39,7 +52,9 @@ const scopeLib = require('./lib/scope');
 const { createSessionOrder } = require('./lib/order');
 const { AgentTreeProvider, esc } = require('./lib/tree');
 const notifyLib = require('./lib/notify');
+const alertsLib = require('./lib/alerts');
 const sharedScanLib = require('./lib/shared-scan');
+const network = require('./lib/network');
 
 const PKG = require('./package.json');
 const VERSION = PKG.version;
@@ -57,14 +72,19 @@ const COMPACT_CMD = 'agentMonitor.compact';
 const AUTOCOMPACT_CMD = 'agentMonitor.setAutoCompact';
 const HANDOFF_CMD = 'agentMonitor.handoff';
 const STORAGE_CMD = 'agentMonitor.storage';
+const HISTORY_CMD = 'agentMonitor.history';
+const HISTORY_FILE = 'usage-history.jsonl'; // under globalStorageUri: the worker's usage-history cache
 const PUSH_CMD = 'agentMonitor.push.setup';
 // Push settings (application scope, read with inspect().globalValue so a workspace can neither turn push on nor redirect it)
 const PUSH_KEYS = ['push.enabled', 'push.events', 'push.delaySeconds', 'push.includeTitle', 'push.channels'];
+// The network switch (application scope, read the same way): off, lib/network.js refuses every request
+const NETWORK_KEY = 'network.allow';
 const STORAGE_WAIT_MS = 120000; // the storage scan stats recursively; large dirs can take tens of seconds
 // Settings that require rebuilding the worker; other settings just recompute from the last snapshot on the main thread
 const MONITOR_KEYS = [
   'refreshSeconds', 'activeWindowMinutes', 'staleMinutes',
   'claude.enabled', 'claude.projectsDir', 'codex.enabled', 'codex.home',
+  'copilot.enabled', 'gemini.enabled', 'gemini.home', 'qwen.enabled', 'qwen.home',
   'approvalGuess', 'approvalGuessSeconds',
 ];
 const NOTIFY_DIR = 'notify';           // under globalStorageUri: claim markers, so one window reports each wait
@@ -76,6 +96,12 @@ const WORKER_HEALTHY_MS = 10 * 60e3; // a worker that still sends snapshots this
 // newer snapshot has arrived by then, the check waits for one, at most NOTIFY_FRESH_WAIT_MS more
 const NOTIFY_RESCAN_LEAD_MS = 1200;
 const NOTIFY_FRESH_WAIT_MS = 10000;
+// Sounds are claimed under their own ids in the notify claim dir, so one window plays each event
+const SOUND_CLAIM_PREFIX = 'sound|';
+// Threshold alerts kept for the window that gets focus next (no system notification here, or quiet hours): at most this
+// many, and dropped when older than ALERT_DEFERRED_MAX_MS (or, for a usage window, once it has reset)
+const ALERT_DEFERRED_MAX = 20;
+const ALERT_DEFERRED_MAX_MS = 12 * 3600e3;
 // Memory limits for the worker thread: parsing transcripts creates almost only short-lived temporary objects, so capping
 // the young generation at 6MB keeps the heap from ballooning during scans without slowing them down; the 512MB old
 // generation is only a safety net (normal use is far below it); if exceeded, V8 terminates the thread and it is
@@ -147,6 +173,11 @@ class Controller {
     this.notifyAwaiting = new Map(); // key -> item whose check waits for a snapshot newer than the one that showed it
     this.notifyDeferred = new Map(); // key -> item: no system notification here; shown when a window gets focus
     this.notifyTimers = new Set();
+    this.thresholds = alertsLib.createThresholdTracker(); // usage %, today's cost, context (fed all sessions)
+    this.lampEvents = notifyLib.createLampEventTracker(); // errors and finished work, for their sounds
+    this.alertDeferred = new Map(); // transitionId -> { ev, at }: shown when a window gets focus
+    this.historyReq = null;      // last history request of an open page ({ type: 'history', days?, force? }); resent to a new worker
+    this.historyListeners = new Set(); // onHistory listeners (the history page)
     this.push = null;            // lib/push-runtime.js (null when it failed to load)
     this.stopped = false;
   }
@@ -173,6 +204,10 @@ class Controller {
     const sub = (...d) => context.subscriptions.push(...d);
     this.output = vscode.window.createOutputChannel(this.t('bar.title'));
     sub(this.output);
+
+    // The network switch, read at the time of each request; back to off when the extension stops
+    this.releaseNetwork = network.setAllowed(() => this.networkAllowed());
+    this.setContext('networkAllowed', this.networkAllowed());
 
     // Seen state: globalState, pruned once on activation
     this.seen = seenLib.createSeenStore(context.globalState);
@@ -207,6 +242,7 @@ class Controller {
     this.setupCompact();
     this.setupAutoCompact();
     this.setupStorage();
+    this.setupHistory();
     this.setupPush();
     this.listen();
 
@@ -228,6 +264,7 @@ class Controller {
     for (const timer of this.notifyTimers) clearTimeout(timer);
     this.notifyTimers.clear();
     if (this.push) this.guard('push', () => this.push.dispose());
+    if (this.releaseNetwork) this.releaseNetwork();
     this.stopShared();
     this.stopWorker();
   }
@@ -347,6 +384,28 @@ class Controller {
     })));
   }
 
+  // Usage history: the page lives in lib/history-view.js, the scan runs in the worker (requestHistory / onHistory)
+  setupHistory() {
+    const cmd = (fn) => this.context.subscriptions.push(vscode.commands.registerCommand(HISTORY_CMD, fn));
+    let mod = null;
+    try {
+      mod = require('./lib/history-view');
+    } catch (err) {
+      this.log(this.t('ext.log.moduleFailed', { module: 'history-view', error: errText(err) }));
+    }
+    const open = mod && (mod.openHistory || mod.openHistoryView);
+    if (typeof open !== 'function') {
+      cmd(() => vscode.window.showErrorMessage(this.t('ext.historyUnavailable')));
+      return;
+    }
+    cmd(() => this.guard('history', () => open(this.context, {
+      requestHistory: (req) => this.requestHistory(req),
+      onHistory: (listener) => this.onHistory(listener),
+      i18n: this.i18n,
+      log: (line) => this.log(line),
+    })));
+  }
+
   registerCommands() {
     const exec = (command, ...args) => vscode.commands.executeCommand(command, ...args);
     const cmd = (id, fn) => this.context.subscriptions.push(vscode.commands.registerCommand(id, fn));
@@ -365,6 +424,9 @@ class Controller {
     cmd('agentMonitor.copyTranscriptPath', (arg) => this.copyTranscriptPath(arg));
     cmd('agentMonitor.copyResume', (arg) => this.copyResume(arg));
     cmd(HANDOFF_CMD, (arg) => this.handoff(arg).catch((err) => this.log(this.t('ext.log.failed', { what: 'handoff', error: errText(err) }))));
+    cmd('agentMonitor.network.allow', () => this.setNetwork(true));
+    cmd('agentMonitor.network.block', () => this.setNetwork(false));
+    cmd('agentMonitor.network.toggle', () => this.setNetwork(!this.networkAllowed()));
   }
 
   listen() {
@@ -424,7 +486,14 @@ class Controller {
 
   scope() { return scopeLib.normalizeScope(this.cfg().get('scope', 'all')); }
 
-  ws() { return scopeLib.workspaceInfo(vscode.workspace.workspaceFolders); }
+  ws() {
+    const su = this.context && this.context.storageUri;
+    return scopeLib.workspaceInfo(vscode.workspace.workspaceFolders, {
+      workspaceFile: vscode.workspace.workspaceFile,
+      // storageUri = <User>/workspaceStorage/<hash>/<extension id>: this window's Copilot chats live under <hash>/chatSessions
+      storageDir: su && (!su.scheme || su.scheme === 'file') && su.fsPath ? path.dirname(su.fsPath) : null,
+    });
+  }
 
   settings() {
     const c = this.cfg();
@@ -445,11 +514,12 @@ class Controller {
 
   /**
    * Windows share a scan only when this matches: the extension version (windows not yet reloaded after an update scan on
-   * their own) and the WorkerConfig without observedCompact (learned per window, and swapped without a rebuild) and
-   * intervalMs (so a different refresh speed does not split windows; the leader's applies).
+   * their own) and the WorkerConfig without observedCompact (learned per window, and swapped without a rebuild),
+   * intervalMs (so a different refresh speed does not split windows; the leader's applies) and historyCacheFile (each
+   * window's own history requests use it, never the shared snapshots).
    */
   cfgKey() {
-    const { observedCompact, intervalMs, ...rest } = this.workerConfig(); // eslint-disable-line no-unused-vars
+    const { observedCompact, intervalMs, historyCacheFile, ...rest } = this.workerConfig(); // eslint-disable-line no-unused-vars
     return JSON.stringify({ version: VERSION, ...rest });
   }
 
@@ -469,6 +539,16 @@ class Controller {
     const codexSetting = expandHome(c.get('codex.home', ''), home);
     const codexHome = codexSetting || (env.CODEX_HOME ? expandHome(env.CODEX_HOME, home) : path.join(home, '.codex'));
     const codexHomeSource = codexSetting ? 'setting' : env.CODEX_HOME ? 'env' : 'default';
+    // Gemini CLI: the setting, else $GEMINI_CLI_HOME/.gemini, else ~/.gemini
+    const geminiSetting = expandHome(c.get('gemini.home', ''), home);
+    const geminiHome = geminiSetting || path.join(env.GEMINI_CLI_HOME ? expandHome(env.GEMINI_CLI_HOME, home) : home, '.gemini');
+    const geminiHomeSource = geminiSetting ? 'setting' : env.GEMINI_CLI_HOME ? 'env' : 'default';
+    // Qwen Code: the setting, else $QWEN_RUNTIME_DIR, $QWEN_HOME, else ~/.qwen
+    const qwenSetting = expandHome(c.get('qwen.home', ''), home);
+    const qwenEnv = env.QWEN_RUNTIME_DIR || env.QWEN_HOME || '';
+    const qwenHome = qwenSetting || (qwenEnv ? expandHome(qwenEnv, home) : path.join(home, '.qwen'));
+    const qwenHomeSource = qwenSetting ? 'setting' : qwenEnv ? 'env' : 'default';
+    const storage = this.context.globalStorageUri;
     return {
       intervalMs: this.refreshMs(),
       activeWindowMinutes: num(c.get('activeWindowMinutes', 30), 30),
@@ -482,9 +562,15 @@ class Controller {
         configDirSource,
       },
       codex: { enabled: c.get('codex.enabled', true) !== false, home: codexHome, homeSource: codexHomeSource },
+      // Copilot Chat logs live in this VS Code's user dir (null: the provider's defaults, e.g. when it cannot be derived)
+      copilot: { enabled: c.get('copilot.enabled', true) !== false, userDir: vscodeUserDir(storage) },
+      gemini: { enabled: c.get('gemini.enabled', true) !== false, home: geminiHome, homeSource: geminiHomeSource },
+      qwen: { enabled: c.get('qwen.enabled', true) !== false, home: qwenHome, homeSource: qwenHomeSource },
       approvalGuess: c.get('approvalGuess', S.APPROVAL_GUESS.FAST_TOOLS),
       approvalGuessSeconds: num(c.get('approvalGuessSeconds', S.APPROVAL_GUESS_DEFAULT_SECONDS), S.APPROVAL_GUESS_DEFAULT_SECONDS),
       observedCompact: { ...this.observed },
+      // Usage-history cache, so reopening the history page reads only what's new (null: no global storage, no cache)
+      historyCacheFile: storage && storage.fsPath ? path.join(storage.fsPath, HISTORY_FILE) : null,
     };
   }
 
@@ -503,7 +589,8 @@ class Controller {
       if (this.shared) this.shared.setCfgKey(this.cfgKey());
     }
     if (hit(['scope'])) this.revealKeys.clear();
-    if (hit(PUSH_KEYS) && this.push) this.guard('push', () => this.push.onSettings());
+    if (hit([NETWORK_KEY])) this.setContext('networkAllowed', this.networkAllowed());
+    if (hit([...PUSH_KEYS, NETWORK_KEY]) && this.push) this.guard('push', () => this.push.onSettings());
     if (hit(['shareScanAcrossWindows'])) this.guard('sharedScan', () => this.applySharing());
     if (hit(['backgroundRefreshSeconds']) && this.shared) this.shared.setIdleHeartbeatMs(this.backgroundMs());
     if (hit(['refreshSeconds', 'backgroundRefreshSeconds'])) this.updateInterval();
@@ -530,6 +617,7 @@ class Controller {
       if (!m || typeof m !== 'object') return;
       if (m.type === 'snapshot') this.onWorkerSnapshot(m);
       else if (m.type === 'storage') this.onStorage(m);
+      else if (m.type === 'history') this.onHistoryReport(m);
       else if (m.type === 'error') this.log(this.t('ext.log.source', { source: String(m.source || 'worker'), message: String(m.message || '') }));
     });
     w.on('error', (err) => this.log(this.t('ext.log.workerError', { error: errText(err) })));
@@ -553,6 +641,8 @@ class Controller {
     if (this.intervalMs) w.postMessage({ type: 'interval', ms: this.intervalMs });
     // If someone is still waiting for a storage scan when the worker was replaced, ask the new worker again
     if (this.storageWaiters.length) w.postMessage({ type: 'storage', force: this.storageForce });
+    // The history page is open: ask the new worker again (its replies go to the page as before)
+    if (this.historyReq) w.postMessage({ ...this.historyReq });
     // Last, since it may make this window leader at once (onRole then resumes this worker)
     if (!restart && this.shared) this.guard('sharedScan', () => this.shared.setCanLead(true));
   }
@@ -837,6 +927,51 @@ class Controller {
     }
   }
 
+  // ---------- Usage history ----------
+
+  /**
+   * The history page asks the worker: { days?, force? } starts or refreshes the scan (replies stream to onHistory until
+   * one is complete); { release: true } (the page closed) saves the cache and frees the scanner. Starts a worker if none
+   * runs; a worker started later (crash, Refresh) gets the last request again until the page releases it. A follower
+   * window's worker is paused, but still answers its own page.
+   * @param {{ days?: number, force?: boolean, release?: boolean }} [req]
+   */
+  requestHistory(req) {
+    if (this.stopped) return;
+    const r = req && typeof req === 'object' ? req : {};
+    if (r.release === true) {
+      this.historyReq = null;
+      if (this.worker) this.worker.postMessage({ type: 'history', release: true });
+      return;
+    }
+    const msg = { type: 'history' };
+    if (Number.isFinite(r.days)) msg.days = r.days;
+    if (r.force === true) msg.force = true;
+    this.historyReq = msg;
+    if (!this.worker) this.startWorker(); // the new worker gets historyReq
+    else this.worker.postMessage({ ...msg });
+  }
+
+  /**
+   * Replies from the worker ({ type: 'history', ...HistoryReport }) go to every listener.
+   * @param {(report: any) => void} listener
+   * @returns {{ dispose: () => void }}
+   */
+  onHistory(listener) {
+    if (typeof listener !== 'function') return { dispose: noop };
+    this.historyListeners.add(listener);
+    return { dispose: () => { this.historyListeners.delete(listener); } };
+  }
+
+  onHistoryReport(m) {
+    // A complete reply means a forced re-check is done: a later worker is asked again without force
+    if (!m.partial && this.historyReq && this.historyReq.force) {
+      const { force, ...rest } = this.historyReq; // eslint-disable-line no-unused-vars
+      this.historyReq = rest;
+    }
+    for (const fn of [...this.historyListeners]) this.guard('history', () => fn(m));
+  }
+
   /** Open sessions (checked before migrating): Claude by liveness in the registry, Codex by a turn in progress */
   liveSessions() {
     const out = [];
@@ -934,6 +1069,8 @@ class Controller {
   reseedNeedsYou() {
     this.notifyReseed = false;
     this.needsYou = notifyLib.createNeedsYouTracker();
+    this.thresholds = alertsLib.createThresholdTracker();
+    this.lampEvents = notifyLib.createLampEventTracker();
     if (this.push) this.guard('push', () => this.push.reseed());
   }
 
@@ -947,8 +1084,14 @@ class Controller {
     const lamps = lampLib.computeLamps(sessions, { seen: this.seen.reader() });
     this.needsLamps = lamps.bySession;
     for (const item of this.needsYou.update(sessions, lamps)) this.notifyNeedsYou(item);
-    // Remote push: the same sessions and lamps, plus the quota snapshot (usage limits); seq counts real snapshots only
-    if (this.push) this.guard('push', () => this.push.update({ sessions, lamps, quota: this.last.quota, seq: this.dataSeq }));
+    // Errors and finished work have no notification of their own, only a sound
+    for (const ev of this.lampEvents.update(sessions, lamps, Date.now())) this.guard('sound', () => this.lampSound(ev));
+    // Threshold alerts on the same data (the tracker is fed even while every threshold is off, so setting one never
+    // reports what is already over it)
+    const alerts = this.guard('alerts', () => this.checkAlerts(sessions)) || [];
+    // Remote push: the same sessions and lamps, plus the quota snapshot (usage limits) and the threshold alerts; seq
+    // counts real snapshots only
+    if (this.push) this.guard('push', () => this.push.update({ sessions, lamps, quota: this.last.quota, seq: this.dataSeq, alerts }));
     for (const key of [...this.notifyDeferred.keys()]) if (!this.currentWait(key)) this.notifyDeferred.delete(key);
     if (this.notifyAwaiting.size && !this.last.replay) {
       for (const item of [...this.notifyAwaiting.values()]) {
@@ -980,7 +1123,13 @@ class Controller {
     if (this.stopped) return;
     const how = notifyLib.plan({ enabled: this.notifyEnabled(), windowFocused: this.windowFocused() });
     if (how === 'toast') {
-      if (notifyLib.claimOnce(this.notifyDir(), item.transitionId, Date.now()) && !this.lookingAt(item.key)) this.needsYouToast(item);
+      if (!notifyLib.claimOnce(this.notifyDir(), item.transitionId, Date.now())) return;
+      if (this.lookingAt(item.key)) {
+        this.claimSound(item.transitionId); // not shown, and no other window plays it
+        return;
+      }
+      this.needsYouToast(item);
+      this.eventSound('needsYou', item.transitionId);
     } else if (how === 'claimLater') {
       this.notifyPending.set(item.key, item.transitionId); // a newer wait of the same session replaces this one
       const pending = { ...item, seq: this.dataSeq, until: Date.now() + notifyLib.CLAIM_DELAY_MS + NOTIFY_FRESH_WAIT_MS };
@@ -1015,8 +1164,9 @@ class Controller {
 
   // CLAIM_DELAY_MS later, on data scanned after the wait was seen (waits for it, up to NOTIFY_FRESH_WAIT_MS): only if
   // notifications are still on, the session still waits and no window claimed that wait. A system notification unless
-  // this window got focus meanwhile (then a toast). Where there is no system notification (Windows, remote windows), the
-  // wait is kept, unclaimed, and shown by the window that gets focus first; a failed command falls back to a toast.
+  // this window got focus meanwhile (then a toast). Where there is no system notification (Windows, remote windows) or
+  // quiet hours mute it, the wait is kept, unclaimed, and shown by the window that gets focus first (the sound, if any,
+  // plays now); a failed command falls back to a toast.
   async notifyLater(item) {
     if (this.stopped || this.notifyPending.get(item.key) !== item.transitionId) return;
     if (this.dataSeq <= item.seq && Date.now() < item.until) {
@@ -1029,22 +1179,31 @@ class Controller {
     const cur = this.currentWait(item.key); // its id may have changed meanwhile (e.g. answered, then asked again)
     if (!this.notifyEnabled() || !cur) return;
     const focused = this.windowFocused();
-    if (!focused && !this.systemNotifier()) {
+    if (!focused && !this.systemNotice('needsYou')) {
       this.notifyDeferred.set(cur.key, cur);
+      this.eventSound('needsYou', cur.transitionId);
       return;
     }
     if (!notifyLib.claimOnce(this.notifyDir(), cur.transitionId, Date.now())) return;
     const msg = notifyLib.formatNeedsYou(cur, this.i18n);
     if (focused) {
-      if (!this.lookingAt(cur.key)) this.needsYouToast(cur, msg);
-    } else if (!(await notifyLib.sendSystemNotification(msg))) {
+      if (this.lookingAt(cur.key)) {
+        this.claimSound(cur.transitionId);
+        return;
+      }
       this.needsYouToast(cur, msg);
+      this.eventSound('needsYou', cur.transitionId);
+      return;
     }
+    this.eventSound('needsYou', cur.transitionId);
+    if (!(await notifyLib.sendSystemNotification(msg))) this.needsYouToast(cur, msg);
   }
 
   /** This window got focus: show the waits kept for lack of a system notification, if they still wait and no window has yet */
   deliverDeferred() {
-    if (this.stopped || !this.notifyDeferred.size || !this.windowFocused()) return;
+    if (this.stopped || !this.windowFocused()) return;
+    this.deliverDeferredAlerts();
+    if (!this.notifyDeferred.size) return;
     const keys = [...this.notifyDeferred.keys()];
     this.notifyDeferred.clear();
     if (!this.notifyEnabled()) return;
@@ -1070,6 +1229,160 @@ class Controller {
     }
     this.userSelect(key);
     await vscode.commands.executeCommand(`${AGENTS_VIEW}.focus`);
+  }
+
+  // ---------- Threshold alerts, sounds and quiet hours ----------
+
+  /** agentMonitor.sound.*: off unless enabled; per event 'default' | 'off' | a sound name (lib/alerts.js SOUND_CHOICES) */
+  soundSettings() {
+    const c = this.cfg();
+    const out = { enabled: c.get('sound.enabled', false) === true };
+    for (const e of alertsLib.SOUND_EVENTS) out[e] = c.get(`sound.${e}`, 'default');
+    return out;
+  }
+
+  /** agentMonitor.quietHours.* in the shape lib/alerts.js reads (days: empty = every day) */
+  quietSettings() {
+    const c = this.cfg();
+    const days = c.get('quietHours.days', []);
+    return {
+      enabled: c.get('quietHours.enabled', false) === true,
+      start: String(c.get('quietHours.start', '22:00')),
+      end: String(c.get('quietHours.end', '08:00')),
+      days: Array.isArray(days) ? days : [],
+      allowErrors: c.get('quietHours.allowErrors', false) === true,
+    };
+  }
+
+  /** agentMonitor.alerts.*: 0 turns a check off */
+  thresholdSettings() {
+    const c = this.cfg();
+    return alertsLib.normalizeThresholds({
+      usagePercent: c.get('alerts.usagePercent', alertsLib.DEFAULT_THRESHOLDS.usagePercent),
+      dailyCost: c.get('alerts.dailyCost', alertsLib.DEFAULT_THRESHOLDS.dailyCost),
+      contextPercent: c.get('alerts.contextPercent', alertsLib.DEFAULT_THRESHOLDS.contextPercent),
+    });
+  }
+
+  /** Quiet hours mute this channel ('sound' | 'system' | 'push') for this event type now */
+  muted(channel, type) {
+    return alertsLib.shouldMute(channel, type, Date.now(), this.quietSettings());
+  }
+
+  /** A system notification for this event type can be shown from here now (a notifier, and quiet hours don't mute it) */
+  systemNotice(type) {
+    return this.systemNotifier() && !this.muted('system', type);
+  }
+
+  /**
+   * Plays the sound of an event (needsYou, error, done, or a threshold alert type) once across windows: sounds on, the
+   * event's sound not 'off', not muted by quiet hours, not a remote window (it would play on the remote machine), and
+   * this window claims 'sound|<transitionId>'. playSound adds its own cross-window gap between sounds.
+   * @returns {boolean} whether this window plays it
+   */
+  eventSound(type, transitionId) {
+    if (this.stopped || vscode.env.remoteName) return false;
+    const event = alertsLib.soundEventOf(type);
+    const s = this.soundSettings();
+    if (!event || !s.enabled || !alertsLib.resolveSound(event, s[event])) return false;
+    if (this.muted('sound', type)) return false;
+    const dir = this.notifyDir();
+    if (!notifyLib.claimOnce(dir, SOUND_CLAIM_PREFIX + transitionId, Date.now())) return false;
+    alertsLib.playSound(event, { sound: s[event], claimDir: dir }).catch(noop); // never rejects; false is not an error here
+    return true;
+  }
+
+  /** Claims an event's sound without playing it (the user is looking at that chat), so no other window plays it either */
+  claimSound(transitionId) {
+    notifyLib.claimOnce(this.notifyDir(), SOUND_CLAIM_PREFIX + transitionId, Date.now());
+  }
+
+  /**
+   * An error or finished work (notify.createLampEventTracker): only a sound; none for finished work in a chat the user is
+   * looking at. An unfocused window plays finished work only after CLAIM_DELAY_MS, like "needs you": the window that
+   * sees the data first is often not the one the user is in (the leader's own scan comes before the followers' copy), and
+   * the focused window must get the chance to claim it silently. After the delay it is checked again here (this window
+   * may have got focus and show that chat by then).
+   * @param {{ type: 'error'|'done', key: string, transitionId: string }} ev
+   * @param {boolean} [delayed] the claim delay is over
+   */
+  lampSound(ev, delayed = false) {
+    if (ev.type === 'done' && !delayed && !this.windowFocused()) {
+      this.later(() => this.lampSound(ev, true), notifyLib.CLAIM_DELAY_MS);
+      return;
+    }
+    if (ev.type === 'done' && this.lookingAt(ev.key)) this.claimSound(ev.transitionId);
+    else this.eventSound(ev.type, ev.transitionId);
+  }
+
+  /**
+   * After each render: the threshold tracker gets all sessions, the quota snapshot and today's totals. The first update of
+   * each source and every threshold change only seed. Each crossing is reported like a "needs you" wait (notifyAlert).
+   * @returns {any[]} the events, also handed to the push runtime
+   */
+  checkAlerts(sessions) {
+    const events = this.thresholds.update({
+      sessions, quota: this.last.quota, today: this.last.today, now: Date.now(), cfg: this.thresholdSettings(),
+    });
+    for (const ev of events) this.notifyAlert(ev);
+    return events;
+  }
+
+  /**
+   * The same path as "needs you": the focused window claims the alert at once and shows a toast; unfocused windows give a
+   * focused one CLAIM_DELAY_MS to claim it first, then show a system notification (a toast if that fails). Where there is
+   * no system notification, or quiet hours mute it, the alert waits unclaimed for the window that gets focus next.
+   */
+  notifyAlert(ev) {
+    if (this.stopped || !ev || typeof ev.transitionId !== 'string') return;
+    if (this.windowFocused()) {
+      this.deliverAlert(ev).catch((err) => this.log(this.t('ext.log.failed', { what: 'alerts', error: errText(err) })));
+      return;
+    }
+    this.later(() => this.deliverAlert(ev), notifyLib.CLAIM_DELAY_MS);
+  }
+
+  async deliverAlert(ev) {
+    if (this.stopped) return;
+    const focused = this.windowFocused();
+    if (!focused && !this.systemNotice(ev.type)) {
+      this.deferAlert(ev);
+      this.eventSound(ev.type, ev.transitionId);
+      return;
+    }
+    if (!notifyLib.claimOnce(this.notifyDir(), ev.transitionId, Date.now())) return;
+    const msg = alertsLib.formatAlert(ev, this.i18n);
+    this.eventSound(ev.type, ev.transitionId);
+    if (focused) this.alertToast(ev, msg);
+    else if (!(await notifyLib.sendSystemNotification(msg))) this.alertToast(ev, msg);
+  }
+
+  deferAlert(ev) {
+    this.alertDeferred.delete(ev.transitionId);
+    this.alertDeferred.set(ev.transitionId, { ev, at: Date.now() });
+    while (this.alertDeferred.size > ALERT_DEFERRED_MAX) this.alertDeferred.delete(this.alertDeferred.keys().next().value);
+  }
+
+  /** This window got focus: show the alerts kept for it that no window has shown yet (and that still apply) */
+  deliverDeferredAlerts() {
+    if (!this.alertDeferred.size) return;
+    const list = [...this.alertDeferred.values()];
+    this.alertDeferred.clear();
+    const now = Date.now();
+    for (const { ev, at } of list) {
+      if (now - at > ALERT_DEFERRED_MAX_MS) continue;
+      if (ev.type === 'usageHigh' && Number.isFinite(ev.resetAt) && ev.resetAt <= now) continue; // that window has reset
+      if (!notifyLib.claimOnce(this.notifyDir(), ev.transitionId, now)) continue;
+      this.alertToast(ev, alertsLib.formatAlert(ev, this.i18n));
+    }
+  }
+
+  /** In-window message of an alert; a context alert offers "Show" for its chat */
+  alertToast(ev, msg) {
+    const show = ev.type === 'contextHigh' && this.byKey.has(ev.key) ? this.t('ext.notify.show') : null;
+    Promise.resolve(show ? vscode.window.showInformationMessage(msg.toast, show) : vscode.window.showInformationMessage(msg.toast))
+      .then((pick) => (show && pick === show && !this.stopped ? this.revealSession(ev.key) : undefined))
+      .catch((err) => this.log(this.t('ext.log.failed', { what: 'alerts', error: errText(err) })));
   }
 
   // ---------- Remote push ----------
@@ -1098,6 +1411,7 @@ class Controller {
           warn: (text) => this.pushWarn(text),
           notice: (text) => { Promise.resolve(vscode.window.showInformationMessage(text)).catch(noop); },
           rescan: () => this.rescan(),
+          mute: (type) => this.muted('push', type), // quiet hours
         });
       } catch (err) {
         this.push = null;
@@ -1151,6 +1465,35 @@ class Controller {
       includeTitle: g('push.includeTitle') === true,
       channels: Array.isArray(channels) ? channels : [],
     };
+  }
+
+  /** The network switch, from user settings only: a workspace value is ignored (inspect().globalValue); off unless exactly true */
+  networkAllowed() {
+    try {
+      const i = this.cfg().inspect(NETWORK_KEY);
+      return !!i && i.globalValue === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * agentMonitor.network.allow / .block / .toggle: writes the switch to user settings and says what it means now.
+   * Blocking keeps push.enabled as it is (push is paused until the network is allowed again).
+   */
+  async setNetwork(allow) {
+    try {
+      await this.cfg().update(NETWORK_KEY, !!allow, vscode.ConfigurationTarget.Global);
+    } catch (err) {
+      this.log(this.t('ext.log.failed', { what: 'network', error: errText(err) }));
+      const error = String((err && err.message) || err).split('\n')[0].slice(0, 300);
+      Promise.resolve(vscode.window.showErrorMessage(this.t('push.net.failed', { error }))).catch(noop);
+      return;
+    }
+    this.setContext('networkAllowed', this.networkAllowed());
+    const paused = !allow && this.pushSettings().enabled;
+    const key = allow ? 'push.net.allowed' : paused ? 'push.net.blockedPaused' : 'push.net.blocked';
+    Promise.resolve(vscode.window.showInformationMessage(this.t(key))).catch(noop);
   }
 
   /** A channel keeps failing: one warning (the runtime does not repeat it until a send works again) */
@@ -1270,12 +1613,14 @@ class Controller {
       const cq = fmt.formatCodexQuota(q.codex, i18n, now);
       parts.push(`${esc(cq.title)}  \n${cq.lines.map(esc).join('  \n')}`);
     }
-    const hit = q.claude && fmt.formatClaudeLastHit(q.claude.lastHit, i18n, now);
-    if (hit) parts.push(esc(hit));
+    for (const hit of fmt.formatLastHits(q, i18n, now)) parts.push(esc(hit));
     if (showCost && this.last.today) {
       const today = fmt.formatToday(this.last.today, i18n);
       parts.push(esc([i18n.t('bar.today', { usd: today.text }), today.partialText].filter(Boolean).join(fmt.SEP)));
     }
+    // Quiet hours: say so while they are on (sounds, system notifications and push are held)
+    const quiet = this.guard('quietHours', () => alertsLib.formatQuietStatus(now, this.quietSettings(), i18n));
+    if (quiet) parts.push(`$(bell-slash) ${esc(quiet)}`);
     return parts.join('\n\n');
   }
 
@@ -1626,6 +1971,23 @@ function observedCompactsOf(sessions) {
   return out;
 }
 
+/**
+ * The VS Code user dir (…/Code/User) derived from the extension's global storage: <User>/globalStorage/<extension id>, or
+ * <User>/profiles/<profile>/globalStorage/<extension id> in a profile. null when the path does not look like that (the
+ * Copilot provider then uses its default dirs).
+ * @param {{ scheme?: string, fsPath?: string }|undefined} globalStorageUri
+ * @returns {string|null}
+ */
+function vscodeUserDir(globalStorageUri) {
+  const u = globalStorageUri;
+  if (!u || (u.scheme && u.scheme !== 'file') || typeof u.fsPath !== 'string' || !u.fsPath) return null;
+  const gs = path.dirname(u.fsPath);
+  if (path.basename(gs) !== 'globalStorage') return null;
+  let user = path.dirname(gs);
+  if (path.basename(path.dirname(user)) === 'profiles') user = path.dirname(path.dirname(user));
+  return user && user !== gs ? user : null;
+}
+
 function expandHome(p, home) {
   const s = typeof p === 'string' ? p.trim() : '';
   if (!s) return '';
@@ -1642,4 +2004,4 @@ function errText(err) {
   return (err instanceof Error && err.stack) || String(err);
 }
 
-module.exports = { activate, deactivate, _controller: () => ctl, _internal: { observedCompactsOf, transcriptOf } };
+module.exports = { activate, deactivate, _controller: () => ctl, _internal: { observedCompactsOf, transcriptOf, vscodeUserDir } };

@@ -6,6 +6,8 @@
 //   and other VS Code windows are simulated with extra shared-scan instances in a temp dir.
 // - Remote push: lib/push-runtime.js is the real module with short delays and a movable clock; SecretStorage is an in-memory fake
 //   and globalThis.fetch is a fake that only records requests, so nothing ever goes out on the network.
+// - Sounds, quiet hours and threshold alerts: lib/alerts.js is the real module, but playSound runs a fake execFile that only
+//   records the command, so no sound is ever played. The usage-history page (lib/history-view.js) only records how it is opened.
 // - All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
 
 const assert = require('assert');
@@ -29,7 +31,7 @@ const log = {
   contexts: {}, executed: [], opened: [], updates: [], output: [], workers: [], progress: [],
   info: [], warn: [], error: [], clipboard: [], quickPicks: [], agentInputs: [], compactSnapshots: [],
   compactDeps: null, reveals: [], treeViews: {}, webviews: {}, statusItem: null,
-  handoffs: [], autoDeps: null, storageOpens: [], inputs: [],
+  handoffs: [], autoDeps: null, storageOpens: [], inputs: [], historyOpens: [],
 };
 const config = {}; // setting name -> { globalValue, workspaceValue }
 const listeners = { config: [], folders: [], tabs: [], tabGroups: [], windowState: [] };
@@ -251,11 +253,41 @@ const autoWrap = realAuto && {
   },
 };
 // simulate a missing module: when set to {}, the extension should register placeholder commands
-const modOverride = { autocompact: null, storage: null };
+const modOverride = { autocompact: null, storage: null, history: null };
 // storage page: only records the deps passed when it opens (the page itself is covered by the storage tests)
 const storageWrap = {
   openStorageView(context, deps) { log.storageOpens.push(deps); return { reveal() {} }; },
 };
+// usage-history page: only records the deps passed when it opens (the page itself is covered by test/history.test.js)
+const historyWrap = {
+  openHistory(context, deps) { log.historyOpens.push(deps); return { reveal() {} }; },
+};
+// sounds: the real lib/alerts.js, but playSound gets a fake execFile that only records the command (nothing is ever
+// played) and skips the 3 s gap between sounds (covered by test/alerts.test.js), so every sound the extension plays shows
+const realAlerts = require(path.join(ROOT, 'lib', 'alerts'));
+const sounds = { calls: [], opts: [] };
+const alertsWrap = {
+  ...realAlerts,
+  playSound: (event, o) => {
+    sounds.opts.push({ event, ...o });
+    return realAlerts.playSound(event, {
+      ...o,
+      platform: 'darwin',
+      debounce: false,
+      execFile: (cmd, args, opts, cb) => {
+        sounds.calls.push({ event, cmd, args });
+        setImmediate(() => cb(null));
+        return { on() {} };
+      },
+    });
+  },
+};
+
+// Safety net: a sound or a system notification that reaches the real child_process.execFile is a test bug (counted, and
+// the run fails at the end); every one must go through the fake execFile of alertsWrap / notifyWrap
+const childProcess = require('child_process');
+let realExecs = 0;
+childProcess.execFile = () => { realExecs++; throw new Error('tests never run commands'); };
 
 // "needs you" notifications: the real module with a short claim delay; system notifications go to a fake execFile that only
 // records them; the claim folder every window shares is under TMP instead of the system temp dir
@@ -352,6 +384,8 @@ Module._load = function (request, parent) {
   if (fromExt && request === './lib/autocompact' && modOverride.autocompact) return modOverride.autocompact;
   if (fromExt && request === './lib/autocompact' && autoWrap) return autoWrap;
   if (fromExt && request === './lib/storage-view') return modOverride.storage || storageWrap;
+  if (fromExt && request === './lib/history-view') return modOverride.history || historyWrap;
+  if (fromExt && request === './lib/alerts') return alertsWrap;
   if (fromExt && request === './lib/notify') return notifyWrap;
   if (fromExt && request === './lib/shared-scan') return sharedWrap;
   if (fromExt && request === './lib/push-runtime') return pushRtWrap;
@@ -530,7 +564,8 @@ async function extensionTests() {
     assert.ok(log.webviews['agentMonitor.agents'].provider instanceof RecordingAgentsView);
     assert.strictEqual(w0.file, path.join(ROOT, 'lib', 'worker.js'));
     const cfg = w0.opts.workerData;
-    assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'cfgGen', 'claude', 'codex', 'intervalMs', 'observedCompact', 'paused', 'staleMinutes']);
+    assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'cfgGen', 'claude', 'codex', 'copilot', 'gemini', 'historyCacheFile', 'intervalMs', 'observedCompact', 'paused', 'qwen', 'staleMinutes']);
+    assert.strictEqual(cfg.historyCacheFile, path.join(TMP, 'usage-history.jsonl'), 'the usage-history cache lives in global storage');
     // windows share one scan by default: the worker starts paused and resumes once this window leads (the only window here)
     assert.strictEqual(cfg.paused, true);
     assert.strictEqual(sharedLog.length, 1);
@@ -540,6 +575,13 @@ async function extensionTests() {
     assert.ok(!w0.messages.some((m) => m.type === 'interval'), 'a focused window must not slow down, not even briefly at start');
     assert.deepStrictEqual(Object.keys(cfg.claude).sort(), ['configDir', 'configDirSource', 'enabled', 'home', 'projectsDir', 'settingsPath']);
     assert.deepStrictEqual(Object.keys(cfg.codex).sort(), ['enabled', 'home', 'homeSource']);
+    assert.deepStrictEqual(cfg.copilot, { enabled: true, userDir: null }, 'TMP is no …/User/globalStorage/<id> path: the provider keeps its default dirs');
+    for (const k of ['gemini', 'qwen']) {
+      assert.deepStrictEqual(Object.keys(cfg[k]).sort(), ['enabled', 'home', 'homeSource'], k);
+      assert.strictEqual(cfg[k].enabled, true, k);
+    }
+    if (!process.env.GEMINI_CLI_HOME) assert.deepStrictEqual([cfg.gemini.home, cfg.gemini.homeSource], [path.join(os.homedir(), '.gemini'), 'default']);
+    if (!process.env.QWEN_RUNTIME_DIR && !process.env.QWEN_HOME) assert.deepStrictEqual([cfg.qwen.home, cfg.qwen.homeSource], [path.join(os.homedir(), '.qwen'), 'default']);
     assert.strictEqual(cfg.claude.home, path.dirname(cfg.claude.projectsDir));
     // CLAUDE_CONFIG_DIR wins, otherwise ~/.claude; the registry and settings.json both live under it
     if (process.env.CLAUDE_CONFIG_DIR) {
@@ -1317,6 +1359,7 @@ function activateWindow(name, settings = {}, extra = {}) {
     subscriptions: [], extensionPath: ROOT, extensionUri: Uri.file(ROOT), globalStorageUri: Uri.file(gs),
     globalState: memento({ 'agentMonitor.panelIntro.v1': 1 }), workspaceState: memento(),
     secrets: extra.secrets || fakeSecrets(),
+    ...(extra.storageUri ? { storageUri: extra.storageUri } : {}),
   };
   const workers = log.workers.length;
   const shares = sharedLog.length;
@@ -1327,7 +1370,9 @@ function activateWindow(name, settings = {}, extra = {}) {
     worker: log.workers[workers],
     shared: sharedLog.length > shares ? sharedLog[shares] : null,
     w: () => last(log.workers),
-    send: (sessions, extra) => last(log.workers).emit('message', snapshot(clone(sessions), extra)),
+    // To this window's own worker (with several windows open, the newest worker may be another window's)
+    send: (sessions, extra) => (ext._controller() === win.ctl || !win.ctl.worker ? last(log.workers) : win.ctl.worker)
+      .emit('message', snapshot(clone(sessions), extra)),
     close: () => { for (const d of context.subscriptions) d.dispose(); ext.deactivate(); },
   };
   return win;
@@ -1990,6 +2035,491 @@ async function backgroundTests() {
 }
 
 // ---------------------------------------------------------------------------
+// Usage history (lib/history-view.js page, worker { type: 'history' })
+// ---------------------------------------------------------------------------
+
+async function historyTests() {
+  const hist = (w) => w.messages.filter((m) => m.type === 'history');
+
+  await test('usage history: the command opens the page with requestHistory / onHistory / i18n; requests go to the worker as { type: history }; replies reach the listeners; the cache file is in global storage and not part of the shared-scan key', async () => {
+    const win = activateWindow('win-history');
+    try {
+      assert.strictEqual(win.worker.opts.workerData.historyCacheFile, path.join(win.gs, 'usage-history.jsonl'));
+      assert.ok(!('historyCacheFile' in JSON.parse(win.ctl.cfgKey())), 'each window\'s own cache path must not split the shared scan');
+      const n = log.historyOpens.length;
+      registered.get('agentMonitor.history')();
+      assert.strictEqual(log.historyOpens.length, n + 1);
+      const deps = last(log.historyOpens);
+      assert.strictEqual(deps.i18n, win.ctl.i18n);
+      assert.strictEqual(typeof deps.log, 'function');
+      const got = [];
+      const sub = deps.onHistory((m) => got.push(m));
+      const w = win.w();
+      const before = w.messages.length;
+      deps.requestHistory({ days: 30 });
+      deps.requestHistory({ days: 60, force: true, junk: '/etc/passwd' });
+      assert.deepStrictEqual(w.messages.slice(before), [{ type: 'history', days: 30 }, { type: 'history', days: 60, force: true }]);
+      w.emit('message', { type: 'history', days: [], byModel: [], totals: null, partial: true, progress: { done: 1, total: 4 } });
+      w.emit('message', { type: 'history', days: [{ date: '2026-09-24' }], byModel: [], totals: null, partial: false });
+      assert.deepStrictEqual(got.map((m) => [m.type, m.partial]), [['history', true], ['history', false]]);
+      assert.strictEqual(win.ctl.byKey.size, 0, 'a history reply is not a snapshot');
+      // a listener that throws does not stop the others
+      const bad = deps.onHistory(() => { throw new Error('synthetic'); });
+      w.emit('message', { type: 'history', days: [], partial: false });
+      assert.strictEqual(got.length, 3);
+      bad.dispose();
+      sub.dispose();
+      w.emit('message', { type: 'history', days: [], partial: false });
+      assert.strictEqual(got.length, 3, 'a disposed listener still gets replies');
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('usage history: a worker started later (crash) is asked again, without force once a forced scan completed; after the page releases it, no worker is asked again; with no worker a request starts one', async () => {
+    const win = activateWindow('win-history-restart');
+    try {
+      registered.get('agentMonitor.history')();
+      const deps = last(log.historyOpens);
+      deps.requestHistory({ days: 45, force: true });
+      const w1 = win.w();
+      w1.emit('exit', 1); // crashed before answering: the new worker gets the same request, force included
+      const w2 = win.w();
+      assert.notStrictEqual(w2, w1);
+      assert.deepStrictEqual(hist(w2), [{ type: 'history', days: 45, force: true }]);
+      w2.emit('message', { type: 'history', days: [], partial: false });
+      w2.emit('exit', 1);
+      const w3 = win.w();
+      assert.deepStrictEqual(hist(w3), [{ type: 'history', days: 45 }], 'the forced scan was done: ask again without force');
+      // the page closes
+      deps.requestHistory({ release: true });
+      assert.deepStrictEqual(last(w3.messages), { type: 'history', release: true });
+      w3.emit('exit', 1);
+      assert.deepStrictEqual(hist(win.w()), [], 'a released page is not asked for again');
+      // no worker at all (stopped on purpose): a request starts one that carries it
+      win.ctl.stopWorker();
+      const count = log.workers.length;
+      deps.requestHistory({ days: 30 });
+      assert.strictEqual(log.workers.length, count + 1);
+      assert.deepStrictEqual(hist(win.w()), [{ type: 'history', days: 30 }]);
+      // release with no worker running: nothing to start
+      win.ctl.stopWorker();
+      deps.requestHistory({ release: true });
+      assert.strictEqual(log.workers.length, count + 1);
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('usage history in a follower window: asked of its own paused worker (the worker answers history while paused), never of the leader, and the worker stays paused', async () => {
+    const probe = activateWindow('win-history-probe');
+    const key = probe.ctl.cfgKey();
+    probe.close();
+    const dir = path.join(TMP, 'win-history-follow', 'shared-scan');
+    fs.mkdirSync(dir, { recursive: true });
+    const leader = peerWindow(dir, key);
+    leader.inst.start();
+    let B = null;
+    try {
+      assert.ok(leader.inst.publish(snapshot(clone(fixtures()))));
+      B = activateWindow('win-history-follow');
+      assert.strictEqual(B.shared.inst.role, 'follower');
+      const w = B.worker;
+      registered.get('agentMonitor.history')();
+      const deps = last(log.historyOpens);
+      const got = [];
+      deps.onHistory((m) => got.push(m));
+      deps.requestHistory({ days: 30 });
+      assert.deepStrictEqual(hist(w), [{ type: 'history', days: 30 }]);
+      assert.ok(!w.messages.some((m) => m.type === 'resume'), 'the follower\'s worker must stay paused');
+      B.shared.beat();
+      leader.beat();
+      assert.strictEqual(leader.refreshes, 0, 'the leader was asked');
+      w.emit('message', { type: 'history', days: [], partial: false });
+      assert.strictEqual(got.length, 1);
+    } finally {
+      if (B) B.close();
+      leader.inst.stop();
+    }
+  });
+
+  await test('usage history: when lib/history-view.js fails to load, the command still exists and says the page is unavailable', async () => {
+    modOverride.history = {};
+    const win = activateWindow('win-history-missing');
+    try {
+      const n = log.error.length;
+      await registered.get('agentMonitor.history')();
+      assert.deepStrictEqual(log.error.slice(n), [i18n.t('ext.historyUnavailable')]);
+    } finally {
+      modOverride.history = null;
+      win.close();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Threshold alerts, sounds and quiet hours (lib/alerts.js)
+// ---------------------------------------------------------------------------
+
+const hm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+// quiet hours that are on right now (an hour either side), or off right now
+const quietNow = (o = {}) => ({ 'quietHours.enabled': true, 'quietHours.start': hm(Date.now() - HOUR), 'quietHours.end': hm(Date.now() + HOUR), ...o });
+const quietLater = () => ({ 'quietHours.enabled': true, 'quietHours.start': hm(Date.now() + 2 * HOUR), 'quietHours.end': hm(Date.now() + 3 * HOUR) });
+function applyConfig(settings) {
+  for (const [k, v] of Object.entries(settings)) setConfig(k, v);
+}
+// A Codex usage window at usedPct that resets at resetsAtMs
+const codexQuota = (usedPct, resetsAtMs) => ({
+  ...emptyQuotaSnapshot(),
+  codex: { observedMs: Date.now(), planType: 'plus', limitId: 'codex', windows: [{ label: '5h', minutes: 300, usedPct, resetsAtMs }], reachedType: null, credits: null },
+});
+// Today's totals with this much estimated Claude cost
+const todayCost = (usd) => {
+  const d = emptyDailyTotals(NOW - 10 * HOUR);
+  return { ...d, claude: { ...d.claude, costUsd: usd } };
+};
+// The session's run ends at atMs (every agent done, nothing live)
+function finished(s, atMs) {
+  return {
+    ...s, live: false, liveStatus: null, doneAtMs: atMs,
+    main: { ...s.main, status: st('done', atMs) },
+    agents: (s.agents || []).map((a) => ({ ...a, status: st('done', atMs - 1000) })),
+  };
+}
+// The session works again (a new turn) from atMs
+function running(s, atMs) {
+  return { ...s, live: false, liveStatus: null, doneAtMs: null, main: { ...s.main, status: st('tool', atMs, { pendingTool: 'Bash' }) }, agents: [] };
+}
+const soundMarker = (dir, id) => path.join(dir, realNotify.markerName('sound|' + id));
+const usageTitle = (pct) => i18n.t('alerts.usageHigh.title', { provider: 'Codex', window: i18n.t('alerts.window.5h'), pct: i18n.fmtPct(pct / 100) });
+
+async function alertTests() {
+  let t = Date.now() - 120e3; // start of each new wait, error or run (unique, so every transition has its own id)
+  const since = () => (t += 1000);
+  const settle = () => sleep(notifyWrap.CLAIM_DELAY_MS * 5);
+
+  await test('lamp events (notify.createLampEventTracker): the first sight of a session only seeds; error on entering Error, done only from Working to Done-unseen; old transitions are not reported; ids derive from the data', () => {
+    const tr = realNotify.createLampEventTracker();
+    const lampsOf = (list) => lampLib.computeLamps(list, { seen: 0 });
+    const upd = (list, now = Date.now()) => tr.update(list, lampsOf(list), now);
+    const a = fixtures()[0];
+    const at = Date.now() - 5000;
+    assert.deepStrictEqual(upd([finished(a, at)]), [], 'a chat already done when first seen');
+    assert.deepStrictEqual(upd([running(a, at + 1)]), []);
+    const done = upd([finished(a, at + 2)]);
+    assert.deepStrictEqual(done.map((e) => [e.type, e.key]), [['done', ALPHA]]);
+    assert.ok(done[0].transitionId.startsWith(`done|${ALPHA}|main|`), done[0].transitionId);
+    const other = realNotify.createLampEventTracker();
+    other.update([running(a, at + 1)], lampsOf([running(a, at + 1)]), Date.now());
+    assert.strictEqual(other.update([finished(a, at + 2)], lampsOf([finished(a, at + 2)]), Date.now())[0].transitionId, done[0].transitionId, 'another window names it alike');
+    assert.deepStrictEqual(upd([finished(a, at + 2)]), [], 'reported once');
+    const err = upd([errored(a, at + 3)]);
+    assert.deepStrictEqual(err.map((e) => e.type), ['error']);
+    assert.deepStrictEqual(upd([finished(a, at + 4)]), [], 'done after an error is not "finished work"');
+    assert.deepStrictEqual(upd([waiting(a, at + 5)]), [], 'needs you has its own notification');
+    // a laptop that slept through it: a transition from long ago is not reported
+    upd([running(a, at - 2 * HOUR)]);
+    assert.deepStrictEqual(upd([finished(a, at - HOUR)]), []);
+    // a session gone from the list and back is seen anew
+    upd([]);
+    assert.deepStrictEqual(upd([errored(a, at + 6)]), []);
+  });
+
+  await test('threshold alerts: a usage window crossing agentMonitor.alerts.usagePercent (90 by default) → one toast in the focused window, once across windows; the first data only seeds; 0 turns it off; a threshold change never reports what is already over it', async () => {
+    tabState.active = null;
+    const A = activateWindow('win-alert-a');
+    const B = activateWindow('win-alert-b');
+    try {
+      const n = log.info.length;
+      const resetAt = Date.now() + 2 * HOUR;
+      for (const w of [A, B]) w.send(fixtures(), { quota: codexQuota(95, resetAt) }); // already over it when the windows open
+      await tick();
+      assert.deepStrictEqual(log.info.slice(n), [], 'seeding must not alert');
+      const reset2 = resetAt + 5 * HOUR; // the next 5-hour window
+      for (const w of [A, B]) w.send(fixtures(), { quota: codexQuota(40, reset2) });
+      for (const w of [A, B]) w.send(fixtures(), { quota: codexQuota(92, reset2) });
+      await tick();
+      const shown = log.info.slice(n).filter((m) => m.startsWith(usageTitle(92)));
+      assert.strictEqual(shown.length, 1, log.info.slice(n).join('\n'));
+      assert.ok(shown[0].includes(i18n.t('alerts.usageHigh.body', { reset: i18n.fmtClock(reset2) })), shown[0]);
+      for (const w of [A, B]) w.send(fixtures(), { quota: codexQuota(96, reset2) });
+      await tick();
+      assert.strictEqual(log.info.slice(n).length, 1, 'the same window alerted twice');
+      // off
+      setConfig('alerts.usagePercent', 0);
+      const reset3 = reset2 + 5 * HOUR;
+      for (const w of [A, B]) { w.send(fixtures(), { quota: codexQuota(10, reset3) }); w.send(fixtures(), { quota: codexQuota(99, reset3) }); }
+      await tick();
+      assert.strictEqual(log.info.slice(n).length, 1, 'alerted with the threshold at 0');
+      // turned on again at 50: the window already at 99 is not reported
+      setConfig('alerts.usagePercent', 50);
+      for (const w of [A, B]) w.send(fixtures(), { quota: codexQuota(99, reset3) });
+      await tick();
+      assert.strictEqual(log.info.slice(n).length, 1);
+    } finally {
+      A.close();
+      B.close();
+    }
+  });
+
+  await test('threshold alerts in an unfocused window: after the claim delay, a system notification with the alert text (today\'s cost over agentMonitor.alerts.dailyCost); a context alert in the focused window offers "Show" for its chat', async () => {
+    tabState.active = null;
+    const win = activateWindow('win-alert-cost', { 'alerts.dailyCost': 5, 'alerts.contextPercent': 80 });
+    try {
+      win.send(fixtures(), { today: todayCost(1) });
+      setWindowFocused(false);
+      const calls = sysNotify.calls.length;
+      win.send(fixtures(), { today: todayCost(7.5) });
+      await tick();
+      assert.strictEqual(sysNotify.calls.length, calls, 'unfocused windows give a focused one the claim delay first');
+      await settle();
+      assert.strictEqual(sysNotify.calls.length, calls + 1);
+      const title = i18n.t('alerts.costDaily.title', { budget: i18n.fmtUsd(5) });
+      const body = i18n.t('alerts.costDaily.body', { cost: i18n.fmtUsd(7.5) });
+      assert.deepStrictEqual(last(sysNotify.calls).args.slice(-3), ['--', title, body]);
+      setWindowFocused(true);
+      // context: 84 % of the auto-compact point (967000) in a chat updated just now
+      const n = log.info.length;
+      const f = fixtures();
+      win.send(f);
+      const g = fixtures();
+      g[0] = { ...g[0], updatedMs: Date.now(), compactAt: 967000, contextUsed: 812000, contextPct: 81, main: { ...g[0].main, lastCompact: null } };
+      infoAnswer = (m, items) => items[0];
+      win.send(g);
+      await tick();
+      await tick();
+      const toast = log.info.slice(n);
+      assert.strictEqual(toast.length, 1, toast.join('\n'));
+      assert.ok(toast[0].startsWith(i18n.t('alerts.contextHigh.titleProject', { project: 'workspace' })), toast[0]);
+      assert.strictEqual(win.ctl.selectedKey, ALPHA, '"Show" selects the chat');
+    } finally {
+      infoAnswer = null;
+      setWindowFocused(true);
+      win.close();
+    }
+  });
+
+  await test('quiet hours: no system notification (the alert and the needs-you wait go to the window that gets focus next, once), no sound; the status bar tooltip says until when; outside the hours everything is back', async () => {
+    tabState.active = null;
+    const win = activateWindow('win-quiet', { 'sound.enabled': true, ...quietNow() });
+    try {
+      const resetAt = Date.now() + 3 * HOUR;
+      win.send(fixtures(), { quota: codexQuota(20, resetAt) });
+      const tip = () => log.statusItem.tooltip.value;
+      const until = realAlerts.formatQuietStatus(Date.now(), win.ctl.quietSettings(), i18n);
+      assert.ok(until && tip().includes(`$(bell-slash) ${until}`), tip());
+      setWindowFocused(false);
+      const calls = sysNotify.calls.length;
+      const s0 = sounds.calls.length;
+      const n = log.info.length;
+      const f = fixtures();
+      f[1] = waiting(f[1], since());
+      win.send(f, { quota: codexQuota(95, resetAt) });
+      await settle();
+      win.send(f, { quota: codexQuota(95, resetAt) }); // the needs-you check's rescan
+      await settle();
+      assert.strictEqual(sysNotify.calls.length, calls, 'a system notification during quiet hours');
+      assert.strictEqual(sounds.calls.length, s0, 'a sound during quiet hours');
+      assert.deepStrictEqual(log.info.slice(n), [], 'a toast in a window without focus is easily missed');
+      assert.strictEqual(win.ctl.alertDeferred.size, 1);
+      setWindowFocused(true);
+      const shown = log.info.slice(n);
+      assert.strictEqual(shown.length, 2, shown.join('\n'));
+      assert.ok(shown.some((m) => m.startsWith(usageTitle(95))) && shown.some((m) => m.startsWith(i18n.t('ext.notify.titleProject', { project: 'other' }))));
+      setWindowFocused(false);
+      setWindowFocused(true);
+      assert.strictEqual(log.info.length, n + 2, 'shown again on the next focus');
+      // outside quiet hours: the tooltip says nothing, and an unfocused window notifies the system again, with sound
+      applyConfig(quietLater());
+      win.send(fixtures(), { quota: codexQuota(95, resetAt) });
+      assert.ok(!tip().includes('$(bell-slash)'), tip());
+      setWindowFocused(false);
+      const g = fixtures();
+      g[3] = waiting(g[3], since());
+      win.send(g);
+      await settle();
+      win.send(g);
+      await settle();
+      assert.strictEqual(sysNotify.calls.length, calls + 1);
+      assert.deepStrictEqual(sounds.calls.slice(s0).map((c) => c.event), ['needsYou']);
+    } finally {
+      setWindowFocused(true);
+      win.close();
+    }
+  });
+
+  await test('sounds: off by default; with agentMonitor.sound.enabled one sound per event across windows (claimed "sound|" + id): needs you with its toast (Glass), an error (Basso), finished work (Hero), a threshold alert (Funk); "off", a chat you are looking at, quiet hours (errors pass with allowErrors) and remote windows play nothing', async () => {
+    tabState.active = null;
+    const win = activateWindow('win-sound');
+    const peer = activateWindow('win-sound-peer', { 'sound.enabled': true }); // a second window seeing the same data
+    const both = (list, extra) => { win.send(list, extra); peer.send(list, extra); };
+    const played = (from) => sounds.calls.slice(from).map((c) => `${c.event} ${path.basename(c.args[0])}`);
+    try {
+      setConfig('sound.enabled', false);
+      const s0 = sounds.calls.length;
+      both(fixtures());
+      const f = fixtures();
+      f[1] = waiting(f[1], since());
+      both(f);
+      await settle();
+      assert.deepStrictEqual(played(s0), [], 'sounds are off by default');
+      // on: needs you (a toast in the focused window, and its sound), once for both windows
+      setConfig('sound.enabled', true);
+      both(fixtures());
+      const w = fixtures();
+      const waitAt = since();
+      w[1] = waiting(w[1], waitAt);
+      both(w);
+      await settle();
+      assert.deepStrictEqual(played(s0), ['needsYou Glass.aiff']);
+      assert.strictEqual(sounds.calls[s0].cmd, 'afplay');
+      assert.strictEqual(last(sounds.opts).claimDir, win.notifyDir, 'the gap between sounds holds across windows');
+      assert.ok(fs.existsSync(soundMarker(win.notifyDir, `${BETA}|main|${waitAt}`)));
+      // an error, then finished work
+      const errAt = since();
+      const e = fixtures();
+      e[0] = errored(e[0], errAt);
+      both(e);
+      await tick();
+      assert.deepStrictEqual(played(s0).slice(1), ['error Basso.aiff']);
+      both([running(fixtures()[0], since()), ...fixtures().slice(1)]);
+      const doneAt = since();
+      both([finished(fixtures()[0], doneAt), ...fixtures().slice(1)]);
+      await tick();
+      assert.deepStrictEqual(played(s0).slice(2), ['done Hero.aiff']);
+      // a threshold alert
+      const resetAt = Date.now() + 4 * HOUR;
+      both(fixtures(), { quota: codexQuota(10, resetAt) });
+      both(fixtures(), { quota: codexQuota(93, resetAt) });
+      await tick();
+      assert.deepStrictEqual(played(s0).slice(3), ['alert Funk.aiff']);
+      // a chosen sound; and "off"
+      setConfig('sound.done', 'pop');
+      both([running(fixtures()[0], since()), ...fixtures().slice(1)]);
+      both([finished(fixtures()[0], since()), ...fixtures().slice(1)]);
+      await tick();
+      assert.deepStrictEqual(played(s0).slice(4), ['done Pop.aiff']);
+      setConfig('sound.error', 'off');
+      const e2 = fixtures();
+      e2[0] = errored(e2[0], since());
+      both(fixtures());
+      both(e2);
+      await tick();
+      assert.strictEqual(played(s0).length, 5, 'played with the sound "off"');
+      setConfig('sound.error', 'default');
+      // finished while you look at that chat: no sound, and no other window plays it
+      tabState.active = chatTab('Alpha chat');
+      both([running(fixtures()[0], since()), ...fixtures().slice(1)]);
+      const seenAt = since();
+      both([finished(fixtures()[0], seenAt), ...fixtures().slice(1)]);
+      await tick();
+      tabState.active = null;
+      assert.strictEqual(played(s0).length, 5, 'a sound for the chat you are looking at');
+      // quiet hours: nothing, except errors with allowErrors
+      applyConfig(quietNow());
+      both(fixtures());
+      const q = fixtures();
+      q[3] = waiting(q[3], since());
+      both(q);
+      await settle();
+      const qe = fixtures();
+      qe[0] = errored(qe[0], since());
+      both(qe);
+      await tick();
+      assert.strictEqual(played(s0).length, 5, 'a sound during quiet hours');
+      setConfig('quietHours.allowErrors', true);
+      const qe2 = fixtures();
+      qe2[0] = errored(qe2[0], since());
+      both(fixtures());
+      both(qe2);
+      await tick();
+      assert.deepStrictEqual(played(s0).slice(5), ['error Basso.aiff'], 'allowErrors lets the error sound through');
+      setConfig('quietHours.enabled', false);
+      // remote windows: the sound would play on the remote machine
+      vscode.env.remoteName = 'ssh-remote';
+      try {
+        const r = fixtures();
+        r[0] = errored(r[0], since());
+        both(fixtures());
+        both(r);
+        await tick();
+        assert.strictEqual(played(s0).length, 6, 'a sound in a remote window');
+      } finally {
+        delete vscode.env.remoteName;
+      }
+    } finally {
+      tabState.active = null;
+      win.close();
+      peer.close();
+    }
+  });
+
+  await test('sounds: finished work seen first by an unfocused window waits the claim delay, so the focused window showing that chat keeps it silent; nobody looking → one sound (at once from the focused window, else after the delay); errors play at once', async () => {
+    tabState.active = null;
+    const settings = { 'sound.enabled': true };
+    const back = activateWindow('win-sound-back', settings); // e.g. the leader, whose own scan comes first
+    const front = activateWindow('win-sound-front', settings); // the window the user is in
+    back.ctl.windowFocused = () => false;
+    const played = (from) => sounds.calls.slice(from).map((c) => c.event);
+    const a = () => fixtures()[0];
+    const rest = () => fixtures().slice(1);
+    const run = (list, wins) => { for (const w of wins) w.send(list); };
+    try {
+      run(fixtures(), [back, front]);
+      // the user looks at Alpha in the focused window; the unfocused one sees it finish first
+      tabState.active = chatTab('Alpha chat');
+      const s0 = sounds.calls.length;
+      run([running(a(), since()), ...rest()], [back, front]);
+      const doneAt = since();
+      back.send([finished(a(), doneAt), ...rest()]);
+      await tick();
+      assert.deepStrictEqual(played(s0), [], 'the unfocused window played before the focused one could claim it');
+      front.send([finished(a(), doneAt), ...rest()]);
+      await settle();
+      assert.deepStrictEqual(played(s0), [], 'a sound for the chat the user is looking at');
+      assert.ok(fs.existsSync(soundMarker(back.notifyDir, `done|${ALPHA}|main|${doneAt}`)), 'claimed silently');
+      // nobody looks at it: the focused window plays it at once, the unfocused one not again after its delay
+      tabState.active = null;
+      run([running(a(), since()), ...rest()], [back, front]);
+      const done2 = since();
+      back.send([finished(a(), done2), ...rest()]);
+      front.send([finished(a(), done2), ...rest()]);
+      await tick();
+      assert.deepStrictEqual(played(s0), ['done']);
+      await settle();
+      assert.deepStrictEqual(played(s0), ['done'], 'played twice');
+      // no window has focus: the one that sees it plays it after the claim delay
+      front.ctl.windowFocused = () => false;
+      run([running(a(), since()), ...rest()], [back, front]);
+      const done3 = since();
+      run([finished(a(), done3), ...rest()], [back, front]);
+      await tick();
+      assert.deepStrictEqual(played(s0), ['done'], 'no delay in an unfocused window');
+      await settle();
+      assert.deepStrictEqual(played(s0), ['done', 'done']);
+      // the unfocused window gets focus and shows that chat before its delay is over: checked again, silent
+      run([running(a(), since()), ...rest()], [back]);
+      back.send([finished(a(), since()), ...rest()]);
+      back.ctl.windowFocused = () => true;
+      tabState.active = chatTab('Alpha chat');
+      await settle();
+      tabState.active = null;
+      assert.deepStrictEqual(played(s0), ['done', 'done'], 'a sound for the chat the user looks at by then');
+      // an error has no "looking at it" exception: it plays at once, once
+      const e = fixtures();
+      e[0] = errored(e[0], since());
+      run(e, [back, front]);
+      await tick();
+      assert.deepStrictEqual(played(s0), ['done', 'done', 'error']);
+    } finally {
+      tabState.active = null;
+      back.close();
+      front.close();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // package.json / package.nls.json
 // ---------------------------------------------------------------------------
 
@@ -2037,7 +2567,7 @@ async function pushTests() {
   await test('push: off by default, and with no usable channel: needsYou, error and usage-limit events make no request, start no timer and claim nothing', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-off', { 'push.channels': [entry] }, { secrets }); // a channel, but push never turned on
+    const win = activateWindow('win-push-off', { 'network.allow': true, 'push.channels': [entry] }, { secrets }); // a channel, but push never turned on
     cfgKey = win.ctl.cfgKey();
     const n = net.calls.length;
     try {
@@ -2072,7 +2602,7 @@ async function pushTests() {
   });
 
   await test('push setup: add ntfy from the QuickPick (privacy notice once, random topic, each field checked, the token before the topic); the secrets go to SecretStorage, never to settings; Copy topic, Send test, a failed test, turning off and choosing events', async () => {
-    const win = activateWindow('win-push-setup');
+    const win = activateWindow('win-push-setup', { 'network.allow': true });
     const run = () => registered.get('agentMonitor.push.setup')();
     const picks = [];
     const byAction = (a) => (items) => items.find((i) => i.action === a);
@@ -2103,7 +2633,7 @@ async function pushTests() {
     try {
       picks.push(byAction('add'), (items) => items.find((i) => i.id === 'ntfy'));
       await run();
-      assert.strictEqual(log.quickPicks[qp].o.title, 'Push notifications · Off · Channels in use: 0');
+      assert.strictEqual(log.quickPicks[qp].o.title, 'Push notifications · Off · Channels in use: 0 · Network: allowed');
       assert.deepStrictEqual(log.inputs.slice(inputs).map((o) => o.title.replace(/^ntfy: /, '')),
         ['server', 'token', 'topic', 'dailyMax'].map((k) => i18n.t(`push.field.${k}`)), 'the token is asked before the topic');
       assert.strictEqual(privacy.length, 1, 'privacy notice');
@@ -2145,7 +2675,7 @@ async function pushTests() {
       await run();
       assert.ok(/12/.test(boxes[i18n.t('push.field.topic')].validateInput('alerts')), 'without a token a short topic is refused');
       assert.strictEqual(privacy.length, 1, 'the privacy notice came again');
-      assert.strictEqual(log.quickPicks[log.quickPicks.length - 2].o.title, 'Push notifications · On · Channels in use: 1');
+      assert.strictEqual(log.quickPicks[log.quickPicks.length - 2].o.title, 'Push notifications · On · Channels in use: 1 · Network: allowed');
       const key2 = config['push.channels'].globalValue[1].key;
       assert.ok(/^ntfy-[A-Za-z0-9_-]{8}$/.test(key2) && key2 !== key1, key2);
       assert.deepStrictEqual(config['push.channels'].globalValue.map((e) => [e.key, e.dailyMax]), [[key1, 0], [key2, 3]]);
@@ -2169,15 +2699,18 @@ async function pushTests() {
 
       // turn push off (the menu comes back with the new state), then choose events
       picks.push(byAction('off'), byAction('events'), (items) => {
-        assert.ok(items.every((i) => i.picked), 'all four events are on by default');
-        return items.filter((i) => i.type !== 'limitReset');
+        assert.ok(items.every((i) => i.picked), 'every event is on by default');
+        assert.deepStrictEqual(items.map((i) => i.label), realPush.EVENT_TYPES.map((e) => i18n.t(`push.event.${e}`)), 'threshold alerts can be chosen too');
+        return items.filter((i) => i.type !== 'limitReset' && i.type !== 'costDaily');
       });
       const before = log.quickPicks.length;
       await run();
       assert.strictEqual(config['push.enabled'].globalValue, false);
-      assert.strictEqual(log.quickPicks[before + 1].o.title, 'Push notifications · Off · Channels in use: 1');
+      assert.strictEqual(log.quickPicks[before + 1].o.title, 'Push notifications · Off · Channels in use: 1 · Network: allowed');
       assert.strictEqual(log.quickPicks[before + 2].o.canPickMany, true);
-      assert.deepStrictEqual(config['push.events'].globalValue, { needsYou: true, error: true, limitHit: true, limitReset: false });
+      assert.deepStrictEqual(config['push.events'].globalValue, {
+        needsYou: true, error: true, limitHit: true, limitReset: false, usageHigh: true, costDaily: false, contextHigh: true,
+      });
     } finally {
       quickPickAnswer = null;
       infoAnswer = null;
@@ -2194,7 +2727,7 @@ async function pushTests() {
     const a = await storeChannel(secrets, ntfyConfig({ key: 'ntfy-aaaaaaaa' }));
     const b = { ...(await storeChannel(secrets, ntfyConfig({ key: 'ntfy-bbbbbbbb', topic: TOPIC_B }))), enabled: false };
     const future = { channel: 'future-chat', key: 'future-1', room: 'synthetic' }; // a newer version's channel, synced here
-    const win = activateWindow('win-push-setup-edit', { 'push.channels': [a, future, b] }, { secrets });
+    const win = activateWindow('win-push-setup-edit', { 'network.allow': true, 'push.channels': [a, future, b] }, { secrets });
     const run = () => registered.get('agentMonitor.push.setup')();
     const picks = [];
     const byAction = (x) => (items) => items.find((i) => i.action === x);
@@ -2292,7 +2825,7 @@ async function pushTests() {
   await test('push: settings are read from user settings only: a workspace value can neither turn push on nor point a channel elsewhere', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-ws', { 'push.channels': [entry] }, { secrets });
+    const win = activateWindow('win-push-ws', { 'network.allow': true, 'push.channels': [entry] }, { secrets });
     const n = net.calls.length;
     try {
       setConfig('push.enabled', true, ConfigurationTarget.Workspace);
@@ -2321,7 +2854,7 @@ async function pushTests() {
   await test('push: needsYou waits for the delay, asks for a rescan shortly before it and decides on the fresh data; a chat answered in time is not pushed', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-wait', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const win = activateWindow('win-push-wait', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
     const refreshes = () => win.w().messages.filter((m) => m.type === 'refresh').length;
     try {
       win.send(fixtures());
@@ -2361,7 +2894,7 @@ async function pushTests() {
   await test('push: an API error goes out right away (no delay), with the project and the state only; the chat title only with includeTitle', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-error', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const win = activateWindow('win-push-error', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
     try {
       win.send(fixtures());
       const n = net.calls.length;
@@ -2398,7 +2931,7 @@ async function pushTests() {
     try {
       leader.inst.start();
       assert.ok(leader.inst.publish(snapshot(clone(fixtures()))));
-      B = activateWindow('win-push-follow', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+      B = activateWindow('win-push-follow', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
       assert.strictEqual(B.shared.inst.role, 'follower');
       const n = net.calls.length;
       const f = fixtures();
@@ -2430,7 +2963,7 @@ async function pushTests() {
   await test('push: two windows see the same error; the claim in the shared dir lets exactly one of them send it', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-a', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const win = activateWindow('win-push-a', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
     const peerCalls = [];
     // the other window: its own runtime, the same user settings, SecretStorage and shared claim dir
     const peer = realPushRt.createPushRuntime({
@@ -2462,7 +2995,7 @@ async function pushTests() {
   await test('push: a channel\'s daily limit drops what is over it (logged) and says so once; a failing channel gets one warning after 3 failures in a row, not repeated until a send works', async () => {
     const secrets = fakeSecrets();
     const capped = await storeChannel(secrets, ntfyConfig({ key: 'ntfy-cap', topic: 'am-synthetic0capped01', dailyMax: 1 }));
-    const win = activateWindow('win-push-limits', { 'push.enabled': true, 'push.channels': [capped] }, { secrets });
+    const win = activateWindow('win-push-limits', { 'network.allow': true, 'push.enabled': true, 'push.channels': [capped] }, { secrets });
     const error = async () => {
       const f = fixtures();
       f[0] = errored(f[0], since());
@@ -2509,7 +3042,7 @@ async function pushTests() {
   await test('push: closing the window drops a pending needsYou; nothing is sent afterwards', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-close', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const win = activateWindow('win-push-close', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
     win.send(fixtures());
     const n = net.calls.length;
     const f = fixtures();
@@ -2527,7 +3060,7 @@ async function pushTests() {
   await test('push: usage limits: limitHit when a new hit shows up, limitReset once its reset time has passed', async () => {
     const secrets = fakeSecrets();
     const entry = await storeChannel(secrets, ntfyConfig());
-    const win = activateWindow('win-push-limit', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const win = activateWindow('win-push-limit', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
     try {
       win.send(fixtures(), { quota: emptyQuotaSnapshot() }); // seeds
       const n = net.calls.length;
@@ -2551,6 +3084,343 @@ async function pushTests() {
       win.close();
     }
   });
+
+  await test('push: quiet hours hold a usage-limit hit; with allowErrors it goes out (like its error sound), while its reset stays held', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const settings = { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry], ...quietNow() };
+    const win = activateWindow('win-push-quiet-limit', settings, { secrets });
+    const offset = pushClock.offset;
+    try {
+      win.send(fixtures(), { quota: emptyQuotaSnapshot() }); // seeds
+      const n = net.calls.length;
+      const hit1 = pushNow();
+      win.send(fixtures(), { quota: claudeHit(hit1, hit1 + 5 * MIN) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n, 'a usage limit pushed during quiet hours');
+      setConfig('quietHours.allowErrors', true);
+      const hit2 = hit1 + 1000;
+      const reset2 = hit2 + HOUR;
+      win.send(fixtures(), { quota: claudeHit(hit2, reset2) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1, 'allowErrors held a usage limit');
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.limitHit.title', { provider: 'Claude Code' }));
+      // the reset is good news, not an error
+      pushClock.offset += HOUR + MIN;
+      win.send(fixtures(), { quota: claudeHit(hit2, reset2) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1, 'a limit reset pushed during quiet hours');
+    } finally {
+      pushClock.offset = offset; // later tests date their events by the real clock
+      win.close();
+    }
+  });
+
+  await test('push: a threshold alert (usage %) goes out at once, once across windows, at normal priority; quiet hours hold push without claiming it; allowErrors lets errors through', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const settings = { 'network.allow': true, 'push.enabled': true, 'push.delaySeconds': 600, 'push.channels': [entry] };
+    const A = activateWindow('win-push-alert-a', settings, { secrets });
+    const B = activateWindow('win-push-alert-b', settings, { secrets });
+    const both = (list, extra) => { A.send(list, extra); B.send(list, extra); };
+    try {
+      const resetAt = Date.now() + 6 * HOUR;
+      both(fixtures(), { quota: codexQuota(30, resetAt) });
+      const n = net.calls.length;
+      both(fixtures(), { quota: codexQuota(91, resetAt) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1, 'sent twice or not at all');
+      const call = last(net.calls);
+      assert.strictEqual(titleOf(call), usageTitle(91));
+      assert.deepStrictEqual([call.init.headers['X-Priority'], call.init.headers['X-Tags']], ['default', 'bar_chart']);
+      // quiet hours: an error is neither pushed nor claimed
+      applyConfig(quietNow());
+      const errAt = since();
+      const f = fixtures();
+      f[0] = errored(f[0], errAt);
+      both(fixtures());
+      both(f);
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1, 'pushed during quiet hours');
+      assert.ok(!fs.existsSync(pushMarker(A.notifyDir, `error|${ALPHA}|main|${errAt}`)), 'a muted push was claimed');
+      // allowErrors: errors get through, other events stay muted
+      setConfig('quietHours.allowErrors', true);
+      const err2 = since();
+      const g = fixtures();
+      g[0] = errored(g[0], err2);
+      both(fixtures(), { quota: codexQuota(10, resetAt + 5 * HOUR) });
+      both(g, { quota: codexQuota(97, resetAt + 5 * HOUR) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 2);
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.error.titleProject', { project: 'workspace' }));
+    } finally {
+      A.close();
+      B.close();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Network access switch (agentMonitor.network.allow, lib/network.js)
+// ---------------------------------------------------------------------------
+
+async function networkTests() {
+  const network = require(path.join(ROOT, 'lib', 'network'));
+  const run = () => registered.get('agentMonitor.push.setup')();
+  const byAction = (a) => (items) => items.find((i) => i.action === a);
+  const byChannel = (key) => (items) => items.find((i) => i.channel && i.channel.key === key);
+  const ASK = i18n.t('push.net.askTitle');
+  const ALLOW = i18n.t('push.net.allow');
+  const CTX = 'agentMonitor.networkAllowed';
+  let t = Date.now() - 30e3;
+  const since = () => (t += 1000);
+  const reset = () => { quickPickAnswer = null; infoAnswer = null; inputAnswer = null; warnAnswer = null; net.answer = null; };
+
+  await test('network: off by default; read from user settings only (a workspace value is ignored, only an exact true counts); the context key and the gate follow it at once; off again once the extension stops', async () => {
+    const win = activateWindow('win-net-default');
+    try {
+      assert.strictEqual(pkg.contributes.configuration.properties['agentMonitor.network.allow'].default, false);
+      assert.strictEqual(network.isAllowed(), false);
+      assert.strictEqual(log.contexts[CTX], false);
+      setConfig('network.allow', true, ConfigurationTarget.Workspace);
+      assert.strictEqual(win.ctl.networkAllowed(), false, 'a workspace turned the network on');
+      assert.strictEqual(network.isAllowed(), false);
+      assert.strictEqual(log.contexts[CTX], false);
+      setConfig('network.allow', true);
+      assert.strictEqual(network.isAllowed(), true);
+      assert.strictEqual(log.contexts[CTX], true);
+      config['network.allow'].globalValue = 'true'; // hand-edited settings.json: not a boolean
+      assert.strictEqual(network.isAllowed(), false);
+      config['network.allow'].globalValue = true;
+    } finally {
+      win.close();
+    }
+    assert.strictEqual(network.isAllowed(), false, 'the switch outlived the extension');
+  });
+
+  await test('network off: zero requests on every path while push is on with a channel set up (errors, waits, usage limits, Send a test message, test all, turning push on, adding a channel); each action asks first and a dismissed modal changes nothing', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-net-off', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    setConfig('network.allow', true, ConfigurationTarget.Workspace); // ignored
+    const n = net.calls.length;
+    const asks = [];
+    const picks = [];
+    quickPickAnswer = (items) => { const f = picks.shift(); return f ? f(items) : undefined; };
+    infoAnswer = (m, items) => { if (m === ASK) asks.push(items); return undefined; }; // dismissed
+    const inputs = log.inputs.length;
+    const infos = log.info.length;
+    try {
+      // events: an error, a wait past its delay and a usage limit
+      win.send(fixtures(), { quota: emptyQuotaSnapshot() });
+      const f = fixtures();
+      f[0] = errored(f[0], since());
+      f[1] = waiting(f[1], since());
+      win.send(f, { quota: claudeHit(pushNow(), pushNow() + HOUR) });
+      await sleep(150);
+      win.send(f, { quota: claudeHit(pushNow(), pushNow() + HOUR) });
+      await pushSettle();
+      assert.deepStrictEqual([win.ctl.push._state().waits, win.ctl.push._state().flushTimer], [0, false], 'a push timer is running');
+      // the setup: paused, network off; test all, a channel's test, push off then on, add: each asks, dismissed
+      const qp = log.quickPicks.length;
+      picks.push(byAction('testAll'));
+      await run();
+      assert.strictEqual(log.quickPicks[qp].o.title, 'Push notifications · Paused · Channels in use: 1 · Network: off');
+      const netItem = log.quickPicks[qp].items.find((i) => i.action === 'netAllow');
+      assert.ok(netItem && netItem.label.endsWith(ALLOW) && netItem.description === i18n.t('push.net.pausedHint'), JSON.stringify(netItem));
+      picks.push(byChannel('ntfy'), byAction('test'));
+      await run();
+      picks.push(byAction('off'), byAction('on'), () => undefined);
+      await run();
+      picks.push(byAction('add'), (items) => items.find((i) => i.id === 'ntfy'), () => undefined);
+      await run();
+      assert.strictEqual(picks.length, 0);
+      const r = await win.ctl.push.test('ntfy');
+      assert.strictEqual(r.code, 'networkOff');
+      assert.strictEqual(net.calls.length, n, 'a request went out');
+      // four modals, each saying what would go where, with one button
+      assert.strictEqual(asks.length, 4);
+      for (const a of asks) assert.ok(a[0].modal === true && a.length === 2 && a[1] === ALLOW && a[0].detail.endsWith(i18n.t('push.net.askDetail')), JSON.stringify(a));
+      assert.ok(asks[0][0].detail.startsWith(i18n.t('push.net.test', { channel: 'ntfy' })));
+      assert.ok(asks[1][0].detail.startsWith(i18n.t('push.net.test', { channel: 'ntfy' })));
+      assert.ok(asks[2][0].detail.startsWith(i18n.t('push.net.sends', { channel: 'ntfy' })));
+      assert.ok(asks[3][0].detail.startsWith(i18n.t('push.net.sends', { channel: 'ntfy' })));
+      // nothing changed: the switch never written, push stays off (turned off above), no channel added, no field asked
+      assert.ok(!log.updates.some((u) => u[0] === 'network.allow'), 'the switch was written');
+      assert.strictEqual(config['push.enabled'].globalValue, false);
+      assert.strictEqual(config['push.channels'].globalValue.length, 1);
+      assert.strictEqual(log.inputs.length, inputs);
+      assert.ok(!log.info.slice(infos).includes(i18n.t('push.ui.privacy', { channel: 'ntfy' })), 'the privacy notice came as well');
+    } finally {
+      reset();
+      win.close();
+    }
+  });
+
+  await test('network: only "Allow network access" in the modal turns the switch on (in user settings), then the test goes out; adding a channel shows one modal instead of the privacy notice; "Turn on push" asks too', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-net-allow', { 'push.channels': [entry] }, { secrets });
+    const asks = [];
+    const picks = [];
+    const saved = [];
+    quickPickAnswer = (items) => { const f = picks.shift(); return f ? f(items) : undefined; };
+    infoAnswer = (m, items) => {
+      if (m === ASK) { asks.push(items); return ALLOW; }
+      if (m === i18n.t('push.ui.savedNtfy', { channel: 'ntfy 2' })) saved.push(items);
+      return undefined;
+    };
+    inputAnswer = (o) => o.value; // the prefilled server, a random topic, the default daily limit; no token
+    const n = net.calls.length;
+    const infos = log.info.length;
+    try {
+      picks.push(byChannel('ntfy'), byAction('test'));
+      await run();
+      assert.strictEqual(asks.length, 1);
+      assert.deepStrictEqual(log.updates.filter((u) => u[0] === 'network.allow'), [['network.allow', true, ConfigurationTarget.Global]]);
+      assert.strictEqual(network.isAllowed(), true);
+      assert.strictEqual(log.contexts[CTX], true);
+      assert.strictEqual(net.calls.length, n + 1, 'the test did not go out after allowing');
+      assert.strictEqual(last(log.info), i18n.t('push.ui.testOkNtfy', { channel: 'ntfy' }));
+      assert.strictEqual(config['push.enabled'], undefined, 'push was turned on');
+      // allowed: no more modal; "Block network access" from the menu, which comes back with "Allow network access"
+      picks.push(byChannel('ntfy'), byAction('test'));
+      await run();
+      assert.strictEqual(asks.length, 1);
+      assert.strictEqual(net.calls.length, n + 2);
+      const qp = log.quickPicks.length;
+      picks.push(byAction('netBlock'), () => undefined);
+      await run();
+      assert.strictEqual(log.quickPicks[qp].o.title, 'Push notifications · Off · Channels in use: 1 · Network: allowed');
+      assert.strictEqual(log.quickPicks[qp + 1].o.title, 'Push notifications · Off · Channels in use: 1 · Network: off');
+      assert.ok(log.quickPicks[qp + 1].items.some((i) => i.action === 'netAllow') && !log.quickPicks[qp + 1].items.some((i) => i.action === 'netBlock'));
+      assert.strictEqual(config['network.allow'].globalValue, false);
+      // add a channel with the network off: one modal (not the privacy notice), the switch on, the notice counted as read
+      picks.push(byAction('add'), (items) => items.find((i) => i.id === 'ntfy'));
+      await run();
+      assert.strictEqual(asks.length, 2);
+      assert.ok(asks[1][0].detail.startsWith(i18n.t('push.net.sends', { channel: 'ntfy' })));
+      assert.ok(!log.info.slice(infos).includes(i18n.t('push.ui.privacy', { channel: 'ntfy' })), 'the privacy notice came as well');
+      assert.strictEqual(config['network.allow'].globalValue, true);
+      assert.strictEqual(config['push.channels'].globalValue.length, 2);
+      assert.deepStrictEqual(win.context.globalState.get('agentMonitor.push.privacyAck'), ['ntfy']);
+      assert.strictEqual(config['push.enabled'], undefined, 'allowing the network turned push on');
+      assert.ok(saved.length === 1 && saved[0].includes(i18n.t('push.ui.turnOn')), 'the saved message offers to turn push on');
+      // "Turn on push" with the network off: asks; allowed, push goes on
+      setConfig('network.allow', false);
+      picks.push(byAction('on'), () => undefined);
+      await run();
+      assert.strictEqual(asks.length, 3);
+      assert.ok(asks[2][0].detail.startsWith(i18n.t('push.net.sends', { channel: 'ntfy 1 and ntfy 2' })), asks[2][0].detail);
+      assert.deepStrictEqual([config['network.allow'].globalValue, config['push.enabled'].globalValue], [true, true]);
+    } finally {
+      reset();
+      win.close();
+    }
+  });
+
+  await test('network: Allow / Block / Toggle commands write user settings and set the context key; blocking keeps push on (shown as paused) and says so; a failed write is shown', async () => {
+    const win = activateWindow('win-net-cmd', { 'push.enabled': true });
+    const getConfiguration = vscode.workspace.getConfiguration;
+    try {
+      assert.strictEqual(log.contexts[CTX], false);
+      await registered.get('agentMonitor.network.toggle')();
+      assert.deepStrictEqual(last(log.updates), ['network.allow', true, ConfigurationTarget.Global]);
+      assert.strictEqual(log.contexts[CTX], true);
+      assert.strictEqual(last(log.info), i18n.t('push.net.allowed'));
+      await registered.get('agentMonitor.network.block')();
+      assert.deepStrictEqual([config['network.allow'].globalValue, log.contexts[CTX]], [false, false]);
+      assert.strictEqual(config['push.enabled'].globalValue, true, 'push was turned off');
+      assert.strictEqual(last(log.info), i18n.t('push.net.blockedPaused'));
+      await registered.get('agentMonitor.network.allow')();
+      assert.deepStrictEqual([config['network.allow'].globalValue, log.contexts[CTX]], [true, true]);
+      await registered.get('agentMonitor.network.toggle')();
+      assert.deepStrictEqual([config['network.allow'].globalValue, log.contexts[CTX]], [false, false]);
+      // the setup shows push paused while the network is off, and on once it is allowed
+      const qp = log.quickPicks.length;
+      quickPickAnswer = () => undefined;
+      await run();
+      setConfig('network.allow', true);
+      await run();
+      assert.strictEqual(log.quickPicks[qp].o.title, 'Push notifications · Paused · Channels in use: 0 · Network: off');
+      assert.strictEqual(log.quickPicks[qp + 1].o.title, 'Push notifications · On · Channels in use: 0 · Network: allowed');
+      assert.ok(log.quickPicks[qp + 1].items.some((i) => i.action === 'netBlock'));
+      setConfig('push.enabled', false);
+      await registered.get('agentMonitor.network.block')();
+      assert.strictEqual(last(log.info), i18n.t('push.net.blocked'));
+      // settings.json can't be written: the error is shown and the switch stays as it was
+      vscode.workspace.getConfiguration = (section) => {
+        const c = getConfiguration(section);
+        return { ...c, update: async () => { throw new Error('Unable to write into user settings (synthetic)'); } };
+      };
+      const errors = log.error.length;
+      await registered.get('agentMonitor.network.allow')();
+      assert.deepStrictEqual(log.error.slice(errors), [i18n.t('push.net.failed', { error: 'Unable to write into user settings (synthetic)' })]);
+      assert.deepStrictEqual([config['network.allow'].globalValue, log.contexts[CTX]], [false, false]);
+    } finally {
+      vscode.workspace.getConfiguration = getConfiguration;
+      reset();
+      win.close();
+    }
+  });
+
+  await test('network: turning it off drops a pending push; turning it on again does not send what happened while it was off', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-net-flip', { 'network.allow': true, 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    try {
+      win.send(fixtures());
+      const n = net.calls.length;
+      const f = fixtures();
+      f[1] = waiting(f[1], since());
+      win.send(f);
+      assert.strictEqual(win.ctl.push._state().waits, 1);
+      setConfig('network.allow', false);
+      assert.strictEqual(win.ctl.push._state().waits, 0, 'the pending wait survived');
+      const g = fixtures();
+      g[0] = errored(g[0], since());
+      win.send(g);
+      await sleep(150);
+      win.send(g);
+      setConfig('network.allow', true);
+      win.send(g);
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n, 'an event from while the network was off went out');
+      win.send(fixtures());
+      const h = fixtures();
+      h[3] = errored(h[3], since());
+      win.send(h);
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1);
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('network strings: every push.net.* key and push.err.networkOff in all five languages with the same placeholders and translated; the command titles and the setting description too', () => {
+    const read = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    const src = ['lib/push-setup.js', 'extension.js'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+    const used = new Set([...src.matchAll(/'(push\.net\.[\w.]*\w)'/g)].map((m) => m[1]));
+    used.add('push.err.networkOff');
+    for (const k of ['allow', 'block', 'askTitle', 'askDetail', 'sends', 'test', 'allowed', 'blocked', 'blockedPaused', 'failed', 'stateAllowed', 'stateOff', 'statePaused']) {
+      assert.ok(used.has(`push.net.${k}`), `not used: push.net.${k}`);
+    }
+    const en = read('l10n/push.en.json');
+    const ph = (x) => [...String(x).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
+    const nlsKeys = ['cmd.network.allow', 'cmd.network.block', 'cmd.network.toggle', 'config.network.allow'];
+    for (const loc of ['zh-cn', 'zh-tw', 'ko', 'ja']) {
+      const d = read(`l10n/push.${loc}.json`);
+      for (const k of [...used, 'push.ui.menuTitle']) {
+        assert.ok(typeof d[k] === 'string' && d[k].trim() && typeof en[k] === 'string', `${loc}: ${k}`);
+        assert.strictEqual(ph(d[k]), ph(en[k]), `${loc}: placeholders of ${k}`);
+        assert.notStrictEqual(d[k], en[k], `${loc}: ${k} is not translated`);
+      }
+      const n = read(`package.nls.${loc}.json`);
+      for (const k of nlsKeys) assert.ok(typeof n[k] === 'string' && n[k].trim() && n[k] !== nls[k], `package.nls.${loc}: ${k}`);
+      assert.ok(n['config.network.allow'].includes('#agentMonitor.push.enabled#'), `package.nls.${loc}: the setting links to push`);
+    }
+    assert.ok(en['push.ui.menuTitle'].includes('{network}'));
+  });
 }
 
 async function manifestTests() {
@@ -2572,7 +3442,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.4.0');
+    assert.strictEqual(pkg.version, '0.5.0');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');
@@ -2595,10 +3465,11 @@ async function manifestTests() {
   });
 
   await test('name, keywords and icon path do not contain Claude / Anthropic / Codex / OpenAI; the description carries an unofficial disclaimer', () => {
-    const banned = /claude|anthropic|codex|openai/i;
+    const banned = /claude|anthropic|codex|openai|copilot|github|gemini|google|qwen|alibaba/i;
     for (const s of [pkg.name, nls.displayName, pkg.icon, ...pkg.keywords]) assert.ok(!banned.test(s), `third-party name found: ${s}`);
-    assert.ok(/Unofficial; not affiliated with Anthropic or OpenAI\./.test(nls.description));
+    assert.ok(/Unofficial; not affiliated with Anthropic, OpenAI, GitHub, Google or Alibaba Cloud\./.test(nls.description), nls.description);
     assert.ok(/session logs/.test(nls.description) && /Claude Code/.test(nls.description) && /Codex/.test(nls.description));
+    for (const name of ['Copilot', 'Gemini CLI', 'Qwen Code']) assert.ok(nls.description.includes(name), name);
   });
 
   await test('every %key% has a value in package.nls.json, with no extra keys', () => {
@@ -2652,8 +3523,8 @@ async function manifestTests() {
       'scope.all': '$(globe)', 'scope.workspace': '$(root-folder)', markSeen: '$(check)', markAllSeen: '$(check-all)',
       hideCompleted: '$(eye)', showCompleted: '$(eye-closed)', openTranscript: '$(go-to-file)',
       revealTranscript: '$(folder-opened)', copyTranscriptPath: '$(copy)', copyResume: '$(copy)',
-      compact: '$(screen-normal)', handoff: '$(export)', setAutoCompact: '$(settings)', storage: '$(database)',
-      'push.setup': '$(bell)',
+      compact: '$(screen-normal)', handoff: '$(export)', setAutoCompact: '$(settings)', storage: '$(database)', history: '$(graph)',
+      'push.setup': '$(bell)', 'network.allow': '$(globe)', 'network.block': '$(circle-slash)', 'network.toggle': undefined,
     };
     assert.deepStrictEqual([...commands].sort(), Object.keys(want).map((x) => 'agentMonitor.' + x).sort());
     for (const [id, icon] of Object.entries(want)) assert.strictEqual(c.commands.find((x) => x.command === 'agentMonitor.' + id).icon, icon, id);
@@ -2688,7 +3559,7 @@ async function manifestTests() {
     assert.ok(!JSON.stringify(c.menus).includes('agentMonitor.sessions'), 'menus no longer reference the native session tree');
   });
 
-  await test('bottom panel title bar: scope switch, hide completed, mark all seen and refresh are buttons; storage, push notifications and settings are in the … overflow menu', () => {
+  await test('bottom panel title bar: scope switch, hide completed, mark all seen and refresh are buttons; storage, usage history, push notifications, network access and settings are in the … overflow menu', () => {
     const items = c.menus['view/title'].filter((m) => /view == agentMonitor\.agents\b/.test(m.when));
     const nav = items.filter((m) => m.group.startsWith('navigation')).map((m) => `${m.group} ${m.command || m.submenu}`);
     assert.deepStrictEqual(nav, [
@@ -2697,13 +3568,14 @@ async function manifestTests() {
       'navigation@3 agentMonitor.markAllSeen', 'navigation@4 agentMonitor.refresh',
     ]);
     const overflow = items.filter((m) => !m.group.startsWith('navigation')).map((m) => m.command);
-    assert.deepStrictEqual(overflow, ['agentMonitor.storage', 'agentMonitor.push.setup', 'agentMonitor.openSettings']);
+    assert.deepStrictEqual(overflow, ['agentMonitor.storage', 'agentMonitor.history', 'agentMonitor.push.setup', 'agentMonitor.network.allow', 'agentMonitor.network.block', 'agentMonitor.openSettings']);
+    assert.strictEqual(items.find((m) => m.command === 'agentMonitor.history').group, '8_storage@2', 'next to storage');
     // the two scope submenus are mutually exclusive; the icon reflects the current scope
     const scope = items.filter((m) => m.submenu);
     assert.ok(scope[0].when.includes("config.agentMonitor.scope != 'workspace'") && scope[1].when.includes("config.agentMonitor.scope == 'workspace'"));
   });
 
-  await test('webview context menu: when = webviewId + webviewSection + compactable / resumable; evaluated against the data-vscode-context of the row', () => {
+  await test('webview context menu: when = webviewId + webviewSection + compactable / resumable / handoff / autoCompact; evaluated against the data-vscode-context of the row', () => {
     const menu = c.menus['webview/context'];
     assert.ok(Array.isArray(menu) && menu.length === 8);
     // minimal when evaluator: only supports key == 'v' / key / !key joined by && (all that is used here)
@@ -2721,10 +3593,14 @@ async function manifestTests() {
     }
     const shown = (ctx) => menu.filter((m) => evalWhen(m.when, { webviewId: 'agentMonitor.agents', ...ctx })).map((m) => m.command.replace('agentMonitor.', ''));
     const row = (flags) => JSON.parse(JSON.stringify({ webviewSection: 'session', sessionKey: 'claude:x', preventDefaultContextMenuItems: true, ...flags }));
-    assert.deepStrictEqual(shown(row({ compactable: true, resumable: false })),
+    const cc = { handoff: true, autoCompact: true };
+    assert.deepStrictEqual(shown(row({ compactable: true, resumable: false, ...cc })),
       ['compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-    assert.deepStrictEqual(shown(row({ compactable: false, resumable: true })),
+    assert.deepStrictEqual(shown(row({ compactable: false, resumable: true, ...cc })),
       ['handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    // Copilot / Gemini CLI / Qwen Code rows: no handoff note and no auto-compact setting
+    assert.deepStrictEqual(shown(row({ compactable: false, resumable: false, handoff: false, autoCompact: false })),
+      ['markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
     assert.deepStrictEqual(shown({}), [], 'no session menu in the content area (no webviewSection)');
     assert.deepStrictEqual(menu.filter((m) => evalWhen(m.when, { webviewId: 'other.view', webviewSection: 'session', compactable: true })), [], 'not shown in other webviews');
     // group order: session actions → open
@@ -2760,14 +3636,47 @@ async function manifestTests() {
     const re = /\bcompactable\b/;
     assert.ok(re.test(fmt.sessionContextValue(fixtures()[0], 'working')));
     assert.ok(!re.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), '12K context should not get a compact button');
+    // handoff / setAutoCompact in the tree: Claude Code and Codex sessions only
+    for (const cmd of ['agentMonitor.handoff', 'agentMonitor.setAutoCompact']) {
+      const it = c.menus['view/item/context'].find((m) => m.command === cmd);
+      const clauses = [...it.when.matchAll(/viewItem =~ \/(.+?)\/(?:\s|$)/g)].map((m) => new RegExp(m[1].replace(/\\\\/g, '\\')));
+      const ok = (provider) => clauses.every((r) => r.test(fmt.sessionContextValue({ ...fixtures()[0], provider }, 'idle')));
+      assert.ok(ok('claude') && ok('codex'), cmd);
+      for (const p of ['copilot', 'gemini', 'qwen']) assert.ok(!ok(p), cmd + ' hidden for ' + p);
+    }
   });
 
-  await test('Command Palette: commands that need a node argument are hidden; compact / handoff / setAutoCompact / storage / push setup are available', () => {
-    const hidden = c.menus.commandPalette.filter((x) => x.when === 'false').map((x) => x.command);
+  await test('Command Palette: commands that need a node argument are hidden; compact / handoff / setAutoCompact / storage / usage history / push setup are available', () => {
+    // network.toggle is for key bindings: the palette shows Allow / Block Network Access, whichever applies
+    const hidden = c.menus.commandPalette.filter((x) => x.when === 'false' && x.command !== 'agentMonitor.network.toggle').map((x) => x.command);
     assert.deepStrictEqual(hidden.sort(), ['openTranscript', 'revealTranscript', 'copyTranscriptPath', 'markSeen', 'copyResume'].map((x) => 'agentMonitor.' + x).sort());
-    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'push.setup']) {
+    assert.strictEqual(nls['cmd.history'], 'Show Usage History');
+    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'history', 'push.setup']) {
       assert.ok(!c.menus.commandPalette.some((x) => x.command === 'agentMonitor.' + id), id + ' should be visible in the Command Palette');
     }
+  });
+
+  await test('network access: one user-only switch (application scope, restricted, not synced, off); Allow / Block swap on the agentMonitor.networkAllowed context key in the palette and the … menu; Toggle is for key bindings', () => {
+    const p = c.configuration.properties['agentMonitor.network.allow'];
+    assert.deepStrictEqual([p.type, p.default, p.scope], ['boolean', false, 'application']);
+    assert.strictEqual(p.ignoreSync, true, 'allowing it on one machine must not allow it on others through Settings Sync');
+    assert.ok(pkg.capabilities.untrustedWorkspaces.restrictedConfigurations.includes('agentMonitor.network.allow'));
+    assert.ok(/\*\*Off by default\*\*/.test(nls['config.network.allow']) && nls['config.network.allow'].includes('#agentMonitor.push.enabled#'));
+    assert.ok(nls['config.push.enabled'].includes('#agentMonitor.network.allow#'), 'push says it needs the switch');
+    assert.ok(/unless you allow network access \(off by default\)/.test(nls.description), nls.description);
+    const titles = Object.fromEntries(c.commands.filter((x) => x.command.startsWith('agentMonitor.network.')).map((x) => [x.command, nls[x.title.slice(1, -1)]]));
+    assert.deepStrictEqual(titles, {
+      'agentMonitor.network.allow': 'Allow Network Access', 'agentMonitor.network.block': 'Block Network Access', 'agentMonitor.network.toggle': 'Toggle Network Access',
+    });
+    const when = (menu, cmd) => c.menus[menu].filter((m) => m.command === cmd).map((m) => m.when);
+    assert.deepStrictEqual(when('commandPalette', 'agentMonitor.network.allow'), ['!agentMonitor.networkAllowed']);
+    assert.deepStrictEqual(when('commandPalette', 'agentMonitor.network.block'), ['agentMonitor.networkAllowed']);
+    assert.deepStrictEqual(when('commandPalette', 'agentMonitor.network.toggle'), ['false']);
+    assert.deepStrictEqual(when('view/title', 'agentMonitor.network.allow'), ['view == agentMonitor.agents && !agentMonitor.networkAllowed']);
+    assert.deepStrictEqual(when('view/title', 'agentMonitor.network.block'), ['view == agentMonitor.agents && agentMonitor.networkAllowed']);
+    const ext = fs.readFileSync(EXT_FILE, 'utf8');
+    for (const id of ['allow', 'block', 'toggle']) assert.ok(ext.includes(`cmd('agentMonitor.network.${id}'`), `${id} is not registered`);
+    assert.ok('agentMonitor.networkAllowed' in log.contexts, 'the context key is never set');
   });
 
   await test('settings table: matches the reference list, no leftover staleAsNeedsYou', () => {
@@ -2784,6 +3693,8 @@ async function manifestTests() {
       approvalGuess: ['string', 'fastTools'], approvalGuessSeconds: ['number', 60],
       'claude.enabled': ['boolean', true], 'claude.projectsDir': ['string', ''], 'claude.cliPath': ['string', ''],
       'codex.enabled': ['boolean', true], 'codex.home': ['string', ''],
+      'copilot.enabled': ['boolean', true], 'gemini.enabled': ['boolean', true], 'gemini.home': ['string', ''],
+      'qwen.enabled': ['boolean', true], 'qwen.home': ['string', ''],
       compactConfirm: ['boolean', true], compactTemplate: ['string', ''],
       contextHintStart: ['number', 200000], contextHintAct: ['number', 500000],
       sessionListPosition: ['string', 'auto'],
@@ -2791,8 +3702,15 @@ async function manifestTests() {
       cacheReminderShortTtl: ['boolean', false], closeReminder: ['boolean', true], postCompactHint: ['boolean', true],
       onlyWorkspace: ['boolean', false],
       notifyNeedsYou: ['boolean', true], backgroundRefreshSeconds: ['number', 5], shareScanAcrossWindows: ['boolean', true],
-      'push.enabled': ['boolean', false], 'push.events': ['object', { needsYou: true, error: true, limitHit: true, limitReset: true }],
+      'push.enabled': ['boolean', false],
+      'push.events': ['object', { needsYou: true, error: true, limitHit: true, limitReset: true, usageHigh: true, costDaily: true, contextHigh: true }],
       'push.delaySeconds': ['number', 30], 'push.includeTitle': ['boolean', false], 'push.channels': ['array', []],
+      'network.allow': ['boolean', false],
+      'sound.enabled': ['boolean', false], 'sound.needsYou': ['string', 'default'], 'sound.error': ['string', 'default'],
+      'sound.done': ['string', 'default'], 'sound.alert': ['string', 'default'],
+      'quietHours.enabled': ['boolean', false], 'quietHours.start': ['string', '22:00'], 'quietHours.end': ['string', '08:00'],
+      'quietHours.days': ['array', []], 'quietHours.allowErrors': ['boolean', false],
+      'alerts.usagePercent': ['number', 90], 'alerts.dailyCost': ['number', 0], 'alerts.contextPercent': ['number', 0],
     };
     const props = c.configuration.properties;
     assert.deepStrictEqual(Object.keys(props).map((k) => k.replace(/^agentMonitor\./, '')).sort(), Object.keys(want).sort());
@@ -2809,18 +3727,36 @@ async function manifestTests() {
     assert.ok(nls['config.sessionListPosition'].includes('#terminal.integrated.tabs.location#'), 'description links to the terminal setting');
     assert.ok(props['agentMonitor.onlyWorkspace'].deprecationMessage);
     // settings that point to programs / directories can only be set in user settings (machine scope), so workspace settings cannot swap the program that gets executed
-    for (const k of ['claude.cliPath', 'claude.projectsDir', 'codex.home']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
+    for (const k of ['claude.cliPath', 'claude.projectsDir', 'codex.home', 'gemini.home', 'qwen.home']) {
+      assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
+      assert.ok(pkg.capabilities.untrustedWorkspaces.restrictedConfigurations.includes('agentMonitor.' + k), `${k} is not restricted`);
+    }
     // the shared scan and the background interval concern every window on this machine, so they are user settings too
     for (const k of ['backgroundRefreshSeconds', 'shareScanAcrossWindows']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
     // notifications keep the default (window) scope: a window with them off simply never claims, and a machine setting would
     // neither sync nor apply from user settings in remote windows
     assert.strictEqual(props['agentMonitor.notifyNeedsYou'].scope, undefined);
+    // sounds, quiet hours and threshold alerts: window scope too (a workspace can only make them quieter or louder in
+    // its own window; nothing leaves the computer through them), and their values match lib/alerts.js
+    for (const k of Object.keys(want).filter((x) => /^(sound|quietHours|alerts)\./.test(x))) assert.strictEqual(props['agentMonitor.' + k].scope, undefined, k);
+    for (const e of realAlerts.SOUND_EVENTS) assert.deepStrictEqual(props['agentMonitor.sound.' + e].enum, realAlerts.SOUND_CHOICES.slice(), e);
+    assert.deepStrictEqual(props['agentMonitor.quietHours.days'].items.enum, realAlerts.DAY_NAMES.slice());
+    for (const k of ['start', 'end']) {
+      const p = props['agentMonitor.quietHours.' + k];
+      const re = new RegExp(p.pattern);
+      for (const v of ['22:00', '8:00', '07:30', '23:59', '00:00']) assert.ok(re.test(v) && realAlerts.parseHm(v) != null, `${k} ${v}`);
+      for (const v of ['24:00', '7', '7:5', 'noon', '']) assert.ok(!re.test(v) && realAlerts.parseHm(v) == null, `${k} ${v}`);
+      assert.strictEqual(p.default, realAlerts.parseHm(p.default) != null ? p.default : null);
+    }
+    assert.deepStrictEqual({ usagePercent: props['agentMonitor.alerts.usagePercent'].default, dailyCost: props['agentMonitor.alerts.dailyCost'].default,
+      contextPercent: props['agentMonitor.alerts.contextPercent'].default }, { ...realAlerts.DEFAULT_THRESHOLDS });
+    for (const k of ['sound.enabled', 'quietHours.enabled']) assert.ok(nls[props['agentMonitor.' + k].markdownDescription.slice(1, -1)].length > 40, k);
     assert.deepStrictEqual([props['agentMonitor.backgroundRefreshSeconds'].minimum, props['agentMonitor.backgroundRefreshSeconds'].maximum], [2, 60]);
     assert.ok(nls['config.backgroundRefreshSeconds'].includes('#agentMonitor.refreshSeconds#'), 'description links to refreshSeconds');
     // push: application scope (a workspace can never turn it on or redirect it) and restricted in untrusted workspaces;
     // the events render as checkboxes; the delay matches lib/push.js' default and stays within 0–600 s
     const restricted = pkg.capabilities.untrustedWorkspaces.restrictedConfigurations;
-    for (const k of Object.keys(want).filter((x) => x.startsWith('push.'))) {
+    for (const k of Object.keys(want).filter((x) => x.startsWith('push.') || x.startsWith('network.'))) {
       assert.strictEqual(props['agentMonitor.' + k].scope, 'application', k);
       assert.ok(restricted.includes('agentMonitor.' + k), `${k} is not restricted`);
     }
@@ -2912,6 +3848,77 @@ async function manifestTests() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Copilot, Gemini CLI, Qwen Code: settings → worker config, Copilot's user dir, workspace scope
+// ---------------------------------------------------------------------------
+
+async function providerTests() {
+  const { vscodeUserDir } = require(EXT_FILE)._internal;
+
+  await test('provider settings: Copilot user dir from global storage (profiles too), else null; Gemini / Qwen homes from the settings (~ expanded) or the defaults', () => {
+    const U = path.join(TMP, 'Code', 'User');
+    const id = 'cyuneo.cyuneo-agent-monitor';
+    assert.strictEqual(vscodeUserDir(Uri.file(path.join(U, 'globalStorage', id))), U);
+    assert.strictEqual(vscodeUserDir(Uri.file(path.join(U, 'profiles', '5f3a', 'globalStorage', id))), U, 'a profile\'s storage maps to the same User dir');
+    for (const bad of [Uri.file(path.join(TMP, 'elsewhere', id)), mkUri('vscode-remote', path.join(U, 'globalStorage', id)), undefined, null, {}]) {
+      assert.strictEqual(vscodeUserDir(bad), null, JSON.stringify(bad));
+    }
+    const name = path.join('Code', 'User', 'globalStorage', id);
+    const win = activateWindow(name, { 'gemini.home': '~/gem-home', 'qwen.enabled': false, 'qwen.home': '/data/qwen' });
+    try {
+      const cfg = win.worker.opts.workerData;
+      assert.deepStrictEqual(cfg.copilot, { enabled: true, userDir: U });
+      assert.deepStrictEqual(cfg.gemini, { enabled: true, home: path.join(os.homedir(), 'gem-home'), homeSource: 'setting' });
+      assert.deepStrictEqual(cfg.qwen, { enabled: false, home: '/data/qwen', homeSource: 'setting' });
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('provider settings: each change rebuilds the worker config (and the shared-scan key); other windows with other dirs do not share a scan', () => {
+    const win = activateWindow('win-providers');
+    try {
+      const w = win.w();
+      const key0 = win.ctl.cfgKey();
+      const cases = [['copilot.enabled', false, (c) => c.copilot.enabled === false], ['gemini.enabled', false, (c) => c.gemini.enabled === false],
+        ['gemini.home', '/g/home', (c) => c.gemini.home === '/g/home'], ['qwen.enabled', false, (c) => c.qwen.enabled === false],
+        ['qwen.home', '/q/home', (c) => c.qwen.home === '/q/home' && c.qwen.homeSource === 'setting']];
+      for (const [k, v, ok] of cases) {
+        const n = w.messages.length;
+        setConfig(k, v);
+        const msgs = w.messages.slice(n).filter((m) => m.type === 'config');
+        assert.strictEqual(msgs.length, 1, `${k}: no config message`);
+        assert.ok(ok(msgs[0].cfg), `${k}: ${JSON.stringify(msgs[0].cfg)}`);
+      }
+      assert.notStrictEqual(win.ctl.cfgKey(), key0, 'windows with other provider settings must not share one scan');
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('workspace scope: a Copilot chat belongs to the window whose workspace storage holds it, or by cwd; Gemini / Qwen by cwd', () => {
+    const U = path.join(TMP, 'Code', 'User');
+    const here = path.join(U, 'workspaceStorage', 'aaa111');
+    const win = activateWindow('win-provider-scope', { scope: 'workspace' }, { storageUri: Uri.file(path.join(here, 'cyuneo.cyuneo-agent-monitor')) });
+    try {
+      assert.strictEqual(win.ctl.ws().storageDir, here);
+      const mk = (provider, id, o) => session({ provider, id, cwd: '/nowhere', projectDir: null, ...o });
+      const list = [
+        mk('copilot', 'cp-here', { transcript: path.join(here, 'chatSessions', 'cp-here.jsonl'), copilot: { storage: 'workspace', workspaceFile: null } }),
+        mk('copilot', 'cp-other', { transcript: path.join(U, 'workspaceStorage', 'bbb222', 'chatSessions', 'cp-other.jsonl'), copilot: { storage: 'workspace', workspaceFile: null } }),
+        mk('copilot', 'cp-cwd', { cwd: WS, transcript: path.join(U, 'workspaceStorage', 'ccc333', 'chatSessions', 'cp-cwd.jsonl'), copilot: { storage: 'workspace', workspaceFile: null } }),
+        mk('copilot', 'cp-empty', { transcript: path.join(U, 'globalStorage', 'emptyWindowChatSessions', 'cp-empty.jsonl'), copilot: { storage: 'emptyWindow', workspaceFile: null } }),
+        mk('gemini', 'gm-here', { cwd: path.join(WS, 'pkg') }),
+        mk('qwen', 'qw-other', { cwd: '/elsewhere' }),
+      ];
+      win.send(list);
+      assert.deepStrictEqual(win.ctl.scoped.map((s) => s.id).sort(), ['cp-cwd', 'cp-here', 'gm-here']);
+    } finally {
+      win.close();
+    }
+  });
+}
+
 (async () => {
   console.log('Extension entry point');
   try {
@@ -2920,7 +3927,7 @@ async function manifestTests() {
     results.push(false);
     console.log('  FAIL  (extension tests aborted)', err && err.stack);
   }
-  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Background slowdown', backgroundTests], ['Remote push', pushTests]]) {
+  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Network access', networkTests], ['Copilot, Gemini CLI, Qwen Code', providerTests]]) {
     console.log(`\n${title}`);
     try {
       await fn();
@@ -2932,6 +3939,7 @@ async function manifestTests() {
   console.log('\npackage.json');
   await manifestTests();
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+  if (realExecs) { results.push(false); console.log(`  FAIL  ${realExecs} command(s) reached the real child_process.execFile`); }
   const failed = results.filter((x) => !x).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
   process.exit(failed ? 1 : 0);

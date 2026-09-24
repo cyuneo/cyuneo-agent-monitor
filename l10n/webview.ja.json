@@ -9,6 +9,7 @@
   "webview.col.tokens": "トークン",
   "webview.col.tokens.tip": "直近のモデル呼び出しのトークン数（入力+キャッシュ+出力）。Claude Codeが表示する数値と同じです",
   "webview.col.cost": "コスト",
+  "webview.col.credits": "クレジット",
   "webview.col.time": "時間",
   "webview.col.time.tip": "エージェントが実行している（または実行していた）時間",
   "webview.expand": "詳細を表示: {name}",

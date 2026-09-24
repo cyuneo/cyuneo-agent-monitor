@@ -1,5 +1,5 @@
 {
-  "cli.help.intro": "이 컴퓨터의 세션 기록에서 읽어온 Claude Code와 Codex 세션 및 해당 에이전트를 표시합니다.",
+  "cli.help.intro": "이 컴퓨터의 세션 기록에서 읽어온 Claude Code, Codex, Copilot, Gemini CLI, Qwen Code 세션 및 해당 에이전트를 표시합니다.",
   "cli.help.usage": "사용법",
   "cli.help.options": "옵션",
   "cli.help.optionsArg": "옵션",
@@ -11,7 +11,7 @@
   "cli.opt.interval": "--watch 사용 시 새로고침 간격(초 단위, 기본값 {n})",
   "cli.opt.window": "최근 N분 동안 활성화된 세션 표시(기본값 {n})",
   "cli.opt.stale": "새 기록이 없을 때 에이전트를 비활성으로 판단하기까지의 분(기본값 {n})",
-  "cli.opt.provider": "읽을 기록 선택: all, claude 또는 codex(기본값 all)",
+  "cli.opt.provider": "읽을 기록 선택: all, claude, codex, copilot, gemini 또는 qwen(기본값 all)",
   "cli.opt.here": "폴더가 현재 디렉터리이거나 그 하위인 세션만 표시",
   "cli.opt.session": "세션 하나를 자세히 표시: 타임라인, 결과, 변경된 파일, 오류, 재개 방법(ID 또는 ID의 앞부분)",
   "cli.opt.today": "오늘의 API 환산 비용도 합산합니다(오늘 기록을 모두 읽음)",
@@ -26,7 +26,7 @@
   "cli.opt.help": "이 도움말 표시",
   "cli.opt.version": "버전 표시",
 
-  "cli.empty": "최근 {n}분 동안 활성화된 Claude Code 또는 Codex 세션이 없습니다.",
+  "cli.empty": "최근 {n}분 동안 활성화된 Claude Code, Codex, Copilot, Gemini CLI, Qwen Code 세션이 없습니다.",
   "cli.empty.here": "최근 {n}분 동안 {dir}에서 활성화된 세션이 없습니다.",
   "cli.today": "오늘 ({label}): {usd}",
   "cli.seeDetail": "자세히 보기: --session {id}",
@@ -49,7 +49,7 @@
   "cli.error.noValue": "{flag}는(은) 값을 받지 않습니다.",
   "cli.error.needsValue": "{flag}에는 값이 필요합니다.",
   "cli.error.badNumber": "{flag}에는 양수가 필요합니다(\"{value}\"를 받음).",
-  "cli.error.badProvider": "알 수 없는 provider \"{value}\"입니다. all, claude, codex 중 하나를 사용하세요.",
+  "cli.error.badProvider": "알 수 없는 provider \"{value}\"입니다. all, claude, codex, copilot, gemini, qwen 중 하나를 사용하세요.",
   "cli.error.seeHelp": "--help를 붙여 실행하면 옵션을 볼 수 있습니다.",
   "cli.error.source": "{source} 기록을 읽을 수 없습니다: {message}",
   "cli.error.noSession": "\"{id}\"와 일치하는 세션이 없습니다. {n}분 넘게 비활성 상태였을 수 있으니 --window 값을 늘려보세요.",

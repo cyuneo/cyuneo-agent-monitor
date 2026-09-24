@@ -1,7 +1,7 @@
 {
   "scope.all": "すべてのセッション",
   "scope.workspace": "現在のワークスペース",
-  "scope.empty.all": "最近アクティブな Claude Code または Codex のセッションはありません。",
+  "scope.empty.all": "最近アクティブな Claude Code、Codex、Copilot、Gemini CLI、Qwen Code のセッションはありません。",
   "scope.empty.workspace": "最近このワークスペースでアクティブなセッションはありません。",
   "scope.noFolder": "フォルダーが開かれていないため、このワークスペースに一致するセッションはありません。",
   "scope.showAll": "すべてのセッションを表示",
@@ -16,7 +16,7 @@
   "row.stalePending": "最近の活動なし（承認待ちの可能性）",
   "row.completedHidden": "完了済み{n}件を非表示",
 
-  "session.loading": "ローカルの Claude Code と Codex のセッション記録を読み込み中…",
+  "session.loading": "ローカルのエージェントのセッション記録を読み込み中…",
   "session.none": "セッション一覧でセッションを選択すると、そのエージェントが表示されます。",
   "session.gone": "このセッションは一覧にありません。しばらく活動がなかったか、フィルターで除外された可能性があります。",
   "session.cacheLeft": "キャッシュ: あと{m}分",
@@ -92,6 +92,7 @@
   "ext.handoffUnavailable": "現在は引き継ぎメモを利用できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.autoCompactUnavailable": "現在は自動圧縮のしきい値を設定できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.storageUnavailable": "現在はストレージページを利用できません。詳細はエージェントモニターの出力を確認してください。",
+  "ext.historyUnavailable": "現在は使用量の履歴ページを利用できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.pushUnavailable": "現在はプッシュ通知を利用できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.log.learnedCompact": "{model}（{window}ウィンドウ）の自動圧縮ポイントを実測しました: {tokens}",
   "ext.compactUnavailable": "現在は圧縮を実行できません。詳細はエージェントモニターの出力を確認してください。",

@@ -9,6 +9,7 @@
   "webview.col.tokens": "上下文",
   "webview.col.tokens.tip": "最近一次模型呼叫的 token 數（輸入 + 快取 + 輸出），與 Claude Code 顯示的一致",
   "webview.col.cost": "費用",
+  "webview.col.credits": "點數",
   "webview.col.time": "時間",
   "webview.col.time.tip": "智慧體已執行（或執行過）的時長",
   "webview.expand": "展開詳情：{name}",

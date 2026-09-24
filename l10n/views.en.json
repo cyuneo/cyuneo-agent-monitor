@@ -1,7 +1,7 @@
 {
   "scope.all": "All sessions",
   "scope.workspace": "This workspace",
-  "scope.empty.all": "No Claude Code or Codex sessions were active recently.",
+  "scope.empty.all": "No Claude Code, Codex, Copilot, Gemini CLI or Qwen Code sessions were active recently.",
   "scope.empty.workspace": "No sessions from this workspace were active recently.",
   "scope.noFolder": "No folder is open, so no session can match this workspace.",
   "scope.showAll": "Show all sessions",
@@ -16,7 +16,7 @@
   "row.stalePending": "No recent activity (may be waiting for approval)",
   "row.completedHidden": "{n} completed hidden",
 
-  "session.loading": "Reading local Claude Code and Codex session records…",
+  "session.loading": "Reading local agent session records…",
   "session.none": "Select a session in the list to see its agents.",
   "session.gone": "This session is no longer in the list. It may have been inactive for a while or filtered out.",
   "session.cacheLeft": "Cache: {m} min left",
@@ -92,6 +92,7 @@
   "ext.handoffUnavailable": "Handoff notes aren't available right now. See the Agent Monitor output for details.",
   "ext.autoCompactUnavailable": "Setting the auto-compact threshold isn't available right now. See the Agent Monitor output for details.",
   "ext.storageUnavailable": "The storage page isn't available right now. See the Agent Monitor output for details.",
+  "ext.historyUnavailable": "The usage history page isn't available right now. See the Agent Monitor output for details.",
   "ext.pushUnavailable": "Push notifications aren't available right now. See the Agent Monitor output for details.",
   "ext.log.learnedCompact": "Measured auto-compact point for {model} ({window} window): {tokens}",
   "ext.compactUnavailable": "Compacting isn't available right now. See the Agent Monitor output for details.",

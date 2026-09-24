@@ -1,5 +1,5 @@
 {
-  "cli.help.intro": "このコンピューター上のセッション記録から読み取った、Claude CodeとCodexのセッションとそのエージェントを表示します。",
+  "cli.help.intro": "このコンピューター上のセッション記録から読み取った、Claude Code、Codex、Copilot、Gemini CLI、Qwen Codeのセッションとそのエージェントを表示します。",
   "cli.help.usage": "使用法",
   "cli.help.options": "オプション",
   "cli.help.optionsArg": "オプション",
@@ -11,7 +11,7 @@
   "cli.opt.interval": "--watch使用時の更新間隔（秒、既定値{n}）",
   "cli.opt.window": "直近N分間にアクティブだったセッションを表示（既定値{n}）",
   "cli.opt.stale": "新しい記録がこの分数ないとエージェントを非アクティブと判定（既定値{n}）",
-  "cli.opt.provider": "読み取る対象: all、claude、codexのいずれか（既定値all）",
+  "cli.opt.provider": "読み取る対象: all、claude、codex、copilot、gemini、qwenのいずれか（既定値all）",
   "cli.opt.here": "フォルダーがカレントディレクトリまたはその配下のセッションのみ表示",
   "cli.opt.session": "セッションを1件詳しく表示: タイムライン、結果、変更されたファイル、エラー、再開方法（IDまたはIDの先頭部分）",
   "cli.opt.today": "今日のAPI換算コストも集計します（今日の記録をすべて読み込みます）",
@@ -26,7 +26,7 @@
   "cli.opt.help": "このヘルプを表示",
   "cli.opt.version": "バージョンを表示",
 
-  "cli.empty": "直近{n}分間にアクティブなClaude CodeまたはCodexのセッションはありません。",
+  "cli.empty": "直近{n}分間にアクティブなClaude Code、Codex、Copilot、Gemini CLI、Qwen Codeのセッションはありません。",
   "cli.empty.here": "直近{n}分間に{dir}からのアクティブなセッションはありません。",
   "cli.today": "今日（{label}）: {usd}",
   "cli.seeDetail": "詳細: --session {id}",
@@ -49,7 +49,7 @@
   "cli.error.noValue": "{flag}は値を取りません。",
   "cli.error.needsValue": "{flag}には値が必要です。",
   "cli.error.badNumber": "{flag}には正の数が必要です（「{value}」を受け取りました）。",
-  "cli.error.badProvider": "不明なprovider「{value}」です。all、claude、codexのいずれかを使用してください。",
+  "cli.error.badProvider": "不明なprovider「{value}」です。all、claude、codex、copilot、gemini、qwenのいずれかを使用してください。",
   "cli.error.seeHelp": "--helpを付けて実行するとオプションが表示されます。",
   "cli.error.source": "{source}の記録を読み込めませんでした: {message}",
   "cli.error.noSession": "「{id}」に一致するセッションがありません。{n}分以上活動がなかった可能性があります。--windowを大きくしてみてください。",

@@ -9,7 +9,7 @@
 ### A panel that works like the Terminal
 
 - **Agent Monitor** opens as a tab in the bottom panel, next to Terminal, and looks like it: one panel with no extra view headers. The agents of the selected chat fill most of it, and a narrow list of chats sits on one side, like the terminal's tab list.
-- **The chat list.** Every open and recent chat, each with a status light. They are grouped into **Open** (Claude Code still has the chat open, or Codex is in the middle of a turn) and **Recent**. Rows are the same height as terminal tabs, and the selected chat is highlighted. To leave room for titles, a row shows only the status light and the title, plus a small mark when a large context is worth dealing with: **◔** consider compacting, **◕** handle soon. Hover over a row for its status, context and the rest.
+- **The chat list.** Every open and recent chat, each with a status light. They are grouped into **Open** (Claude Code still has the chat open; Codex or GitHub Copilot Chat is in the middle of a turn; Qwen Code's process is still running; or, as a guess, Gemini CLI has written to it recently) and **Recent**. Rows are the same height as terminal tabs, and the selected chat is highlighted. To leave room for titles, a row shows only the status light and the title, plus a small mark when a large context is worth dealing with: **◔** consider compacting, **◕** handle soon. Hover over a row for its status, context and the rest.
 - **The list sits where your terminal's tab list is** (right by default, following `terminal.integrated.tabs.location`); set `agentMonitor.sessionListPosition` to put it on the left or right yourself. Drag the divider to resize it, double-click the divider to reset it to 200 px, or drag it almost closed to shrink the list to a strip of status lights. When the panel is narrower than 500 px, the strip is used automatically. The width is remembered.
 - **Hover over a chat** for a **Compact…** button (20K context or more) and a **…** button with the same actions as the right-click menu. You can also use the keyboard: arrow keys, Home and End move through the list, Enter or Space selects, typing jumps to a chat by its first letters, and Shift+F10 opens the actions.
 - **The agents.** Click a chat to see what's running inside it: the main conversation on top, then subagents and background agents, with workflow agents grouped under their workflow.
@@ -32,7 +32,7 @@ The same six lights are used everywhere: in the chat list, the Agents table, the
 
 Lights also differ in shape (filled or outline), so they don't rely on colour alone. Light themes and high-contrast themes get their own shades, and you can change every colour in `workbench.colorCustomizations`.
 
-"Needs you" is exact for Claude Code versions that report their live state (see [What it reads](#what-it-reads)). For older versions and for Codex, the extension has to guess. When a quick tool (reading, writing or editing a file, search, a patch) has had no result for 60 seconds, the chat shows **May be waiting for your approval**. Long commands such as shell commands are never guessed. You can change or turn off the guess with `agentMonitor.approvalGuess`.
+"Needs you" is exact for Claude Code versions that report their live state (see [What it reads](#what-it-reads)) and for GitHub Copilot Chat, though Copilot Chat can show it up to about a minute late. For older Claude Code versions, Codex, Gemini CLI and Qwen Code, the extension has to guess. When a quick tool (reading, writing or editing a file, search, a patch) has had no result for 60 seconds, the chat shows **May be waiting for your approval**. Long commands such as shell commands are never guessed. You can change or turn off the guess with `agentMonitor.approvalGuess`.
 
 ### "Needs you" notifications
 
@@ -40,7 +40,7 @@ Lights also differ in shape (filled or outline), so they don't rely on colour al
 - When no VS Code window has focus, you get a system notification instead (macOS and Linux). On Windows and in remote windows (SSH, WSL, containers), the message appears in the next VS Code window you switch to, if the chat is still waiting.
 - Each wait is reported once, by one window, however many windows are open, and also across editors that have the extension installed (VS Code, VS Code Insiders, Cursor and so on). Chats that were already waiting when the window opened are not reported, nor are chats that only appear because you changed a setting (for example, turning Codex on). Chats outside the window's scope count too.
 - Turn notifications off with `agentMonitor.notifyNeedsYou`. While no VS Code window has focus, the records are read every 5 seconds instead of every 2 (`agentMonitor.backgroundRefreshSeconds`). Before a system notification is sent, the records are read once more, so a prompt you have already answered is not reported. A notification can therefore take a few seconds to arrive.
-- To also get a message on your phone when you don't answer, see [Push to your phone or team chat](#push-to-your-phone-or-team-chat).
+- To also get a message on your phone when you don't answer, see [Push to your phone or team chat](#push-to-your-phone-or-team-chat). To hear a sound, see [Sounds](#sounds); to keep things quiet at night, see [Quiet hours](#quiet-hours).
 
 ### Push to your phone or team chat
 
@@ -49,12 +49,15 @@ Optional, and **off by default**. Once you turn it on, Agent Monitor can send a 
 - **an agent needs you** and is still waiting after `agentMonitor.push.delaySeconds` (30 seconds by default). The desktop notification comes first; if you answer in time, nothing is pushed. If your computer sleeps during the wait, that wait isn't pushed when it wakes up.
 - **an agent stops with an API error** (sent right away).
 - **a Claude Code or Codex usage limit is reached**, and again **when it resets**.
+- **a threshold alert** comes in: usage, today's cost or a chat's context passed a value you set (see [Threshold alerts](#threshold-alerts)). These are the events `usageHigh`, `costDaily` and `contextHigh`.
 
-All four are on by default. Choose them with **Choose events…** in the setup menu, or with `agentMonitor.push.events`.
+All of them are on by default (the cost and context alerts only come once you set their thresholds). Choose them with **Choose events…** in the setup menu, or with `agentMonitor.push.events`. During [quiet hours](#quiet-hours), nothing is pushed, except API errors and usage-limit hits if you let errors through.
 
-**What is sent:** the project folder name and the state, for example "Agent needs you · my-app"; for a usage limit, the product and the reset time. With `agentMonitor.push.includeTitle`, the chat title (and the subagent's name) is added, but only a real title: one you set, or one the agent or app wrote. A title made from your first prompt is never sent. The extension never adds prompts, code, file paths, token counts or costs; a title or subagent name is sent as it is written, so it may name a file.
+**Network access:** push is the only feature that uses the network, so it also needs **Allow network access** (`agentMonitor.network.allow`, off by default). While that is off, nothing is sent at all, not even a test message, and the setup menu shows push as **Paused**. If you add a channel, turn push on or send a test message while it is off, a dialog says what would be sent and where; only its **Allow network access** button turns it on. Turn it off again with **Block Network Access** (the setup menu, the panel's **…** menu or the Command Palette): push stays on, and when you allow the network again, nothing that happened in between is sent. Allowing network access applies to this computer only: Settings Sync doesn't carry it to your other computers.
 
-**Setting it up:** run **Agent Monitor: Push Notifications…** from the Command Palette or the **…** menu of the panel title bar, and choose **Add a push channel**. Pick a service, read the privacy notice (shown once per service), fill in the fields and send a test message. Tokens, keys and webhook URLs go into VS Code's secure storage, never into `settings.json`. When you edit a channel, leave a secret field empty to keep its saved value, or enter `-` to remove an optional one (an ntfy access token, a Feishu or DingTalk signing secret). Secrets are not synced between computers. With Settings Sync, a channel added on another computer shows **Not set up on this computer** until you set it up there too, and removing a channel deletes its secrets only on the computer where you remove it (a copy left on another computer is never used again). Plain `http://` to your own ntfy or Bark server is allowed only for localhost and private network addresses. It isn't encrypted, and on another network (a café, a hotel) the same address can be someone else's device, so use it only with a server on a network you control. The same menu shows whether push is on and how many channels are in use, and lets you send test messages, edit, turn off or remove a channel, turn push on or off, and choose the events.
+**What is sent:** the project folder name and the state, for example "Agent needs you · my-app"; for a usage limit, the product and the reset time; for a threshold alert, what passed the threshold: the usage window and its percentage, that today's cost passed your budget (without any amount), or the chat's context percentage. With `agentMonitor.push.includeTitle`, the chat title (and the subagent's name) is added, but only a real title: one you set, or one the agent or app wrote. A title made from your first prompt is never sent. The extension never adds prompts, code, file paths, token counts or costs; a title or subagent name is sent as it is written, so it may name a file.
+
+**Setting it up:** run **Agent Monitor: Push Notifications…** from the Command Palette or the **…** menu of the panel title bar, and choose **Add a push channel**. Pick a service, read the privacy notice (shown once per service), fill in the fields and send a test message. Tokens, keys and webhook URLs go into VS Code's secure storage, never into `settings.json`. When you edit a channel, leave a secret field empty to keep its saved value, or enter `-` to remove an optional one (an ntfy access token, a Feishu or DingTalk signing secret). Secrets are not synced between computers. With Settings Sync, a channel added on another computer shows **Not set up on this computer** until you set it up there too, and removing a channel deletes its secrets only on the computer where you remove it (a copy left on another computer is never used again). Plain `http://` to your own ntfy or Bark server is allowed only for localhost and private network addresses. It isn't encrypted, and on another network (a café, a hotel) the same address can be someone else's device, so use it only with a server on a network you control. The same menu shows whether push is on, how many channels are in use and whether network access is allowed, and lets you send test messages, edit, turn off or remove a channel, turn push on or off, choose the events, and allow or block network access.
 
 | Service | What you need |
 | --- | --- |
@@ -74,6 +77,47 @@ All four are on by default. Choose them with **Choose events…** in the setup m
 
 **Proxies:** pushes go out through VS Code, so the proxy you set in VS Code (`http.proxy`) applies wherever VS Code passes it on to extensions (`http.fetchAdditionalSupport`, on by default in recent versions). If pushes fail behind a proxy, check those settings.
 
+### Sounds
+
+Optional, and **off by default**. Turn on `agentMonitor.sound.enabled`, and Agent Monitor plays a short sound when:
+
+- **an agent needs you** (`agentMonitor.sound.needsYou`);
+- **an agent stops with an error**, such as an API error or a usage limit (`agentMonitor.sound.error`);
+- **a chat finishes and you haven't looked at it yet**, so its light turns bright green, **Done (new)** (`agentMonitor.sound.done`);
+- **a threshold alert** comes in (`agentMonitor.sound.alert`; see [Threshold alerts](#threshold-alerts)).
+
+Each of these settings takes `default`, `off`, or one of Glass, Ping, Pop, Tink, Submarine, Funk, Hero and Basso. `default` gives each event its own sound: Glass when an agent needs you, Basso for errors, Hero when a chat is done and Funk for threshold alerts. The names are macOS system sounds, played with `afplay`. On Linux, a similar sound from the system's sound theme is played with `canberra-gtk-play` or `paplay`, if one of them is installed; on Windows, a similar sound from the Windows `Media` folder. The "needs you" sound plays together with the ["needs you" notification](#needs-you-notifications), so it also needs `agentMonitor.notifyNeedsYou` on. Neither the "needs you" sound nor the "done" sound plays for the chat you are looking at, and there is no "done" sound when a finish is only a guess, as it usually is for Gemini CLI. Each sound plays in one VS Code window only, and when several things happen at once, you hear one sound: at most one every 3 seconds, across all windows. No sound plays in remote windows (SSH, WSL, containers) or during [quiet hours](#quiet-hours).
+
+### Quiet hours
+
+Optional, and **off by default**. Turn on `agentMonitor.quietHours.enabled` to keep Agent Monitor quiet at set times. During quiet hours:
+
+- no sounds play;
+- there are no system notifications: the message waits for the next VS Code window you switch to instead;
+- nothing is pushed to your phone or team chat, and nothing from quiet hours is sent later.
+
+Messages in a focused VS Code window still appear, and the panel, the lights, the badges and the status bar keep updating as usual. While quiet hours are on, the status bar tooltip says so.
+
+- `agentMonitor.quietHours.start` and `agentMonitor.quietHours.end` are local times in 24-hour `HH:MM` form, 22:00 and 08:00 by default. When the end is earlier than the start, quiet hours run past midnight. If both are the same, quiet hours never start.
+- `agentMonitor.quietHours.days` limits them to certain days: `sun`, `mon`, `tue`, `wed`, `thu`, `fri`, `sat`. Empty (the default) means every day. What counts is the day quiet hours start: with `["fri"]`, Friday 22:00 to Saturday 08:00 is quiet.
+- With `agentMonitor.quietHours.allowErrors`, API errors and usage-limit hits still play the error sound and are still pushed. Limit resets and threshold alerts stay quiet.
+
+### Threshold alerts
+
+Agent Monitor can also tell you when a number passes a value you set. The alert comes like a "needs you" notification (a message in the focused VS Code window, or a system notification when no VS Code window has focus), with the threshold alert sound if sounds are on, and as a push if push is on.
+
+| Setting | Default | Alert when |
+| --- | --- | --- |
+| `agentMonitor.alerts.usagePercent` | `90` | Codex's 5-hour or weekly usage reaches this percentage. Codex only: Claude Code's local logs record when a limit is hit, but not a percentage |
+| `agentMonitor.alerts.dailyCost` | `0` (off) | Today's estimated API-equivalent cost, Claude Code and Codex together, reaches this many US dollars |
+| `agentMonitor.alerts.contextPercent` | `0` (off) | A chat's main conversation reaches this percentage of its auto-compact point (Claude Code and Codex; the other tools have no auto-compact point) |
+
+- Each alert comes once: once per usage window until it resets, once a day for the cost, and once per chat until its next compaction. Set a value to 0 to turn that alert off.
+- What is already over a threshold when the window opens, or when you change the setting, is not reported.
+- Each alert is shown by one window only.
+- Costs are estimates at list prices (see [Usage and cost](#usage-and-cost)), and "today" follows your computer's local time.
+- With push on, they are pushed too (see [Push to your phone or team chat](#push-to-your-phone-or-team-chat)). A daily-cost push says only that today's cost passed your budget, without any amount.
+
 ### An order that doesn't jump
 
 - Chats are sorted by when they started, newest first. Agents are sorted by when they started, oldest first.
@@ -84,7 +128,7 @@ All four are on by default. Choose them with **Choose events…** in the setup m
 
 ![Choosing how to compact a closed Claude Code session, with an estimate for each model](../images/compact.png)
 
-Every chat with at least 20K tokens of context gets a **Compact…** button, both on its row in the chat list (when you hover over it) and in the chat's header above its agents. Nothing runs until you choose.
+Every Claude Code or Codex chat with at least 20K tokens of context gets a **Compact…** button, both on its row in the chat list (when you hover over it) and in the chat's header above its agents. Nothing runs until you choose.
 
 - **The Claude Code chat is open:** the extension switches to that chat and puts `/compact` into its input box, followed by a template that says what the summary must keep (goal, decisions, open problems, file paths, your constraints). The text is also copied to the clipboard. Edit it if you like, then press Enter yourself.
 - **The Claude Code chat is closed:** the extension can compact it in the background with your local Claude Code, and you pick the model:
@@ -143,17 +187,33 @@ Click an agent to see its recent steps, its final result (with a copy button), t
 ### Usage and cost
 
 - **Context:** how much is used out of the auto-compact point (for example, "412K / 967K auto-compact"), the percentage of the model's window ("41% of the 1M window"), and how much is left before auto-compact. The bar fills up as the chat approaches auto-compact.
-- **Percentages and windows come from Claude Code and Codex themselves.** The percentage uses Claude Code's own formula: context tokens (input + cache write + cache read of the latest call) ÷ context window, rounded. The window comes from Claude Code's cost record for the session (which knows whether a model runs with a 1M window), otherwise from the model's standard window; for Codex, from the Codex log.
+- **Percentages and windows come from Claude Code and Codex themselves.** The percentage uses Claude Code's own formula: context tokens (input + cache write + cache read of the latest call) ÷ context window, rounded. The window comes from Claude Code's cost record for the session (which knows whether a model runs with a 1M window), otherwise from the model's standard window; for Codex, from the Codex log. For the other tools, see [Supported tools](#supported-tools).
 - **Where auto-compact happens, and why:** from your settings (this project's local settings, this project's settings, or your user settings), otherwise **measured** (where that model last auto-compacted, remembered by the extension), otherwise the official default. The tooltip says which one applies. If `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is set for Claude Code, it compacts earlier than shown; the extension can't see Claude Code's environment variables.
 - **Context hints:** soft labels ("Consider compacting", "Handle soon") when a large context is worth dealing with at the next good stopping point. They never change the light colour.
 - **Prompt cache:** a countdown for each Claude Code chat's cache ("Cache: 38 min left").
-- **API-equivalent cost:** for each agent, each chat, and a total for today. For a Claude Code chat, the header shows Claude Code's own running total for that chat ("Claude Code's count"); everything else is estimated from token counts at list API prices. Subscription plans are not billed this way, so treat it as a comparison.
+- **API-equivalent cost:** for each agent, each chat, and a total for today (Claude Code and Codex only). For a Claude Code chat, the header shows Claude Code's own running total for that chat ("Claude Code's count"); everything else is estimated from token counts at list API prices. Subscription plans are not billed this way, so treat it as a comparison. GitHub Copilot Chat shows Copilot credits instead of a cost (see [Supported tools](#supported-tools)).
+
+### Usage history
+
+**Agent Monitor: Show Usage History** (in the **…** menu of the panel title bar, or the Command Palette) opens a page with your Claude Code and Codex usage over the last 30 days (GitHub Copilot Chat, Gemini CLI and Qwen Code aren't included):
+
+- the estimated cost or the tokens of each day, as a bar chart with Claude Code and Codex stacked (switch between **Cost** and **Tokens**, or **Show as a table**);
+- totals for the period, the daily average and how many days you used them;
+- a breakdown **By model**: input, output, cache read, cache write, reasoning, all tokens and estimated cost.
+
+How it works:
+
+- It is worked out on your computer from the same records the panel reads (see [What it reads](#what-it-reads)). The records are read in the background, only while the page is open, and the page updates every minute while you look at it.
+- The results are cached in the extension's storage, so the next visit reads only what's new.
+- Costs are API-equivalent estimates at list prices, as everywhere else in the extension. Tokens from models without a public price are left out of the cost, and the page says how many there were.
+- Days follow your computer's local time.
+- Only transcripts still on your computer count. Claude Code deletes old transcripts after its cleanup period (`cleanupPeriodDays`, 30 days by default), so older days can show less than you actually used.
 
 ### Usage limits and resuming
 
 - Shows when a Claude Code chat hits its session, weekly or model limit, and when the limit resets.
 - Shows Codex's 5-hour and weekly usage percentages.
-- When a chat or agent was stopped by a usage limit, an API error or an interruption, **Copy Resume Prompt…** copies a ready-made prompt or terminal command (`claude --resume …`, `codex resume …`). It also estimates what re-reading the context will cost.
+- When a Claude Code or Codex chat or agent was stopped by a usage limit, an API error or an interruption, **Copy Resume Prompt…** copies a ready-made prompt or terminal command (`claude --resume …`, `codex resume …`). It also estimates what re-reading the context will cost.
 
 ### Where your chats are stored, and moving them
 
@@ -169,7 +229,7 @@ That much writing is not a concern for an SSD's lifetime. The real issue is free
 - the free space on each disk;
 - how long Claude Code keeps transcripts (`cleanupPeriodDays`, 30 days unless you change it).
 
-Sizes are counted in the background, only while the page is open and at most once every 10 minutes.
+The page covers only Claude Code and Codex. Sizes are counted in the background, only while the page is open and at most once every 10 minutes.
 
 > **The moving plans are a reference only.** They are generated from the paths on your computer and are not a tested procedure. Check every path and command yourself, back up anything important, and decide for yourself whether to run them. You are responsible for the results, including any data loss. The extension is provided "as is", without warranty of any kind. On the page, you have to tick a confirmation before you can copy the commands or put them in a terminal.
 
@@ -197,17 +257,33 @@ Before you move anything:
 
 **The extension never runs these commands.** **Copy Commands** copies them, and **Open in Terminal** types them into a new terminal without pressing Enter, so you can check them and run them yourself. The extension follows the data wherever it goes: symbolic links are transparent, and `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected. If you don't want a chat saved at all, Claude Code's `--no-session-persistence` flag turns transcripts off (Agent Monitor then can't see that chat).
 
-### Claude Code and Codex
+### Supported tools
 
 - **Claude Code** in the VS Code extension, the terminal or the desktop app, including subagents, background agents and workflows.
 - **Codex** in the VS Code extension, the CLI or the desktop app, including subagent and reviewer threads.
-- Either one can be turned off in the settings.
+- **GitHub Copilot Chat**: VS Code's built-in chat, including agent mode and its subagents.
+- **Gemini CLI** (preview), including subagents.
+- **Qwen Code** (preview), including subagents.
+- Tools that aren't installed are skipped, and each one can be turned off in the settings (see [Settings](#settings)).
+
+> **Gemini CLI and Qwen Code are a preview.** Support for them is built from their published record formats and hasn't been checked against real sessions yet. If a chat looks wrong, please report it in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
+
+Each tool records different things, so the extension can see different things:
+
+| | GitHub Copilot Chat | Gemini CLI (preview) | Qwen Code (preview) |
+| --- | --- | --- | --- |
+| **Open, working, done** | Read from the chat, but up to about a minute late: VS Code saves chats about once a minute | Guessed from when the chat was last written, so a chat that looks done can go back to working. A tool's name appears only after the tool finishes | Whether the chat is open is exact: it comes from the Qwen Code process ID |
+| **Needs you** | Exact, with the same delay | Guessed | Guessed |
+| **Tokens and cost** | Tokens for the whole chat (not per subagent), and Copilot credits instead of a dollar cost | Tokens and estimated cost | Tokens, and a cost estimated at Alibaba Cloud's international list prices. The free OAuth model shows tokens only |
+| **Context** | Window from the model details VS Code saves with the chat. No auto-compact point | The model's standard window. No auto-compact point | Window from Qwen Code's records. No auto-compact point |
+
+Usage history, today's total cost (and its alert) and the [storage page](#where-your-chats-are-stored-and-moving-them) cover only Claude Code and Codex. **Compact…**, handoff notes, the auto-compact threshold and resume prompts are offered only for Claude Code and Codex chats, and background compaction is still Claude Code only.
 
 ### Terminal version
 
 ![The terminal version with the same lights and the same fixed order](../images/terminal.png)
 
-The same monitor also runs in a terminal. It is included in the source repository, not in the extension package, and needs Node.js 18 or later (tested with Node.js 24):
+The same monitor also runs in a terminal. It is included in the source repository, not in the extension package, and needs Node.js 20 or later (tested with Node.js 20, 22 and 24):
 
 ```sh
 git clone https://github.com/cyuneo/cyuneo-agent-monitor.git
@@ -217,7 +293,7 @@ node bin/agent-monitor.js --session 1a2b   # one chat in detail: steps, result, 
 node bin/agent-monitor.js --json           # the data as JSON
 ```
 
-Other options include `--provider claude|codex`, `--window <minutes>`, `--here` (only chats in the current folder), `--today`, `--lang en|zh-cn|zh-tw|ko|ja` and `--no-color`. Run `--help` for the full list.
+Other options include `--provider all|claude|codex|copilot|gemini|qwen` (default `all`), `--window <minutes>`, `--here` (only chats in the current folder), `--today`, `--lang en|zh-cn|zh-tw|ko|ja` and `--no-color`. Run `--help` for the full list.
 
 ## Installation
 
@@ -246,47 +322,63 @@ Everything is read-only, with one exception that you start yourself: when you se
 | `~/.codex/sessions/**/rollout-*.jsonl` | Codex threads, including subagent and reviewer threads and usage limits |
 | `~/.codex/session_index.jsonl` | Codex thread titles |
 | `~/.codex/models_cache.json`, `~/.codex/config.toml` | Codex context window and auto-compact limit |
+| `<User>/workspaceStorage/<workspace>/chatSessions/<session>.jsonl` (or `.json`) | GitHub Copilot Chat chats in windows with a folder or workspace open. `<User>` is the User folder of the VS Code you are using, for example `~/Library/Application Support/Code/User` on macOS, `~/.config/Code/User` on Linux or `%APPDATA%\Code\User` on Windows |
+| `<User>/globalStorage/emptyWindowChatSessions/<session>.jsonl`, and the same under `<User>/profiles/<profile>/` | Copilot Chat chats in windows with no folder open, including other profiles |
+| `<User>/workspaceStorage/<workspace>/workspace.json` | Which folder a Copilot Chat chat belongs to |
+| `~/.gemini/tmp/<project>/chats/session-*.jsonl` (or `.json`) and `~/.gemini/tmp/<project>/chats/<session>/…` | Gemini CLI chats and their subagents. When Gemini CLI runs in the macOS sandbox, the same files under `~/.cache/.gemini`, which is read too unless `agentMonitor.gemini.home` is set |
+| `~/.gemini/tmp/<project>/.project_root`, `~/.gemini/projects.json` | Which folder a Gemini CLI chat belongs to |
+| `~/.qwen/projects/<project>/chats/<session>.jsonl` | Qwen Code chats, including subagents |
+| `~/.qwen/projects/<project>/chats/<session>.runtime.json` | The Qwen Code process ID, to tell whether the chat is still open. The extension only checks whether that process is still running |
 
-`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected. You can also point the extension somewhere else with `agentMonitor.claude.projectsDir` and `agentMonitor.codex.home`.
+The paths above are the defaults. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected; `GEMINI_CLI_HOME` puts the Gemini CLI folders under `$GEMINI_CLI_HOME` instead of `~`; and for Qwen Code, `QWEN_RUNTIME_DIR`, else `QWEN_HOME`, is used instead of `~/.qwen`. You can also point the extension somewhere else with `agentMonitor.claude.projectsDir`, `agentMonitor.codex.home`, `agentMonitor.gemini.home` and `agentMonitor.qwen.home`.
+
+The extension only reads the GitHub Copilot Chat, Gemini CLI and Qwen Code files, and never writes to them or to those tools' folders. Nothing from them is sent anywhere, apart from the short messages described in [Push to your phone or team chat](#push-to-your-phone-or-team-chat) if you turn push on.
 
 The extension keeps a few small things in VS Code's own storage: which chats you have already looked at, which reminders you turned off, where each model was measured to auto-compact, and backups of any settings file it changed. It writes to the clipboard only when you click a copy or compact action.
 
 While `agentMonitor.shareScanAcrossWindows` is on (the default), the windows also share a folder in the extension's global storage (`shared-scan`), even when only one window is open. It says which window reads the records, and that window saves its latest results for the others in `shared-scan/snapshot.json`: chat titles, project folders, steps and costs. The file is overwritten whenever the results change and deleted when that window closes normally. For notifications, a small marker per wait (a hash, no chat text) goes into a private folder in your system's temporary directory, so that only one window, in any editor, shows it. Markers are removed after a day. With push on, the send times of each push channel (no message text) are kept in the same folder (`push-sent.json`), so the limits hold across windows.
 
+The [usage history](#usage-history) page keeps a cache in the extension's storage: for each transcript it has read, the file's path, size and how far it was read, plus token counts per day and model and the message IDs it uses to avoid counting a response twice. No chat text is stored. The cache changes only while the page is open.
+
 ## Privacy
 
-- **The extension makes no network requests unless you turn on push or send a test message yourself.** It has no telemetry, no analytics and no remote content.
+- **The extension makes no network requests unless you turn on Allow network access** (`agentMonitor.network.allow`, off by default). While it is off, every request is refused in the code, push notifications and test messages included. Today only push notifications use it. There is no telemetry, no analytics and no remote content.
 - **Push notifications are optional and off by default.** When you turn them on, only a short message goes to the services you set up: the project folder name and the state, plus the chat title and subagent names if you allow them. Nothing else leaves your computer. As with any web request, the service sees that message and your IP address. Tokens and webhook URLs are kept in VS Code's secure storage and are masked in every error that is shown or logged.
 - **Compacting a closed chat in the background goes through Claude Code**, and only after you confirm. The extension then runs your local Claude Code (`claude -p --resume <session> --model <model> --output-format json "/compact …"`). Claude Code connects to Anthropic just as it does when you use it yourself, and the usage counts toward your plan or API bill.
 - **Compacting an open chat, or setting its auto-compact threshold, only puts text into its input box** (`/compact …` or `/autocompact …`). Nothing is sent until you press Enter. (For a closed chat, or for one project only, the threshold is written to a settings file instead; see [What it reads](#what-it-reads).)
 - **Moving your data is up to you.** The storage page only generates commands; the extension never runs them, and **Open in Terminal** doesn't press Enter.
 - **The reference guide link** opens a page on GitHub in your browser, only when you click it.
 - **Desktop notifications stay on your computer.** They are shown by VS Code, or by your system's own notification command (`osascript` on macOS, `notify-send` on Linux), and contain the chat's title and project folder name. Nothing is sent over the network.
+- **Sounds are played on your computer** by the system's own player (`afplay` on macOS, `canberra-gtk-play` or `paplay` on Linux, PowerShell on Windows). Nothing is sent over the network.
+- **The usage history is worked out on your computer** and cached in the extension's storage. Nothing is sent anywhere.
 - **Your conversations stay local.** Chat titles, steps and results are shown only inside your own VS Code (and, for notifications, in your own system's notification area).
 - **The numbers are for you, not the model.** Context size, cache countdown and cost are never passed to the model.
 
 ## Commands
 
-All commands are in the **Agent Monitor** category of the Command Palette. Commands that act on one chat work from its row; when run from the Command Palette, they ask which chat (the selected one is listed first).
+All commands are in the **Agent Monitor** category, and the table shows where you find each one. Commands that act on one chat work from its row; when run from the Command Palette, they ask which chat (the selected one is listed first).
 
 | Command | Where | What it does |
 | --- | --- | --- |
 | **Show Agent Monitor** | Status bar light, Command Palette | Opens the Agent Monitor panel |
 | **Show Overview in Side Bar** | Command Palette | Opens the Overview tree in the side bar |
-| **Refresh** | Panel title bar, Overview title bar | Re-reads the records now |
-| **Open Settings** | **…** menu of the panel title bar, Overview title bar | Opens Agent Monitor's settings |
+| **Refresh** | Panel title bar, Overview title bar, Command Palette | Re-reads the records now |
+| **Open Settings** | **…** menu of the panel title bar, Overview title bar, Command Palette | Opens Agent Monitor's settings |
 | **Show All Sessions** / **Show Only This Workspace's Sessions** | Panel title bar, Overview title bar, Command Palette | Switches the scope |
-| **Mark as Seen** / **Mark All as Seen** | Chat right-click or **…** / Panel title bar | Turns "Done (new)" into "Done" |
-| **Hide Completed Agents** / **Show Completed Agents** | Panel title bar, Overview title bar | Hides or shows finished agents |
+| **Mark as Seen** / **Mark All as Seen** | Chat right-click or **…** / Panel title bar, Command Palette | Turns "Done (new)" into "Done" |
+| **Hide Completed Agents** / **Show Completed Agents** | Panel title bar, Overview title bar, Command Palette | Hides or shows finished agents |
 | **Open Transcript** | Chat and agent right-click | Opens the raw record |
 | **Reveal Transcript File** | Chat right-click or **…**, Transcript line in the chat's Details | Shows the transcript in Finder or File Explorer |
 | **Copy Transcript Path** | Chat right-click or **…**, Transcript line in the chat's Details | Copies the transcript's full path |
-| **Copy Resume Prompt…** | Chat right-click or **…**, when there is something to resume | Copies a resume prompt or terminal command |
-| **Compact…** | Chat row, right-click or **…** (20K context or more), the chat's header, Command Palette | Compacts the chat; see [Compact button](#compact-button-with-a-choice-of-model-and-a-cost-estimate) |
-| **Write Handoff Note and Start Fresh…** | Chat right-click, Compact menu, Command Palette | Asks the model to write `HANDOFF.md`, then guides you to `/clear` and continue |
-| **Set Auto-Compact Threshold…** | "Auto-compact" in the chat's Details, chat right-click or **…**, Command Palette | See [Set your own auto-compact threshold](#set-your-own-auto-compact-threshold) |
+| **Copy Resume Prompt…** | Chat right-click or **…**, when a Claude Code or Codex chat has something to resume | Copies a resume prompt or terminal command |
+| **Compact…** | Chat row, right-click or **…** (Claude Code and Codex chats with 20K context or more), the chat's header, Command Palette | Compacts the chat; see [Compact button](#compact-button-with-a-choice-of-model-and-a-cost-estimate) |
+| **Write Handoff Note and Start Fresh…** | Chat right-click or **…** (Claude Code and Codex chats), Compact menu, Command Palette | Asks the model to write `HANDOFF.md`, then guides you to `/clear` and continue |
+| **Set Auto-Compact Threshold…** | "Auto-compact" in the chat's Details, chat right-click or **…** (Claude Code and Codex chats), Command Palette | See [Set your own auto-compact threshold](#set-your-own-auto-compact-threshold) |
 | **Storage Locations and Usage** | **…** menu of the panel title bar, Command Palette | See [Where your chats are stored](#where-your-chats-are-stored-and-moving-them) |
 | **Push Notifications…** | **…** menu of the panel title bar, Command Palette | See [Push to your phone or team chat](#push-to-your-phone-or-team-chat) |
+| **Allow Network Access** / **Block Network Access** | **…** menu of the panel title bar, Command Palette | Turns network access on or off; see [Privacy](#privacy) |
+| **Toggle Network Access** | Only through a keyboard shortcut you assign in Keyboard Shortcuts | Turns network access on when it is off, and off when it is on |
+| **Show Usage History** | **…** menu of the panel title bar, Command Palette | See [Usage history](#usage-history) |
 
 ## Settings
 
@@ -312,6 +404,11 @@ All commands are in the **Agent Monitor** category of the Command Palette. Comma
 | `agentMonitor.claude.cliPath` | `""` | Claude Code command line, used only for background compaction (empty: look for `claude` on PATH, then in the Claude Code extension) |
 | `agentMonitor.codex.enabled` | `true` | Read Codex records |
 | `agentMonitor.codex.home` | `""` | Codex folder (empty: `$CODEX_HOME` or `~/.codex`) |
+| `agentMonitor.copilot.enabled` | `true` | Read GitHub Copilot Chat sessions (VS Code's built-in chat) |
+| `agentMonitor.gemini.enabled` | `true` | Read Gemini CLI records (preview) |
+| `agentMonitor.gemini.home` | `""` | Gemini CLI folder (empty: `$GEMINI_CLI_HOME/.gemini` or `~/.gemini`, plus the macOS sandbox folder `$GEMINI_CLI_HOME/.cache/.gemini` or `~/.cache/.gemini`) |
+| `agentMonitor.qwen.enabled` | `true` | Read Qwen Code records (preview) |
+| `agentMonitor.qwen.home` | `""` | Qwen Code folder (empty: `$QWEN_RUNTIME_DIR`, else `$QWEN_HOME`, else `~/.qwen`) |
 | `agentMonitor.compactConfirm` | `true` | Ask before compacting a closed chat in the background |
 | `agentMonitor.compactTemplate` | `""` | Text after `/compact` that says what to keep (empty: built-in template in your display language) |
 | `agentMonitor.contextHintStart` | `200000` | For models with a window of 500K tokens or more: from this many tokens on, suggest compacting at the next good stopping point |
@@ -322,14 +419,28 @@ All commands are in the **Agent Monitor** category of the Command Palette. Comma
 | `agentMonitor.cacheReminderShortTtl` | `false` | Also remind about chats that use the 5-minute cache |
 | `agentMonitor.closeReminder` | `true` | When you close a large chat while its cache is warm, offer to compact it or write a handoff note |
 | `agentMonitor.postCompactHint` | `true` | After a chat is compacted, remind you to check that its key rules are still there |
+| `agentMonitor.sound.enabled` | `false` | Play sounds; see [Sounds](#sounds) |
+| `agentMonitor.sound.needsYou` | `default` | Sound when an agent needs you: `default`, `off`, or `Glass`, `Ping`, `Pop`, `Tink`, `Submarine`, `Funk`, `Hero`, `Basso` |
+| `agentMonitor.sound.error` | `default` | Sound when an agent stops with an error or a usage limit (same choices) |
+| `agentMonitor.sound.done` | `default` | Sound when a chat finishes and you haven't looked at it yet (same choices) |
+| `agentMonitor.sound.alert` | `default` | Sound for threshold alerts (same choices) |
+| `agentMonitor.quietHours.enabled` | `false` | Quiet hours: no sounds, system notifications or push; see [Quiet hours](#quiet-hours) |
+| `agentMonitor.quietHours.start` | `"22:00"` | When quiet hours start (local time, 24-hour `HH:MM`) |
+| `agentMonitor.quietHours.end` | `"08:00"` | When quiet hours end; earlier than the start means the next day |
+| `agentMonitor.quietHours.days` | `[]` | The days quiet hours start on: `sun` … `sat`; empty means every day |
+| `agentMonitor.quietHours.allowErrors` | `false` | During quiet hours, still play the error sound for API errors and usage-limit hits, and push them |
+| `agentMonitor.alerts.usagePercent` | `90` | Alert when Codex's 5-hour or weekly usage reaches this percentage (0: off); see [Threshold alerts](#threshold-alerts) |
+| `agentMonitor.alerts.dailyCost` | `0` | Alert when today's estimated cost reaches this many US dollars (0: off) |
+| `agentMonitor.alerts.contextPercent` | `0` | Alert when a chat's main conversation reaches this percentage of its auto-compact point (0: off) |
+| `agentMonitor.network.allow` | `false` | Allow network requests. Off, the extension makes none at all; today only push notifications use it. Applies to this computer only (not synced by Settings Sync) |
 | `agentMonitor.push.enabled` | `false` | Push to your phone or team chat; see [Push to your phone or team chat](#push-to-your-phone-or-team-chat) |
-| `agentMonitor.push.events` | all on | Which events are pushed: `needsYou`, `error`, `limitHit`, `limitReset` |
+| `agentMonitor.push.events` | all on | Which events are pushed: `needsYou`, `error`, `limitHit`, `limitReset`, `usageHigh`, `costDaily`, `contextHigh` |
 | `agentMonitor.push.delaySeconds` | `30` | How many seconds a chat must keep waiting for you before it is pushed (0–600) |
 | `agentMonitor.push.includeTitle` | `false` | Also send the chat title and subagent name (never a title made from your prompt) |
 | `agentMonitor.push.channels` | `[]` | The push channels without their secrets; change them with **Push Notifications…** |
 | `agentMonitor.onlyWorkspace` | `false` | Deprecated: replaced by `agentMonitor.scope` and migrated automatically |
 
-The push settings are read only from your user settings, so a workspace can't turn push on or change where it goes.
+The push settings and `agentMonitor.network.allow` are read only from your user settings, so a workspace can't turn push or network access on, or change where pushes go.
 
 ## Context and compaction tips
 
@@ -345,16 +456,22 @@ These tips come from a review of published research and the official documentati
 
 ## Known limitations
 
-- **Record formats can change.** Claude Code and Codex record formats are internal and can change with any update. Lines the extension can't read are skipped.
+- **Record formats can change.** The record formats of all five tools are internal and can change with any update. Lines the extension can't read are skipped.
+- **Gemini CLI and Qwen Code support is a preview.** It is built from their published record formats and hasn't been checked against real sessions yet. If a chat looks wrong, please tell us in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
 - **Steps can lag.** Records are written after each model call, so during a long stretch of thinking the step shown is the last one written.
-- **"Needs you" is exact only when the app reports its state.** That means Claude Code versions that report live state in `~/.claude/sessions`. Older Claude Code versions and Codex rely on the guess described above, and Codex writes very little about approvals and errors to disk.
-- **Costs are estimates.** They use list prices as of the date shown in the tooltip, so prices can change. Some models, such as Codex's review model, have no public price.
-- **Claude Code usage percentages aren't shown.** Claude Code doesn't save them to local files, so for Claude the extension only shows limit hits and reset times.
+- **"Needs you" is exact only when the app reports its state.** That means Claude Code versions that report live state in `~/.claude/sessions`, and GitHub Copilot Chat. Older Claude Code versions, Codex, Gemini CLI and Qwen Code rely on the guess described above, and Codex writes very little about approvals and errors to disk. Gemini CLI keeps no list of running sessions either, so whether its chats are working or done is a guess too.
+- **GitHub Copilot Chat can be up to about a minute behind.** VS Code saves chats to disk about once a minute, so a new step, a finished answer or a prompt waiting for you can show up to a minute late.
+- **Costs are estimates.** They use list prices as of the date shown in the tooltip, so prices can change. Some models, such as Codex's review model, have no public price. GitHub Copilot Chat shows Copilot credits, not a cost. Qwen Code costs use Alibaba Cloud's international list prices (other regions charge differently); cache hits are priced at the explicit-cache rate, because the records don't say which kind of cache was used; and the free OAuth model has no price, so only its tokens are shown.
+- **Some features cover only Claude Code and Codex.** Usage history, today's total cost (and the daily cost alert) and the storage page don't include GitHub Copilot Chat, Gemini CLI or Qwen Code, and none of these three has an auto-compact point. **Compact…**, handoff notes, the auto-compact threshold and resume prompts are only for Claude Code and Codex chats.
+- **Claude Code usage percentages aren't shown.** Claude Code doesn't save them to local files, so for Claude the extension only shows limit hits and reset times, and the usage alert is Codex only.
 - **Tab following has gaps.** It uses the tab title for Claude Code and the conversation ID for Codex. Chats shown in a side bar view (rather than an editor tab) can't be detected.
 - **Background compaction with a chosen model is Claude Code only.** Codex compacts inside Codex. A chat can't be compacted in the background while it is open.
 - **Claude Code's environment variables are invisible to the extension.** `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` can make Claude Code compact at a different point than the one shown. A measured point appears only after a model has auto-compacted once.
 - **Windows share one reading of the records.** With several VS Code windows open, one of them reads the records and the others show its results, usually only a moment later. When that window closes, another one takes over right away; if it stops responding, within about 10 seconds (longer while no VS Code window has focus, since the windows then check on each other only every `agentMonitor.backgroundRefreshSeconds`). Windows with different reading settings (folders, activity window, guesses) or a different extension version read on their own, and so does every window when the shared folder can't be written (for example, when the disk is full). You can turn sharing off with `agentMonitor.shareScanAcrossWindows`.
 - **System notifications are basic.** On macOS they are shown with AppleScript, so they appear under **Script Editor**, and that is where you allow or silence them in System Settings > Notifications. Clicking one opens Script Editor, not VS Code: switch to VS Code yourself, where the waiting chat has a magenta light. On Windows and in remote windows there is no system notification for now; the message appears in the next VS Code window you switch to instead. On Linux, a VS Code message is shown when `notify-send` isn't installed.
+- **You can't approve or answer from a notification.** Agent Monitor only reads the records. Answering from a notification would need hooks into Claude Code or Codex, or remote control of them. Switch to the chat to answer it.
+- **A notification can't bring a particular VS Code window to the front.** VS Code has no API for that. The **Show** button selects the chat in the window where the message appears; with several windows open, switch to the right one yourself.
+- **Sounds have only been tried on macOS.** On Linux they are played with `canberra-gtk-play` or `paplay`, and on Windows with PowerShell, from the Windows `Media` folder; neither has been tried yet.
 - **The Windows move commands haven't been tested on Windows yet.** The `robocopy` and `mklink /J` commands on the Storage Locations page were checked only as text. Read them before running them, and keep the `.bak` folder until everything works.
 - **The terminal version doesn't push.** Push notifications come only from the VS Code extension.
 - **DingTalk signing hasn't been tried with a real robot.** The signature follows DingTalk's documentation and is checked only against it. If a robot that uses signing rejects the messages, use a custom keyword as its security setting instead, and please tell us in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).

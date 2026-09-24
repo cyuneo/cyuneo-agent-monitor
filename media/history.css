@@ -1,0 +1,355 @@
+/* "Usage history" page: a webview in the editor area. Same legibility rules as storage.css / agents.css: font size never
+   below --vscode-font-size, no opacity to dim text, codicon icons, outlines in high-contrast themes, reflowed layout at
+   narrow widths with no horizontal scrolling. Only theme variables, so all three theme kinds stay readable.
+   Series colors: Claude Code = charts orange, Codex = charts blue (a pair that stays apart for common color-vision
+   deficiencies); in high-contrast themes Codex also gets a 45° hatch and every mark an outline, so color is never the only cue. */
+
+:root {
+  --row-h: 22px;
+  --plot-h: 180px;
+  --line: var(--vscode-tree-tableColumnsBorder, var(--vscode-panel-border, rgba(128, 128, 128, .35)));
+  --grid: var(--vscode-editorWidget-border, var(--line));
+  --c-icon: var(--vscode-icon-foreground, var(--vscode-foreground));
+  --c-err-text: var(--vscode-list-errorForeground, var(--vscode-errorForeground));
+  --c-warn: var(--vscode-list-warningForeground, var(--vscode-editorWarning-foreground, #cca700));
+  --c-info: var(--vscode-editorInfo-foreground, var(--vscode-charts-blue, #3794ff));
+  --c-claude: var(--vscode-charts-orange, #d18616);
+  --c-codex: var(--vscode-charts-blue, #3794ff);
+  --surface: var(--vscode-editor-background, transparent);
+  --hc-border: var(--vscode-contrastBorder, transparent);
+  --mono: var(--vscode-editor-font-family, monospace);
+}
+
+body {
+  margin: 0;
+  padding: 0 20px 24px;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  font-weight: var(--vscode-font-weight, normal);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  overflow-x: hidden;
+}
+.page { max-width: 1040px; }
+.muted { color: var(--vscode-descriptionForeground); }
+[hidden] { display: none !important; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.codicon { vertical-align: middle; color: var(--c-icon); }
+p { margin: 4px 0; }
+
+h1 { margin: 0; font-size: calc(var(--vscode-font-size) * 1.6); font-weight: 600; line-height: 1.3; }
+h2 { margin: 0; font-size: calc(var(--vscode-font-size) * 1.2); font-weight: 600; }
+
+/* ---------- Header ---------- */
+
+.p-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 4px;
+  padding: 16px 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.p-head .spacer { flex: 1 1 0; }
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-height: 26px;
+  margin: 0;
+  padding: 2px 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--vscode-button-border, var(--hc-border));
+  border-radius: 2px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font: inherit;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.btn.secondary {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border-color: var(--vscode-button-border, var(--vscode-widget-border, var(--line)));
+}
+.btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground)); }
+.btn .codicon { color: inherit; }
+
+/* Cost / tokens toggle: a two-button group, the pressed one filled */
+.toggle { display: inline-flex; flex: none; border: 1px solid var(--vscode-button-border, var(--vscode-widget-border, var(--line))); border-radius: 2px; }
+.tg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 1px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.tg + .tg { border-left: 1px solid var(--vscode-button-border, var(--vscode-widget-border, var(--line))); }
+.tg:hover { background: var(--vscode-toolbar-hoverBackground); }
+.tg .codicon { color: inherit; }
+.tg[aria-pressed="true"] {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-weight: 600;
+}
+
+.btn:focus-visible, .tg:focus-visible, summary:focus-visible, .col:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+/* ---------- Notices ---------- */
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  column-gap: 8px;
+  margin: 10px 0 6px;
+  padding: 4px 8px;
+  border-left: 3px solid var(--c-info);
+  border-top: 1px solid var(--hc-border);
+  border-right: 1px solid var(--hc-border);
+  border-bottom: 1px solid var(--hc-border);
+  background: var(--vscode-textBlockQuote-background, transparent);
+  min-width: 0;
+}
+.banner > .codicon { flex: none; height: 1.5em; line-height: 1.5em; color: var(--c-info); }
+.b-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.banner.b-warning { border-left-color: var(--c-warn); }
+.banner.b-warning > .codicon { color: var(--c-warn); }
+.banner.b-error { border-left-color: var(--c-err-text); }
+.banner.b-error > .codicon { color: var(--c-err-text); }
+
+/* Progress while the first scan runs */
+.progress { margin: 12px 0 4px; }
+.p-text { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; margin: 0 0 4px; }
+.pbar {
+  position: relative;
+  height: 6px;
+  max-width: 480px;
+  box-sizing: border-box;
+  /* Empty track drawn as a border in the secondary text color (>= 3:1 against the background) */
+  border: 1px solid var(--vscode-descriptionForeground);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.pbar-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--vscode-progressBar-background, #0078d4); }
+
+.empty { margin: 28px 0 12px; text-align: center; }
+.empty > .codicon { font-size: 32px; }
+.e-title { font-weight: 600; margin-top: 8px; }
+
+/* ---------- Totals ---------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11em, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+}
+.tile {
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-widget-border, var(--line));
+  border-radius: 3px;
+}
+.tile dt { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); }
+.tile dd { margin: 0; overflow-wrap: anywhere; }
+.tile .v { font-size: calc(var(--vscode-font-size) * 1.45); font-weight: 600; line-height: 1.35; }
+
+/* Series swatch: legend, tiles, tables, tooltip */
+.sw {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.sw-claude { background: var(--c-claude); }
+.sw-codex { background: var(--c-codex); }
+
+/* ---------- Sections ---------- */
+
+.sec { margin-top: 22px; min-width: 0; }
+.sec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 6px;
+  margin-bottom: 8px;
+}
+.sec-head h2 { flex: 1 1 auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- Chart: y labels | plot, x labels under the plot ---------- */
+
+.chart {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: var(--plot-h) auto;
+  column-gap: 8px;
+  min-width: 0;
+}
+.y-axis { grid-column: 1; grid-row: 1; position: relative; min-width: 3em; }
+.y-axis span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  line-height: 1;
+}
+.plot { grid-column: 2; grid-row: 1; position: relative; min-width: 0; }
+/* Gridlines: hairline, solid, recessive; the baseline a step stronger */
+.gl { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--grid); }
+.gl.base { border-top-color: var(--vscode-descriptionForeground); }
+.cols {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--n, 30), minmax(0, 1fr));
+}
+.col {
+  position: relative;
+  display: flex;
+  flex-direction: column-reverse; /* first segment (Claude Code) sits on the baseline */
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  border-radius: 2px;
+}
+.col:hover, .col:focus-visible { background: var(--vscode-list-hoverBackground); }
+.seg { display: block; flex: none; width: min(24px, 70%); min-height: 1px; }
+.seg + .seg { margin-bottom: 2px; } /* 2px gap between stacked segments */
+.seg:last-child { border-radius: 3px 3px 0 0; } /* rounded data end, square at the baseline */
+.seg-claude { background: var(--c-claude); }
+.seg-codex { background: var(--c-codex); }
+.x-axis {
+  grid-column: 2;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(var(--n, 30), minmax(0, 1fr));
+  padding-top: 2px;
+  color: var(--vscode-descriptionForeground);
+}
+.x-axis span { min-width: 0; text-align: center; white-space: nowrap; overflow: visible; display: flex; justify-content: center; }
+.x-axis span.last { justify-content: flex-end; }
+.x-axis span.today { color: var(--vscode-foreground); font-weight: 600; }
+
+.tip {
+  position: absolute;
+  z-index: 2;
+  min-width: 10em;
+  padding: 4px 8px;
+  pointer-events: none;
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-widget-border, var(--line)));
+  border-radius: 3px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+  white-space: nowrap;
+}
+.tip-date { font-weight: 600; }
+.tip-row { display: grid; grid-template-columns: 10px auto minmax(4em, 1fr); align-items: center; column-gap: 6px; }
+.tip-row .num { text-align: right; }
+.tip-total { border-top: 1px solid var(--line); margin-top: 2px; font-weight: 600; }
+
+/* ---------- Tables ---------- */
+
+.num { text-align: right; white-space: nowrap; }
+.dtable-wrap { margin-top: 10px; }
+.dtable-wrap > summary { cursor: pointer; color: var(--vscode-textLink-foreground); width: max-content; max-width: 100%; }
+table { border-collapse: collapse; }
+.dtable { margin-top: 6px; min-width: min(100%, 26em); }
+.dtable th, .dtable td, .mtable th, .mtable td {
+  padding: 1px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.dtable thead th, .mtable thead th { font-weight: 600; color: var(--vscode-descriptionForeground); text-align: right; white-space: nowrap; }
+.dtable thead th:first-child, .mtable thead th:first-child { text-align: left; }
+.dtable tbody th { font-weight: normal; text-align: left; white-space: nowrap; }
+.dtable thead .sw, .mtable .prov .sw { margin-right: 6px; }
+.mtable { width: 100%; margin-top: 6px; }
+.mtable tbody tr:hover { background: var(--vscode-list-hoverBackground); }
+.mtable .c-model { text-align: left; font-weight: normal; min-width: 0; overflow-wrap: anywhere; }
+.mtable .mname { display: block; font-family: var(--mono); font-size: max(var(--vscode-font-size), var(--vscode-editor-font-size, 0px)); }
+.mtable .prov { display: flex; align-items: center; }
+.mtable tfoot th, .mtable tfoot td { font-weight: 600; border-bottom: 0; border-top: 1px solid var(--vscode-descriptionForeground); }
+
+.notes ul { margin: 4px 0 0; padding-left: 1.2em; }
+.notes li { margin: 3px 0; }
+.foot { margin-top: 20px; }
+
+/* ---------- High contrast: outlines on marks, hatch on Codex so color is not the only cue ---------- */
+
+body.vscode-high-contrast .seg, body.vscode-high-contrast-light .seg,
+body.vscode-high-contrast .sw, body.vscode-high-contrast-light .sw {
+  outline: 1px solid var(--vscode-contrastBorder, currentColor);
+  outline-offset: -1px;
+}
+body.vscode-high-contrast .seg-codex, body.vscode-high-contrast-light .seg-codex,
+body.vscode-high-contrast .sw-codex, body.vscode-high-contrast-light .sw-codex {
+  background-image: repeating-linear-gradient(45deg, transparent 0 3px, var(--surface) 3px 5px);
+}
+body.vscode-high-contrast .tile, body.vscode-high-contrast-light .tile { border-color: var(--vscode-contrastBorder, var(--line)); }
+/* High-contrast buttons share the page background: mark the pressed toggle with an inner outline too */
+body.vscode-high-contrast .tg[aria-pressed="true"], body.vscode-high-contrast-light .tg[aria-pressed="true"] {
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: -3px;
+}
+@media (forced-colors: active) {
+  .seg, .sw { forced-color-adjust: none; outline: 1px solid CanvasText; }
+  .seg-claude, .sw-claude { background: CanvasText; }
+  .seg-codex, .sw-codex { background: repeating-linear-gradient(45deg, CanvasText 0 2px, Canvas 2px 5px); }
+}
+
+/* ---------- Narrow widths ---------- */
+
+@media (max-width: 640px) {
+  body { padding: 0 12px 20px; }
+  :root { --plot-h: 150px; }
+  .sec-head h2 { flex-basis: 100%; }
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); }
+  .seg { width: 80%; }
+  .dtable { width: 100%; }
+  .dtable th, .dtable td { padding: 1px 4px; }
+  .dtable thead th, .dtable tbody th { white-space: normal; overflow-wrap: anywhere; }
+  /* Model table becomes one card per model: the column name goes in front of each value (roles keep the table semantics) */
+  .mtable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); }
+  .mtable, .mtable tbody, .mtable tfoot, .mtable tr { display: block; width: 100%; }
+  .mtable tr { padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .mtable tfoot tr { border-top: 1px solid var(--vscode-descriptionForeground); border-bottom: 0; }
+  .mtable th, .mtable td { display: flex; justify-content: space-between; column-gap: 12px; padding: 0 4px; border: 0; }
+  .mtable th.c-model { display: block; margin-bottom: 2px; }
+  .mtable td::before { content: attr(data-label); color: var(--vscode-descriptionForeground); font-weight: normal; }
+  .mtable tfoot th, .mtable tfoot td { border-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

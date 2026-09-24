@@ -473,6 +473,9 @@ body.short .c-cost, body.short .c-time { display: none; }
 .sub { flex: none; margin-left: .5em; color: var(--vscode-descriptionForeground); }
 .k-workflow .name, .k-main .name { font-weight: 600; }
 .c-status .st { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Guessed status (a "may be waiting" approval guess, or running / done inferred from write timing): italic, the same cue in the
+   session bar and the table; the wording (and the hover note) says why. No color or opacity change, so contrast stays the same */
+#s-status.guess, .row.guess .st { font-style: italic; }
 
 .twisty {
   flex: none;

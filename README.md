@@ -2,11 +2,11 @@
 
 **English** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [한국어](README.ko.md) · [日本語](README.ja.md)
 
-See all your Claude Code and Codex chats in one place, next to your terminal: which agents are working, which ones need you, and how full each context is.
+See all your AI coding chats in one place, next to your terminal: which agents are working, which ones need you, and how full each context is. Works with Claude Code, Codex and GitHub Copilot Chat, and, as a preview, Gemini CLI and Qwen Code.
 
 [**Install in VS Code**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [View on the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
-> **Preview (0.4.0).** Please report anything that looks wrong in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
+> **Preview (0.5.0).** Please report anything that looks wrong in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
 
 ![Animated demo of Agent Monitor in the VS Code panel, with made-up sample data: in a Claude Code chat, the main agent and two subagents step through reading files, searching, editing and running tests while tokens, cost and context percent climb. One subagent's light turns magenta while it waits for approval to run the tests, and the chat's light in the list and the panel badge change with it. It then carries on and every agent finishes with a green light. Last, a Codex chat is picked from the list and its steps show instead](images/demo.gif)
 
@@ -23,12 +23,22 @@ Claude Code and Codex now run several agents at once: subagents, background agen
 
 - **Every chat at a glance.** A panel next to the terminal lists every open and recent chat with a status light. Click one to see its agents, the step each one is on, and its tokens and cost.
 - **Know when you're needed.** A chat waiting for your approval or answer gets a magenta light. Finished and failed chats have their own colors, in the status bar too.
-- **Get notified, even away from your desk.** When a chat starts waiting for you, VS Code or your system tells you. If you like, a short message can also go to your phone or team chat (ntfy, Bark, ServerChan, Feishu, DingTalk, WeCom, Telegram, Discord or Slack), for errors and usage limits too.
+- **Get notified, even away from your desk.** When a chat starts waiting for you, VS Code or your system tells you, with a sound if you like. A short message can also go to your phone or team chat (ntfy, Bark, ServerChan, Feishu, DingTalk, WeCom, Telegram, Discord or Slack), for errors and usage limits too. Set quiet hours, and it all stays silent at night.
+- **Hear about it before you run out.** Get an alert when Codex usage reaches 90% and, if you turn them on, when today's estimated cost passes your budget or a chat's context gets close to auto-compact.
 - **Keep context under control.** See how full each chat is, compact it from the panel (with a cheaper model if you like, after seeing a cost estimate), choose when auto-compact happens, and get a reminder before the cache expires.
 - **Carry on after a usage limit.** See when the limit resets, and copy a ready-made prompt or command to resume.
-- **Know where your chats are stored.** See how much space they take, with reference commands for moving them to another disk.
+- **See your usage over time.** A usage history page shows estimated cost and tokens per day for Claude Code and Codex over the last 30 days, also by model.
+- **Know where your chats are stored.** See how much space Claude Code and Codex chats take, with reference commands for moving them to another disk.
 
-It only reads the records Claude Code and Codex already write on your computer, and collects no data. The extension makes no network requests unless you turn on push notifications (off by default) or send a test message yourself.
+It only reads the records the supported tools already write on your computer, and collects no data. The extension makes no network requests unless you turn on **Allow network access** (off by default); today only push notifications use it.
+
+## Supported tools
+
+- **Claude Code** and **Codex**, in the VS Code extension, the command line or the desktop app, including their subagents.
+- **GitHub Copilot Chat**: VS Code's built-in chat, agent mode included.
+- **Gemini CLI** and **Qwen Code**, as a **preview**. Support for them is built from their published record formats and hasn't been checked against real sessions yet. If something looks wrong, please report it in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
+
+Tools that aren't installed are skipped, and each one can be turned off in the settings. What the extension can see differs between tools: for example, Copilot Chat shows Copilot credits instead of a dollar cost, and Gemini CLI's states are guesses. Compacting, usage history, today's total cost and the storage page cover only Claude Code and Codex. Details: [Supported tools](docs/GUIDE.md#supported-tools) in the full guide.
 
 ## Get started
 
@@ -41,20 +51,21 @@ Every feature, command and setting is explained in the **[full guide](docs/GUIDE
 ## Requirements
 
 - VS Code 1.94 or later.
-- Claude Code and/or Codex, used on the same computer (VS Code extension, command line or desktop app).
+- At least one supported tool, used on the same computer: Claude Code or Codex (VS Code extension, command line or desktop app), GitHub Copilot Chat in VS Code, Gemini CLI or Qwen Code.
 - To compact a closed chat in the background, you also need the Claude Code command line. The extension looks for `claude` on your PATH, then in the installed Claude Code extension. You can also set `agentMonitor.claude.cliPath`.
-- Tested on macOS. Windows and Linux haven't been tested yet.
+- The automated tests run on macOS, Windows and Linux (Node.js 22, and also Node.js 20 on Linux). Hands-on testing inside VS Code has only been done on macOS so far.
 
 ## Privacy
 
-- No telemetry, and no network requests unless you turn on push notifications or send a test message yourself. Your conversations stay on your computer.
+- No telemetry, and no network requests unless you turn on **Allow network access** (off by default); today only push notifications use it. Your conversations stay on your computer.
 - Push notifications are optional and off by default. When you turn them on, only a short message goes to the services you set up: the project folder name and the state, plus the chat title and subagent names if you allow them. Nothing else ever leaves your computer.
+- The usage history is worked out on your computer, and sounds are played by your own system. Neither sends anything anywhere.
 - It changes a file or runs Claude Code only after you confirm (see [Disclaimer](#disclaimer)).
 - Details: [What it reads](docs/GUIDE.md#what-it-reads) and [Privacy](docs/GUIDE.md#privacy) in the full guide.
 
 ## Unofficial
 
-CYUNEO Agent Monitor is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Product names are the property of their respective owners and are used here only to describe what the extension works with.
+CYUNEO Agent Monitor is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, GitHub, Microsoft, Google or Alibaba. Product names are the property of their respective owners and are used here only to describe what the extension works with.
 
 ## License
 
@@ -70,7 +81,7 @@ CYUNEO Agent Monitor is **free for personal and noncommercial use** under the [P
 - **It only acts when you confirm.** The extension reads the session records on your computer. It changes a file or runs Claude Code only after you confirm: changing the auto-compact setting (one key, with a backup), compacting in the background, or writing a handoff note.
 - **Usage and costs are yours.** Background compaction and handoff notes run your own Claude Code and count toward your plan's usage limits or your API bill. Cost figures are estimates at list prices, not bills.
 - **Moving data is at your own risk.** The storage page only suggests commands. You check them and decide whether to run them.
-- **Follow the services' terms.** You are responsible for using Claude Code, Codex and their services, and any push service you set up, in line with their terms.
+- **Follow the services' terms.** You are responsible for using the AI coding tools you monitor and their services, and any push service you set up, in line with their terms.
 - **Not professional advice.** The context and compaction tips summarize published sources and may be out of date.
 
 ## Copyright and trademarks

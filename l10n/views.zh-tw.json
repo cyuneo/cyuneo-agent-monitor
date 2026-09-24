@@ -1,7 +1,7 @@
 {
   "scope.all": "所有工作階段",
   "scope.workspace": "目前的工作區",
-  "scope.empty.all": "最近沒有活躍的 Claude Code 或 Codex 工作階段。",
+  "scope.empty.all": "最近沒有活躍的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 工作階段。",
   "scope.empty.workspace": "最近沒有來自目前工作區的活躍工作階段。",
   "scope.noFolder": "沒有開啟資料夾，無法比對目前工作區的工作階段。",
   "scope.showAll": "顯示所有工作階段",
@@ -16,7 +16,7 @@
   "row.stalePending": "無最近活動（可能在等你核准）",
   "row.completedHidden": "已隱藏 {n} 個已完成",
 
-  "session.loading": "正在讀取本機 Claude Code 與 Codex 的工作階段記錄…",
+  "session.loading": "正在讀取本機的智慧體工作階段記錄…",
   "session.none": "在工作階段清單裡選擇一個工作階段，查看它裡面的智慧體。",
   "session.gone": "這個工作階段已經不在清單裡了，可能是長時間沒有活動，或是被篩選掉了。",
   "session.cacheLeft": "快取：還剩 {m} 分鐘",
@@ -92,6 +92,7 @@
   "ext.handoffUnavailable": "交接筆記功能目前無法使用，詳情請見「智慧體監視器」輸出面板。",
   "ext.autoCompactUnavailable": "目前無法設定自動壓縮閾值，詳情請見「智慧體監視器」輸出面板。",
   "ext.storageUnavailable": "儲存頁面目前無法使用，詳情請見「智慧體監視器」輸出面板。",
+  "ext.historyUnavailable": "用量歷史頁面目前無法使用，詳情請見「智慧體監視器」輸出面板。",
   "ext.pushUnavailable": "推播通知目前無法使用，詳情請見「智慧體監視器」輸出面板。",
   "ext.log.learnedCompact": "已實測 {model}（{window} 視窗）的自動壓縮點：{tokens}",
   "ext.compactUnavailable": "目前無法壓縮，詳情請見「智慧體監視器」輸出面板。",

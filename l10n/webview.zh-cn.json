@@ -9,6 +9,7 @@
   "webview.col.tokens": "上下文",
   "webview.col.tokens.tip": "最近一次模型调用的 token 数（输入 + 缓存 + 输出），与 Claude Code 显示的一致",
   "webview.col.cost": "费用",
+  "webview.col.credits": "积分",
   "webview.col.time": "时间",
   "webview.col.time.tip": "智能体已运行（或运行过）的时长",
   "webview.expand": "展开详情：{name}",

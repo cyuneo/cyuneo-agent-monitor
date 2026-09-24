@@ -72,6 +72,7 @@
     costline: $('s-costline'), cost: $('s-cost'), today: $('s-today'),
     banners: $('s-banners'), resume: $('s-resume'),
     storeline: $('s-storeline'), path: $('s-path'), sizes: $('s-sizes'), reveal: $('s-reveal'), copypath: $('s-copypath'),
+    costHead: document.querySelector('.row.head .c-cost'),
   };
 
   let vm = null;           // latest view model
@@ -296,6 +297,7 @@
     u.status.classList.toggle('muted', r.lamp === 'doneSeen' || r.lamp === 'idle');
     txt(u.step, r.stepText);
     txt(u.tok, r.tokensText);
+    at(u.tok, 'title', r.tokensTip || null);
     txt(u.cost, r.costText);
     at(u.cost, 'title', r.costTip || null);
     txt(u.time, r.durText);
@@ -445,6 +447,11 @@
     show(E.sbar, true);
     show(E.grid, true);
     renderBar(m.session);
+    // Cost column header: "Credits" for Copilot sessions (plain credit numbers in the cells), otherwise the default "Cost"
+    if (E.costHead) {
+      txt(E.costHead, m.costHead ? m.costHead.text : t('webview.col.cost'));
+      at(E.costHead, 'title', m.costHead ? m.costHead.tip : null);
+    }
     syncKeyed(E.rows, m.rows, (r) => r.id, (r) => {
       const el = makeUnit(r);
       units.set(r.id, el._unit);

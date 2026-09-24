@@ -969,7 +969,7 @@ function i18nTests() {
     assert.ok(!/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(JSON.stringify(all)));
   });
 
-  test('seven regions × five languages: key sets match English and each key has the same placeholders; same for package.nls', () => {
+  test('nine regions × five languages: key sets match English and each key has the same placeholders; same for package.nls', () => {
     const ph = (s) => (String(s).match(/\{\w+\}/g) || []).slice().sort().join(',');
     // no exemptions for untranslated keys: any missing key fails
     const same = (en, loc, label) => {
@@ -980,7 +980,7 @@ function i18nTests() {
       assert.deepStrictEqual(bad, [], `${label}: placeholders differ`);
     };
     const read = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
-    assert.deepStrictEqual([...i18n.REGIONS], ['core', 'views', 'webview', 'cli', 'compact', 'storage', 'push']);
+    assert.deepStrictEqual([...i18n.REGIONS], ['core', 'views', 'webview', 'cli', 'compact', 'storage', 'push', 'alerts', 'history']);
     for (const region of i18n.REGIONS) {
       const en = read(`l10n/${region}.en.json`);
       for (const loc of ['zh-cn', 'zh-tw', 'ko', 'ja']) same(en, read(`l10n/${region}.${loc}.json`), `${region}.${loc}`);

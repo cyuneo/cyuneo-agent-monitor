@@ -9,6 +9,7 @@
   "webview.col.tokens": "Context",
   "webview.col.tokens.tip": "Tokens in the latest model call (input + cache + output), the same number Claude Code shows",
   "webview.col.cost": "Cost",
+  "webview.col.credits": "Credits",
   "webview.col.time": "Time",
   "webview.col.time.tip": "How long the agent has been running (or ran)",
   "webview.expand": "Show details: {name}",

@@ -579,7 +579,7 @@ test('provider: copyResume regenerates the text in the extension; an out-of-rang
   assert.deepStrictEqual(st.log.info, [i18n.t('resume.copied.cli')]);
 });
 
-test('provider: openFile only opens existing files listed in the details; openTranscript needs an existing .jsonl', () => {
+test('provider: openFile only opens existing files listed in the details; openTranscript needs an existing .jsonl (or legacy .json) transcript', () => {
   const st = makeStub();
   const p = new AV.AgentsViewProvider(st.context, { vscode: st.vscode, i18n });
   p.resolveWebviewView(st.view);
@@ -606,6 +606,15 @@ test('provider: openFile only opens existing files listed in the details; openTr
   assert.strictEqual(st.log.opened.length, 0, 'not a .jsonl: not opened');
   st.listeners.msg({ type: 'openTranscript', sessionKey: s.key, rowId: 'main', file: '/etc/passwd' });
   assert.deepStrictEqual(st.log.opened, [[transcript, { preview: true }]], 'path comes from session data, not from the webview');
+  // Whole-file JSON sessions (older Copilot Chat / Gemini CLI) can be opened too
+  const legacy = path.join(TMP, 'legacy.json');
+  fs.writeFileSync(legacy, '{}');
+  const s2 = session({ provider: 'copilot', id: 'legacy', main: agent({ file: legacy }) });
+  p.update({ session: s2, detail: null, now: NOW, loaded: true });
+  st.listeners.msg({ type: 'openTranscript', sessionKey: s2.key, rowId: 'main' });
+  assert.deepStrictEqual(st.log.opened.slice(-1), [[legacy, { preview: true }]]);
+  const d = AV.buildViewModel({ session: s2, i18n, now: NOW, expanded: ['main'], loaded: true }).detail.main;
+  assert.strictEqual(d.canOpen, true);
 });
 
 test('row id → agent: main, subagent, workflow agent; workflow group rows and unknown ids give null', () => {
@@ -783,8 +792,8 @@ test('session list view model: data-vscode-context content; no group label when 
   assert.strictEqual(vm.width, 210);
   const rows = vm.items.filter((x) => x.kind === 'session');
   assert.deepStrictEqual(rows.map((r) => r.key), [open.key, done.key]);
-  assert.deepStrictEqual(JSON.parse(rows[0].context), { webviewSection: 'session', sessionKey: open.key, compactable: true, resumable: false, preventDefaultContextMenuItems: true });
-  assert.deepStrictEqual(JSON.parse(rows[1].context), { webviewSection: 'session', sessionKey: done.key, compactable: false, resumable: true, preventDefaultContextMenuItems: true });
+  assert.deepStrictEqual(JSON.parse(rows[0].context), { webviewSection: 'session', sessionKey: open.key, compactable: true, resumable: false, handoff: true, autoCompact: true, preventDefaultContextMenuItems: true });
+  assert.deepStrictEqual(JSON.parse(rows[1].context), { webviewSection: 'session', sessionKey: done.key, compactable: false, resumable: true, handoff: true, autoCompact: true, preventDefaultContextMenuItems: true });
   assert.strictEqual(vm.items.filter((x) => x.kind === 'group').length, 2);
   const one = AV.buildSessionList({ arranged: createSessionOrder().arrange([done]), i18n, now: NOW, selectedKey: 'claude:nope' });
   assert.strictEqual(one.showGroups, false);
@@ -817,11 +826,14 @@ test('session menu: SESSION_MENU matches webview/context in package.json one to 
   assert.deepStrictEqual(AV.SESSION_MENU.map((m) => m.command.replace('agentMonitor.', '')),
     ['compact', 'handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   const names = (f) => AV.sessionMenuItems(f).map((m) => m.command.replace('agentMonitor.', ''));
-  assert.deepStrictEqual(names({}), ['handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+  assert.deepStrictEqual(names({}), ['markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+  assert.deepStrictEqual(names({ handoff: true, autoCompact: true }), ['handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   assert.ok(names({ compactable: true }).includes('compact') && !names({ compactable: true }).includes('copyResume'));
   assert.ok(names({ resumable: true }).includes('copyResume'));
-  assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-idle resumable compactable'), { compactable: true, resumable: true });
-  assert.deepStrictEqual(AV._internal.flagsOf('session lamp-compactable'), { compactable: false, resumable: false }, 'whole-word match');
+  assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-idle resumable compactable'), { compactable: true, resumable: true, handoff: true, autoCompact: true });
+  assert.deepStrictEqual(AV._internal.flagsOf('session provider-codex lamp-idle'), { compactable: false, resumable: false, handoff: true, autoCompact: true });
+  for (const p of ['copilot', 'gemini', 'qwen']) assert.deepStrictEqual(AV._internal.flagsOf(`session provider-${p} lamp-idle`), { compactable: false, resumable: false, handoff: false, autoCompact: false }, p);
+  assert.deepStrictEqual(AV._internal.flagsOf('session lamp-compactable'), { compactable: false, resumable: false, handoff: false, autoCompact: false }, 'whole-word match');
 });
 
 test('content empty state: offers "show all sessions" when showing only the workspace and it has no sessions; not while loading', () => {
@@ -959,6 +971,281 @@ test('provider description: set on the webview view; remembered until the view e
   assert.strictEqual(typeof p.setBadge, 'undefined');
   p.setDescription(undefined);
   assert.strictEqual(st.view.description, undefined);
+});
+
+// ---------- Copilot / Gemini CLI / Qwen Code ----------
+
+// Sessions shaped like lib/providers/{copilot,gemini,qwen}.js produce them: no auto-compact point, no cache, no resume hints
+const noCompact = (used, window, o = {}) => ({ display: used, contextUsed: used, contextWindow: window, compactAt: null, toCompact: null,
+  output: 900, processed: 50000, apiCalls: 4, ...o });
+function providerSession(provider, o = {}) {
+  const base = {
+    copilot: { entry: 'vscode', model: 'copilot/claude-sonnet-4.5', contextWindow: 128000, contextWindowSource: 'copilot-model', costUsd: null,
+      copilot: { credits: 1.5, multiplier: 1, cachedTokens: 0, requests: 2, queued: 0, modelState: 4, mode: 'agent', permissionLevel: 'default', storage: 'workspace', workspaceFile: null } },
+    gemini: { entry: 'cli', model: 'gemini-2.5-pro', contextWindow: 1048576, contextWindowSource: 'model-rule', costUsd: 0.05, liveCertainty: 'guess' },
+    qwen: { entry: 'cli', model: 'coder-model', contextWindow: 1000000, contextWindowSource: 'qwen-record', costUsd: null, unpricedModel: 'coder-model' },
+  }[provider];
+  return session({
+    provider, id: provider + '-1', entryRaw: null, entrypoint: null, cacheExpiresMs: null, compactAt: null, compactAtSource: null, resume: [],
+    ...base,
+    main: agent({ model: base.model, tokens: noCompact(90000, base.contextWindow), costUsd: base.costUsd, cacheTtl: null, file: `/synthetic/${provider}.jsonl` }),
+    ...o,
+  });
+}
+
+test('Copilot: "Credits" column with plain credit numbers, credits in the session bar, sub-agents named by their task, waiting parts by name, lag note', () => {
+  const s = providerSession('copilot', {
+    live: true, liveStatus: 'waiting',
+    main: agent({ model: 'copilot/claude-sonnet-4.5', status: S.makeStatus('awaitingInput', NOW - 20000, { question: 'planApproval' }),
+      step: { kind: 'tool', tool: 'planReview', detail: null, parallel: 0, sinceMs: NOW - 20000 },
+      tokens: noCompact(41000, 128000), costUsd: null, copilotCredits: 1.5, cacheTtl: null }),
+    agents: [sub('sa1', NOW - MIN, { kind: 'copilotSubagent', name: 'Explorer', agentType: 'Explore', description: 'Survey the repo for auth call sites',
+      model: 'claude-haiku-4.5', costUsd: null, tokens: noCompact(0, null) })],
+  });
+  const vm = build(s);
+  assert.deepStrictEqual(vm.costHead, { text: 'Credits', tip: i18n.t('cost.copilot.note') });
+  assert.strictEqual(build(session()).costHead, null, 'other providers keep the default "Cost" header');
+  const [main, sa] = vm.rows;
+  assert.strictEqual(main.costText, '1.5');
+  assert.strictEqual(main.costTip, '1.5 credits');
+  assert.ok(main.tip.includes('Copilot credits: 1.5 credits'), main.tip);
+  assert.ok(!main.tip.includes('API-equivalent cost'));
+  assert.strictEqual(main.statusText, 'Waiting for you to approve the plan');
+  assert.strictEqual(main.stepText, 'Plan review · 20s');
+  assert.strictEqual(sa.name, 'Survey the repo for auth call sites');
+  assert.strictEqual(sa.sub, 'claude-haiku-4.5 · Subagent · Explorer');
+  assert.strictEqual(sa.costText, '—');
+  assert.strictEqual(sa.costTip, i18n.t('cost.credits.inSession'));
+  const bar = vm.session;
+  assert.ok(bar.meta.startsWith('Copilot · VS Code · '), bar.meta);
+  assert.strictEqual(bar.costText, 'This session: 1.5 credits');
+  assert.ok(bar.costTip.startsWith('Copilot credits\nCopilot bills in credits'), bar.costTip);
+  assert.ok(bar.statusTip.includes('60 seconds'), 'status can lag about a minute');
+  assert.strictEqual(bar.guess, false);
+  // No credits recorded (older VS Code): nothing in the bar, "—" in the cell with the reason on hover
+  const none = build(providerSession('copilot', { copilot: { credits: null }, main: agent({ tokens: noCompact(1000, 128000), costUsd: null, copilotCredits: null }) }));
+  assert.strictEqual(none.session.costText, '');
+  assert.strictEqual(none.rows[0].costText, '—');
+  assert.strictEqual(none.rows[0].costTip, i18n.t('cost.credits.none'));
+  // Session list tooltip: credits row and the Copilot billing note, no API price note
+  const tip = AV.sessionTipText(s, null, i18n, { now: NOW });
+  assert.ok(tip.includes('Copilot credits: 1.5 credits') && tip.includes('Copilot bills in credits') && !tip.includes('list API prices'), tip);
+});
+
+test('Copilot without token counts (and its sub-agents, never counted): "—" in the Context column and bar, no meter, no "0% context", reason on hover', () => {
+  const zero = noCompact(0, 128000, { output: 0, processed: 0, apiCalls: 0 });
+  const s = providerSession('copilot', {
+    main: agent({ model: 'copilot/claude-sonnet-4.5', tokens: zero, costUsd: null, copilotCredits: 2, cacheTtl: null }),
+    agents: [sub('sa1', NOW - MIN, { kind: 'copilotSubagent', name: 'Explorer', agentType: 'Explore', description: 'Survey', model: 'claude-haiku-4.5',
+      costUsd: null, tokens: noCompact(0, null, { output: 0, processed: 0, apiCalls: 0 }) })],
+  });
+  const vm = build(s);
+  const [main, sa] = vm.rows;
+  for (const r of [main, sa]) {
+    assert.strictEqual(r.tokensText, '—', r.name);
+    assert.ok(!r.tip.includes('0 tokens') && !r.tip.includes('Latest call'), r.tip);
+    assert.ok(r.tip.includes('API calls: —'), r.tip);
+  }
+  assert.strictEqual(main.tokensTip, i18n.t('ctx.unknown.note'));
+  assert.strictEqual(sa.tokensTip, i18n.t('ctx.unknown.sub'));
+  assert.ok(main.tip.includes('Context: — / 128K'), main.tip);
+  assert.ok(sa.tip.includes(i18n.t('ctx.unknown.sub')), sa.tip);
+  const c = vm.session.context;
+  assert.strictEqual(c.text, '— / 128K window');
+  assert.strictEqual(c.pct, null, 'no meter');
+  assert.strictEqual(c.shortText, '');
+  assert.strictEqual(c.pctText, '');
+  assert.strictEqual(c.zone, null);
+  assert.ok(c.tip.includes(i18n.t('ctx.unknown.note')) && !c.tip.includes('0%'), c.tip);
+  const L = lamp.sessionLamps(s, { seenAtMs: 0 });
+  const row = AV.sessionRowVm(s, L, i18n, NOW);
+  assert.ok(!row.description.includes('context'), row.description);
+  assert.ok(AV.sessionTipText(s, L, i18n, { now: NOW }).includes('Context: — / 128K'));
+  // With usage recorded the Copilot main agent keeps its numbers
+  const known = build(providerSession('copilot')).rows[0];
+  assert.strictEqual(known.tokensText, '90K');
+  assert.strictEqual(known.tokensTip, '');
+  // The page puts the reason on the cell
+  const js = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
+  assert.ok(/at\(u\.tok, 'title', r\.tokensTip/.test(js));
+});
+
+test('last usage-limit hit banner: Copilot / Gemini CLI / Qwen Code for an hour after the hit, Claude until its reset time, never on other tools', () => {
+  const hit = (o) => ({ kind: 'unknown', model: null, resetsAtMs: null, resetsText: null, source: 'text', autoContinue: null, ms: NOW - 10 * MIN, sessionKey: 'qwen:other', ...o });
+  const info = (vm) => vm.session.banners.filter((b) => b.tone === 'info' && b.text.startsWith('Last '));
+  for (const p of ['copilot', 'gemini', 'qwen']) {
+    const s = providerSession(p);
+    const b = info(build(s, { quota: { [p]: { lastHit: hit() } } }));
+    assert.strictEqual(b.length, 1, p);
+    assert.strictEqual(b[0].text, `Last ${i18n.t('provider.' + p)} limit hit: Usage limit reached (10m ago)`);
+    assert.strictEqual(b[0].tip, i18n.t('quota.lastHit.tip'));
+    assert.strictEqual(info(build(s, { quota: { [p]: { lastHit: hit({ ms: NOW - 2 * 60 * MIN }) } } })).length, 0, p + ': an old hit is not shown');
+    // this session's own status already says it
+    const own = providerSession(p, { main: agent({ status: S.makeStatus('quota', NOW - MIN, { quota: hit() }), tokens: noCompact(1000, 128000), costUsd: null, cacheTtl: null }) });
+    assert.strictEqual(info(build(own, { quota: { [p]: { lastHit: hit() } } })).length, 0, p);
+  }
+  assert.strictEqual(info(build(providerSession('gemini'), { quota: { qwen: { lastHit: hit() } } })).length, 0, 'another tool\'s hit');
+  assert.strictEqual(info(build(session(), { quota: { claude: { lastHit: hit() } } })).length, 0, 'Claude without a reset time: as before, nothing');
+  assert.strictEqual(info(build(session(), { quota: { claude: { lastHit: hit({ kind: 'weekly', resetsAtMs: NOW + 60 * MIN }) } } })).length, 1);
+});
+
+test('today\'s total says it covers Claude Code and Codex only', () => {
+  const today = { dayStartMs: NOW - 3600e3, partial: false, progress: 1, claude: { costUsd: 1.5, unpricedTokens: 0, byModel: {} }, codex: { costUsd: 0, unpricedTokens: 0, byModel: {} } };
+  assert.ok(build(providerSession('gemini'), { today }).session.todayTip.includes(i18n.t('cost.today.scope')));
+});
+
+test('Gemini CLI: guessed statuses get the guess cue ("~", italic class, note); token breakdown and estimate marker in the row tooltip', () => {
+  const s = providerSession('gemini', {
+    live: true, liveStatus: 'busy',
+    main: agent({ model: 'gemini-2.5-pro', status: S.makeStatus('thinking', NOW - 3000, { certainty: 'guess' }),
+      tokens: noCompact(52000, 1048576, { input: 52000, cached: 30000, thoughts: 1200, tool: 300 }), costUsd: 0.0516, costEstimated: true, cacheTtl: null }),
+    agents: [sub('g1', NOW - MIN, { kind: 'geminiSubagent', name: 'investigator', agentType: 'codebase_investigator', model: 'gemini-2.5-flash', status: S.makeStatus('done', NOW - 30000),
+      tokens: noCompact(9000, 1048576, { input: 9000, cached: 0, thoughts: 0, tool: 0 }), costUsd: 0.01 })],
+  });
+  const vm = build(s);
+  const [main, g1] = vm.rows;
+  assert.strictEqual(main.statusText, '~Thinking');
+  assert.strictEqual(main.guess, true);
+  assert.strictEqual(g1.guess, false, 'certain sub-agent done');
+  assert.strictEqual(g1.name, 'investigator');
+  assert.strictEqual(g1.sub, 'gemini-2.5-flash · Subagent · codebase_investigator');
+  assert.ok(main.tip.includes('Input 52K (cached 30K) · thoughts 1.2K · tool use 300'), main.tip);
+  assert.ok(main.tip.includes('Guessed from when the session log was last written'), main.tip);
+  assert.strictEqual(main.costText, '$0.052');
+  assert.strictEqual(main.costTip, '$0.052 est.');
+  assert.strictEqual(vm.session.statusText, '~Thinking');
+  assert.strictEqual(vm.session.guess, true);
+  assert.ok(vm.session.metaTip.includes('probably open'), vm.session.metaTip);
+  assert.ok(vm.session.costTip.includes('2026-09-24'), 'Gemini price table date');
+  // Session list: churning statuses collapse to "Working" but keep the guess mark
+  const L = lamp.sessionLamps(s, { seenAtMs: 0 });
+  const row = AV.sessionRowVm(s, L, i18n, NOW);
+  assert.strictEqual(row.description, 'Gemini CLI · ~Working · 5% context');
+  assert.ok(row.a11y.includes('~Working'));
+  // A guessed done is DoneUnseen like any done, with the same cue
+  const done = providerSession('gemini', { doneAtMs: NOW - 60000,
+    main: agent({ status: S.makeStatus('done', NOW - 60000, { certainty: 'guess' }), tokens: noCompact(1000, 1048576), cacheTtl: null }) });
+  const dvm = build(done);
+  assert.strictEqual(dvm.session.lamp, 'doneUnseen');
+  assert.strictEqual(dvm.session.statusText, '~Turn finished');
+  assert.strictEqual(dvm.rows[0].guess, true);
+});
+
+test('Copilot / Gemini CLI / Qwen Code: no compaction UI (no auto-compact button or line, no compact button, no "auto-compact is off"); unpriced models keep their tokens', () => {
+  for (const p of ['copilot', 'gemini', 'qwen']) {
+    const s = providerSession(p);
+    const vm = build(s, { describeCompact: () => ({ valueText: '400K', text: '400K (40%)' }) });
+    const bar = vm.session;
+    assert.strictEqual(bar.autoCompact, null, p + ': no auto-compact setting to read or change');
+    assert.strictEqual(bar.compactable, false, p);
+    assert.strictEqual(bar.cache, null, p);
+    assert.strictEqual(bar.context.remainText, '', p);
+    assert.ok(!bar.context.text.includes('auto-compact'), bar.context.text);
+    assert.ok(bar.context.tip.includes(i18n.t('ctx.compactUnknown')), p);
+    assert.ok(!bar.context.tip.includes('Auto-compact is off') && !bar.context.tip.includes('CLAUDE_'), bar.context.tip);
+    assert.ok(!vm.rows[0].tip.includes('Auto-compact is off'), vm.rows[0].tip);
+    assert.ok(!/\{\w+\}/.test(JSON.stringify(vm)), p + ': no unreplaced placeholders');
+    const list = AV.buildSessionList({ arranged: { groups: [{ id: 'recent', sessions: [s] }], showGroupHeaders: false }, i18n, now: NOW });
+    assert.strictEqual(list.items[0].compactable, false, p);
+    const ctx = JSON.parse(list.items[0].context);
+    assert.ok(ctx.handoff === false && ctx.autoCompact === false, p + ': no Handoff / Set Auto-Compact in the context menu');
+  }
+  // Qwen OAuth 'coder-model': tokens stay, the cell says "—" and the tooltip "No public price"
+  const q = build(providerSession('qwen', { main: agent({ model: 'coder-model', tokens: noCompact(30000, 1000000), costUsd: null, unpricedModel: 'coder-model', cacheTtl: null }) }));
+  assert.strictEqual(q.rows[0].tokensText, '30K');
+  assert.strictEqual(q.rows[0].costText, '—');
+  assert.strictEqual(q.rows[0].costTip, 'No public price');
+  assert.strictEqual(q.session.costText, 'This session: No public price');
+});
+
+test('sessions scanned by the real Copilot / Gemini CLI / Qwen Code providers from synthetic files render fully in every language', () => {
+  const { CopilotProvider } = require('../lib/providers/copilot');
+  const { GeminiProvider } = require('../lib/providers/gemini');
+  const { QwenProvider, sanitizeCwd } = require('../lib/providers/qwen');
+  const base = path.join(TMP, 'providers');
+  const line = (o) => JSON.stringify(o) + '\n';
+  const write = (file, text, mtimeMs) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+    fs.utimesSync(file, new Date(mtimeMs), new Date(mtimeMs));
+  };
+  const iso = (ms) => new Date(ms).toISOString();
+  // Copilot: a request waiting on a question carousel, credits recorded, one running sub-agent
+  const user = path.join(base, 'Code', 'User');
+  const md = (t) => ({ value: t });
+  const req = (n, o) => ({ requestId: 'r' + n, timestamp: NOW - 60000 + n, message: { text: 'prompt ' + n }, modelId: 'copilot/claude-sonnet-4.5', response: o.parts,
+    modelState: { value: o.state }, ...(o.extra || {}) });
+  const sub = { kind: 'toolInvocationSerialized', toolId: 'runSubagent', toolCallId: 'sa1', invocationMessage: md('Delegating'), isConfirmed: { type: 1 }, isComplete: false,
+    toolSpecificData: { kind: 'subagent', agentName: 'Explore', description: 'Survey the repo', prompt: 'p' } };
+  const croot = (id, requests) => ({ version: 3, sessionId: id, creationDate: NOW - 120000, initialLocation: 'panel', requests, pendingRequests: [],
+    inputState: { selectedModel: { identifier: 'copilot/claude-sonnet-4.5', metadata: { maxInputTokens: 128000, multiplierNumeric: 1 } } } });
+  const cdir = path.join(user, 'workspaceStorage', 'ws1', 'chatSessions');
+  write(path.join(cdir, 'cop-q.jsonl'), line({ kind: 0, v: croot('cop-q', [req(1, { state: 4, parts: [{ kind: 'questionCarousel', questions: [] }], extra: { copilotCredits: 1.5 } })]) }), NOW - 20000);
+  write(path.join(cdir, 'cop-s.jsonl'), line({ kind: 0, v: croot('cop-s', [req(1, { state: 0, parts: [sub] })]) }), NOW - 20000);
+  const copilot = new CopilotProvider({ userDir: user, activeWindowMinutes: 30, staleMinutes: 5 }).scan(NOW);
+  // Gemini CLI: one turn that went quiet (guessed done), token breakdown recorded
+  const ghome = path.join(base, 'gemini');
+  const gfile = path.join(ghome, 'tmp', 'proj', 'chats', 'session-2026-09-24T09-58-aaaa1111.jsonl');
+  write(gfile, [
+    { sessionId: 'aaaa1111-0000-4000-8000-000000000001', projectHash: 'ph', startTime: iso(NOW - 180000), lastUpdated: iso(NOW - 120000), kind: 'main' },
+    { id: 'u1', timestamp: iso(NOW - 180000), type: 'user', content: [{ text: 'Fix the flaky test' }] },
+    { id: 'g1', timestamp: iso(NOW - 120000), type: 'gemini', content: 'All tests pass now.', model: 'gemini-2.5-pro',
+      tokens: { input: 52000, output: 800, cached: 30000, thoughts: 1200, tool: 300, total: 54300 } },
+  ].map(line).join(''), NOW - 120000);
+  const gemini = new GeminiProvider({ geminiHome: ghome, activeWindowMinutes: 30, staleMinutes: 5 }).scan(NOW);
+  // Qwen Code: an OAuth 'coder-model' turn (unpriced)
+  const qhome = path.join(base, 'qwen');
+  const qsid = 'dddd4444-0000-4000-8000-000000000004';
+  const qrec = (ms, type, extra) => ({ uuid: 'u' + ms, parentUuid: null, sessionId: qsid, timestamp: iso(ms), type, cwd: '/work/qw', version: '0.9.0', ...extra });
+  write(path.join(qhome, 'projects', sanitizeCwd('/work/qw'), 'chats', qsid + '.jsonl'), [
+    qrec(NOW - 90000, 'user', { message: { role: 'user', parts: [{ text: 'Summarise the repo' }] } }),
+    { ...qrec(NOW - 80000, 'assistant', { message: { role: 'model', parts: [{ text: 'Here it is.' }] } }), model: 'coder-model', contextWindowSize: 1000000,
+      usageMetadata: { promptTokenCount: 30000, candidatesTokenCount: 400, cachedContentTokenCount: 0, thoughtsTokenCount: 0, totalTokenCount: 30400 } },
+  ].map(line).join(''), NOW - 80000);
+  const qwen = new QwenProvider({ qwenHome: qhome, activeWindowMinutes: 30, staleMinutes: 5 }).scan(NOW);
+
+  const byId = (list, id) => list.find((x) => x.id === id || x.id.startsWith(id));
+  const cq = byId(copilot, 'cop-q');
+  const cs = byId(copilot, 'cop-s');
+  const gd = byId(gemini, 'aaaa1111');
+  const qd = byId(qwen, qsid);
+  assert.ok(cq && cs && gd && qd, 'every provider produced its session');
+  for (const locale of ['en', 'zh-cn', 'zh-tw', 'ko', 'ja']) {
+    const i18nL = i18nLib.createI18n(locale, { timeZone: 'UTC' });
+    for (const s of [cq, cs, gd, qd]) {
+      const vm = AV.buildViewModel({ session: s, i18n: i18nL, now: NOW, expanded: ['main'], loaded: true, describeCompact: null });
+      const json = JSON.stringify(vm);
+      assert.ok(!/\{\w+\}/.test(json), `${locale} ${s.key}: unreplaced placeholder`);
+      assert.ok(!/"(status|tool|cost|ctx|provider|entry|count)\.[\w.]+"/.test(json), `${locale} ${s.key}: raw dictionary key in the output`);
+      assert.ok(vm.session.meta.startsWith(i18nL.t('provider.' + s.provider) + ' · '), vm.session.meta);
+      AV.sessionTipText(s, null, i18nL, { now: NOW });
+    }
+  }
+  const en = i18n;
+  const q = build(cq);
+  assert.strictEqual(q.rows[0].statusText, 'Waiting for your answer');
+  assert.ok(q.rows[0].stepText.startsWith('Question for you'), q.rows[0].stepText);
+  assert.strictEqual(q.rows[0].costText, '1.5');
+  const sv = build(cs);
+  const subRow = sv.rows.find((r) => r.id !== 'main');
+  assert.strictEqual(subRow.name, 'Survey the repo');
+  assert.strictEqual(subRow.sub.split(' · ').slice(-2).join(' · '), 'Subagent · Explore');
+  const g = build(gd);
+  assert.strictEqual(g.session.lamp, 'doneUnseen');
+  assert.strictEqual(g.rows[0].statusText, '~Turn finished');
+  assert.strictEqual(g.rows[0].guess, true);
+  assert.ok(g.rows[0].tip.includes(en.t('count.breakdown', { input: '52K', cached: '30K', thoughts: '1.2K', tool: '300' })), g.rows[0].tip);
+  const qv = build(qd);
+  assert.strictEqual(qv.rows[0].costTip, 'No public price');
+  assert.strictEqual(qv.session.autoCompact, null);
+});
+
+test('media: guessed statuses are italic in the session bar and the table; the cost column header follows costHead', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'media', 'agents.css'), 'utf8');
+  assert.ok(/#s-status\.guess, \.row\.guess \.st \{ font-style: italic; \}/.test(css), 'guess cue');
+  const js = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
+  assert.ok(/E\.status\.classList\.toggle\('guess', !!s\.guess\)/.test(js));
+  assert.ok(/txt\(E\.costHead, m\.costHead \? m\.costHead\.text : t\('webview\.col\.cost'\)\)/.test(js), 'header text from the view model, default "Cost"');
 });
 
 // ---------- Finish ----------

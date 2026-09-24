@@ -1,5 +1,6 @@
 'use strict';
-// Tests for remote push: lib/push.js and the push.* keys in l10n/push.*.json.
+// Tests for remote push: lib/push.js, lib/push-runtime.js, the network switch (lib/network.js) and the push.* keys in
+// l10n/push.*.json.
 // Plain node: node test/push.test.js. All sessions, keys, tokens and webhook URLs are synthetic; ~/.claude and ~/.codex
 // are never read. No request ever leaves the process: every send() gets a fake fetch, and the global fetch is replaced
 // by one that fails the test if anything reaches it.
@@ -16,7 +17,9 @@ const S = require('../lib/core/status');
 const i18nLib = require('../lib/i18n');
 const lampLib = require('../lib/lamp');
 const notify = require('../lib/notify');
+const alerts = require('../lib/alerts');
 const push = require('../lib/push');
+const network = require('../lib/network');
 
 const TMP_ROOT = process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir();
 fs.mkdirSync(TMP_ROOT, { recursive: true });
@@ -25,6 +28,10 @@ const TMP = fs.mkdtempSync(path.join(TMP_ROOT, 'am-push-'));
 // Safety net: a real network call would be a test bug
 let realFetchCalls = 0;
 globalThis.fetch = async () => { realFetchCalls++; throw new Error('real fetch must never be called in tests'); };
+// The network switch: allowed for the channel, send and runtime tests (they run concurrently); the switch tests run last,
+// one at a time, and turn it off
+const netSwitch = { on: true };
+network.setAllowed(() => netSwitch.on);
 
 // ---------- Helpers ----------
 
@@ -211,6 +218,12 @@ function channelTests() {
     // A bare "Priority" is the RFC 9218 header that Cloudflare rewrites; only the X- names are sent
     const names = Object.keys(build(CFG.ntfy).headers);
     for (const bare of ['Title', 'Priority', 'Tags']) assert.ok(!names.includes(bare), `no bare ${bare} header`);
+    // every event type has its own tag; threshold alerts included
+    const tags = Object.fromEntries(push.EVENT_TYPES.map((event) => [event, build(CFG.ntfy, { ...MSG, event }).headers['X-Tags']]));
+    assert.deepStrictEqual(tags, {
+      needsYou: 'bell', error: 'warning', limitHit: 'hourglass_flowing_sand', limitReset: 'white_check_mark',
+      usageHigh: 'bar_chart', costDaily: 'moneybag', contextHigh: 'memo',
+    });
   });
 
   test('Bark: POST <server>/push JSON with device_key, level timeSensitive for high priority, the app group', () => {
@@ -787,6 +800,27 @@ function trackerTests() {
     assert.deepStrictEqual(feed(tr, [s], reset + MIN, claudeHit(NOW - 2000, reset, s.key)), []);
   });
 
+  test('limitHit / limitReset (Copilot, Gemini CLI, Qwen Code): their lastHit works like Claude\'s, and the message names the tool', () => {
+    const tr = push.createPushTracker();
+    const s = asking(NOW - 10 * MIN);
+    const reset = NOW + 2 * HOUR;
+    const hitOf = (provider, ms, resetsAtMs) => ({ ...emptyQuota(), [provider]: { lastHit: { kind: 'unknown', model: null, resetsAtMs, resetsText: null, source: 'turnError', autoContinue: null, ms, sessionKey: s.key } } });
+    feed(tr, [s], NOW, { ...emptyQuota(), copilot: { lastHit: null }, gemini: { lastHit: null }, qwen: { lastHit: null } });
+    const cp = feed(tr, [s], NOW, hitOf('copilot', NOW - 2000, null));
+    assert.deepStrictEqual(cp.map((e) => [e.type, e.provider, e.transitionId, e.resetAt, e.key]), [['limitHit', 'copilot', `limitHit|copilot|at${NOW - 2000}`, null, s.key]]);
+    const gm = feed(tr, [s], NOW + SEC, hitOf('gemini', NOW - 1000, reset));
+    assert.deepStrictEqual(gm.map((e) => [e.type, e.provider, e.resetAt]), [['limitHit', 'gemini', reset]]);
+    const qw = feed(tr, [s], NOW + 2 * SEC, { ...hitOf('qwen', NOW, null), gemini: hitOf('gemini', NOW - 1000, reset).gemini });
+    assert.deepStrictEqual(qw.map((e) => [e.type, e.provider]), [['limitHit', 'qwen']], 'the Gemini hit is not news any more');
+    const r = feed(tr, [s], reset + SEC, hitOf('gemini', NOW - 1000, reset));
+    assert.deepStrictEqual(r.map((e) => [e.type, e.transitionId]), [['limitReset', `limitReset|gemini|${reset}`]]);
+    // the tool is named in every language (never the raw id)
+    for (const i18n of [en, zh, i18nLib.createI18n('ja'), i18nLib.createI18n('ko'), i18nLib.createI18n('zh-tw')]) {
+      const names = ['copilot', 'gemini', 'qwen'].map((p) => push.formatPush([{ ...cp[0], provider: p, transitionId: p }], i18n).title);
+      for (const [i, want] of [[0, 'Copilot'], [1, 'Gemini CLI'], [2, 'Qwen Code']]) assert.ok(names[i].includes(want), `${i18n.locale || ''}: ${names[i]}`);
+    }
+  });
+
   test('limits seen at seeding: no limitHit, but the reset is still reported; past resets and old hits are ignored', () => {
     const tr = push.createPushTracker();
     const reset = NOW + HOUR;
@@ -886,8 +920,14 @@ function policyTests() {
   const ev = (type, id = 'claude:a|main|1') => ({ type, transitionId: id, key: 'claude:a' });
   test('normalizeSettings: off by default, all events on, 30 s delay, no chat titles; values clamped', () => {
     assert.deepStrictEqual(push.normalizeSettings(undefined), {
-      enabled: false, events: { needsYou: true, error: true, limitHit: true, limitReset: true }, delaySeconds: 30, includeTitle: false,
+      enabled: false,
+      events: { needsYou: true, error: true, limitHit: true, limitReset: true, usageHigh: true, costDaily: true, contextHigh: true },
+      delaySeconds: 30,
+      includeTitle: false,
     });
+    assert.deepStrictEqual(push.ALERT_EVENT_TYPES, alerts.ALERT_TYPES.slice(), 'the threshold alerts of lib/alerts.js');
+    assert.deepStrictEqual(push.EVENT_TYPES.slice(-3), ['usageHigh', 'costDaily', 'contextHigh'], 'new events come last (setting and picker order)');
+    assert.strictEqual(push.normalizeSettings({ events: { costDaily: false } }).events.costDaily, false);
     const s = push.normalizeSettings({ enabled: 'yes', delaySeconds: -5, includeTitle: 1, events: { limitReset: false } });
     assert.strictEqual(s.enabled, false, 'only true turns it on');
     assert.strictEqual(s.delaySeconds, 0);
@@ -905,6 +945,11 @@ function policyTests() {
     assert.strictEqual(push.plan({ event: ev('needsYou'), settings: { enabled: true, delaySeconds: 0 } }).action, 'send');
     assert.strictEqual(push.plan({ event: ev('needsYou'), settings: { enabled: true, delaySeconds: 90 } }).delayMs, 90000);
     for (const t of ['error', 'limitHit', 'limitReset']) assert.strictEqual(push.plan({ event: ev(t), settings: on }).action, 'send', t);
+    // threshold alerts go out at once, even with a needsYou delay set
+    for (const t of ['usageHigh', 'costDaily', 'contextHigh']) {
+      assert.deepStrictEqual(push.plan({ event: ev(t, `${t}|x`), settings: { enabled: true, delaySeconds: 90 } }), { action: 'send', delayMs: 0, claimId: `push|${t}|x` }, t);
+      assert.strictEqual(push.plan({ event: ev(t), settings: { enabled: true, events: { [t]: false } } }).reason, 'eventOff', t);
+    }
     assert.strictEqual(push.plan({ event: ev('error'), settings: { enabled: true, events: { error: false } } }).reason, 'eventOff');
     assert.strictEqual(push.plan({ event: { type: 'other', transitionId: 'x' }, settings: on }).action, 'drop');
     assert.strictEqual(push.plan({}).action, 'drop');
@@ -1104,6 +1149,61 @@ function formatTests() {
     assert.strictEqual(push.formatPush([needs, needs], en).title, 'Agent needs you · demo-app', 'same event twice is one');
   });
 
+  // Threshold alerts as lib/alerts.js createThresholdTracker reports them
+  const usage = {
+    type: 'usageHigh', key: 'quota:codex:5h', transitionId: 'usageHigh|codex|5h|9|90', provider: 'codex', window: '5h',
+    windowMinutes: 300, percent: 92.4, threshold: 90, resetAt: NOW + HOUR, atLimit: false,
+  };
+  const cost = {
+    type: 'costDaily', key: 'today', transitionId: 'costDaily|2026-09-24|5', date: '2026-09-24', cost: 7.5, threshold: 5,
+    claudeCost: 5.25, codexCost: 2.25,
+  };
+  const ctx = {
+    type: 'contextHigh', key: 'claude:a', transitionId: 'contextHigh|claude:a|c0|80', provider: 'claude', title: 'Refactor the parser',
+    titleSource: 'ai', project: 'demo-app', percent: 85, threshold: 80, contextPct: 40, contextUsed: 400000, compactAt: 470000, toCompact: 70000,
+  };
+
+  test('threshold alerts: worded by alerts.formatAlert with the push rules, normal priority; no cost amounts, a chat title only with includeTitle and a real title', () => {
+    assert.deepStrictEqual(push.formatPush([usage], en, { fmtClock: clock }), {
+      title: 'Codex 5-hour limit at 92%', body: 'Resets 11:00.', priority: 'normal', event: 'usageHigh',
+    });
+    assert.deepStrictEqual(push.formatPush([cost], en), {
+      title: 'Today\'s cost passed your daily budget', body: 'Today\'s estimated API-equivalent cost is over the budget you set.', priority: 'normal', event: 'costDaily',
+    });
+    for (const i18n of [en, zh]) {
+      const m = push.formatPush([cost], i18n, { includeTitle: true });
+      assert.ok(!/[$¥]|7[.,]5|5[.,]00?\b/.test(`${m.title}\n${m.body}`), `a cost amount leaked: ${m.title} / ${m.body}`);
+    }
+    assert.deepStrictEqual(push.formatPush([ctx], en), {
+      title: 'Context nearly full · demo-app', body: 'A chat has reached 85% of its auto-compact point.', priority: 'normal', event: 'contextHigh',
+    });
+    assert.strictEqual(push.formatPush([ctx], en, { includeTitle: true }).body, 'Refactor the parser has reached 85% of its auto-compact point.');
+    for (const titleSource of ['prompt', 'id', null]) {
+      const m = push.formatPush([{ ...ctx, title: 'fix payroll.ts', titleSource }], en, { includeTitle: true });
+      assert.ok(!m.body.includes('payroll'), `${titleSource}: ${m.body}`);
+    }
+    // the same text as the desktop alert's push form
+    for (const e of [usage, cost, ctx]) {
+      const a = alerts.formatAlert(e, en, { forPush: true, includeTitle: false, fmtClock: clock });
+      const m = push.formatPush([e], en, { fmtClock: clock });
+      assert.deepStrictEqual([m.title, m.body], [a.title, a.body], e.type);
+    }
+    // a batch: after limit hits, before resets; normal priority unless a chat needs you or failed
+    const b = push.formatPush([reset, cost, ctx, usage, hit], en, { fmtClock: clock });
+    assert.deepStrictEqual(b, {
+      title: '5 updates from your agents',
+      body: 'Codex usage limit reached\nCodex 5-hour limit at 92%\nContext nearly full · demo-app\nToday\'s cost passed your daily budget\nClaude Code usage limit has reset',
+      priority: 'normal',
+      event: 'limitHit',
+    });
+    assert.strictEqual(push.formatPush([usage, needs], en).priority, 'high');
+    for (const loc of LOCALES) {
+      const i18n = i18nLib.createI18n(loc);
+      const m = push.formatPush([usage, cost, ctx], i18n, { includeTitle: true, fmtClock: clock });
+      for (const v of [m.title, m.body]) assert.ok(v && !/\{\w+\}/.test(v) && !/\b(?:push|alerts)\./.test(v), `${loc}: ${v}`);
+    }
+  });
+
   test('test message, and every locale renders without raw keys or placeholders', () => {
     assert.deepStrictEqual(push.testMessage(en), {
       title: 'Test from CYUNEO Agent Monitor', body: 'Push notifications work. You\'ll get a message like this when an agent needs you.', priority: 'normal', event: 'test',
@@ -1156,7 +1256,7 @@ function runtimeTests() {
     const warns = [];
     const runtime = rt.createPushRuntime({
       read: () => settings, secret: async (k) => store.get(k), claimDir: () => o.dir || '', i18n: en,
-      log: (l) => logs.push(l), warn: (w) => warns.push(w), rescan: () => {}, fetch, timing: TIMING, clock: o.clock,
+      log: (l) => logs.push(l), warn: (w) => warns.push(w), rescan: () => {}, fetch, timing: TIMING, clock: o.clock, mute: o.mute,
     });
     return { runtime, fetch, settings, store, logs, warns };
   }
@@ -1291,6 +1391,77 @@ function runtimeTests() {
     x.runtime.dispose();
   });
 
+  test('runtime: threshold alerts handed to update() go out at once (no delay), claimed per alert so one of two windows sends; junk entries are ignored', async () => {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-alerts-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const opts = { dir, secrets: secretsOf(cfg), settings: { enabled: true, delaySeconds: 600, channels: [push.splitConfig(cfg).settings] } };
+    const a = makeRuntime(opts);
+    const b = makeRuntime(opts);
+    const calm = [working({ updatedMs: Date.now() })];
+    const usage = {
+      type: 'usageHigh', key: 'quota:codex:5h', transitionId: 'usageHigh|codex|5h|1|90', provider: 'codex', window: '5h',
+      windowMinutes: 300, percent: 91, threshold: 90, resetAt: null, atLimit: false,
+    };
+    for (const x of [a, b]) x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    for (const x of [a, b]) {
+      const out = x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 2, alerts: [usage, null, { type: 'needsYou', transitionId: 'x' }, { type: 'costDaily' }] });
+      assert.deepStrictEqual(out.map((e) => e.type), ['usageHigh'], 'only valid threshold alerts are taken');
+    }
+    await sleep(60);
+    const calls = [...a.fetch.calls, ...b.fetch.calls];
+    assert.strictEqual(calls.length, 1, 'sent twice or not at all');
+    assert.strictEqual(calls[0].init.headers['X-Title'], 'Codex 5-hour limit at 91%');
+    assert.strictEqual(calls[0].init.headers['X-Priority'], 'default');
+    assert.ok(fs.existsSync(path.join(dir, notify.markerName(push.CLAIM_PREFIX + usage.transitionId))));
+    // the same alert again (every render passes what the tracker reported): claimed already, nothing more
+    a.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 3, alerts: [usage] });
+    await sleep(40);
+    assert.strictEqual(a.fetch.calls.length + b.fetch.calls.length, 1);
+    for (const x of [a, b]) x.runtime.dispose();
+  });
+
+  test('runtime: quiet hours (mute) drop an event without claiming it, so a window outside them can still send it; a needsYou is checked when its delay ends; a throwing mute mutes nothing', async () => {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-quiet-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const quiet = { on: true, asked: [] };
+    const opts = { dir, secrets: secretsOf(cfg), settings: { enabled: true, channels: [push.splitConfig(cfg).settings] } };
+    const a = makeRuntime({ ...opts, mute: (type) => { quiet.asked.push(type); return quiet.on; } });
+    const now = Date.now();
+    const calm = [working({ updatedMs: now })];
+    const broke = [failing(now - 800, { updatedMs: now })];
+    a.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    const [ev] = a.runtime.update({ sessions: broke, lamps: lampsOf(broke), seq: 2 });
+    await sleep(40);
+    assert.strictEqual(a.fetch.calls.length, 0, 'pushed during quiet hours');
+    assert.deepStrictEqual(quiet.asked, ['error']);
+    assert.ok(!fs.existsSync(path.join(dir, notify.markerName(push.CLAIM_PREFIX + ev.transitionId))), 'a muted event must not be claimed');
+    // another window, outside quiet hours (or with allowErrors), sends that same error
+    const b = makeRuntime(opts);
+    b.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    b.runtime.update({ sessions: broke, lamps: lampsOf(broke), seq: 2 });
+    await sleep(40);
+    assert.strictEqual(b.fetch.calls.length, 1);
+    // needsYou: quiet hours start during its delay → not pushed
+    const e = 'ffffffff-1111-2222-3333-444444444444';
+    quiet.on = false;
+    a.runtime.update({ sessions: [working({ updatedMs: now, id: e })], lamps: lampsOf([working({ updatedMs: now, id: e })]), seq: 3 });
+    const wait = [asking(now - 300, { updatedMs: now, id: e })];
+    assert.strictEqual(a.runtime.update({ sessions: wait, lamps: lampsOf(wait), seq: 4 }).length, 1);
+    quiet.on = true;
+    await sleep(35);
+    a.runtime.update({ sessions: wait, lamps: lampsOf(wait), seq: 5 });
+    await sleep(40);
+    assert.strictEqual(a.fetch.calls.length, 0, 'the delayed needsYou was pushed during quiet hours');
+    assert.strictEqual(quiet.asked[quiet.asked.length - 1], 'needsYou');
+    // a mute callback that throws does not stop push
+    const c = makeRuntime({ ...opts, dir: fs.mkdtempSync(path.join(TMP, 'rt-quiet-')), mute: () => { throw new Error('synthetic'); } });
+    c.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    c.runtime.update({ sessions: broke, lamps: lampsOf(broke), seq: 2 });
+    await sleep(40);
+    assert.strictEqual(c.fetch.calls.length, 1);
+    for (const x of [a, b, c]) x.runtime.dispose();
+  });
+
   test('runtime needsYou: a decision that comes far past its deadline (the computer slept, timers paused) is dropped', async () => {
     const now = Date.now();
     const off = { ms: 0 };
@@ -1305,6 +1476,186 @@ function runtimeTests() {
     assert.strictEqual(x.fetch.calls.length, 0, 'pushed on waking up');
     assert.strictEqual(x.runtime._state().waits, 0);
     x.runtime.dispose();
+  });
+}
+
+// ---------- Network switch (lib/network.js) ----------
+
+// Run after every other test has finished, one at a time: they turn the process-wide switch off and on
+async function serial(name, fn) {
+  try {
+    await fn();
+    results.push(true);
+    console.log(`  ok    ${name}`);
+  } catch (err) {
+    fail(name, err);
+  }
+}
+
+async function networkTests() {
+  const rt = require('../lib/push-runtime');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pick = (r) => ({ ok: r.ok, status: r.status, code: r.code });
+  const OFF = { ok: false, status: 0, code: 'networkOff' };
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+
+  await serial('network switch: off until a source is set and again after it is released; only an exact true is on; a throwing source is off; a stale release leaves the newer source', async () => {
+    const release = network.setAllowed(null);
+    assert.strictEqual(network.isAllowed(), false, 'no source: off');
+    let v = true;
+    const r1 = network.setAllowed(() => v);
+    assert.strictEqual(network.isAllowed(), true);
+    for (const x of ['true', 1, {}, undefined, null, false]) { v = x; assert.strictEqual(network.isAllowed(), false, String(x)); }
+    network.setAllowed(() => { throw new Error('settings unavailable'); });
+    assert.strictEqual(network.isAllowed(), false);
+    const r2 = network.setAllowed(() => true);
+    r1(); // an older source's release does nothing
+    assert.strictEqual(network.isAllowed(), true);
+    r2();
+    assert.strictEqual(network.isAllowed(), false, 'released: off');
+    release();
+    network.setAllowed(() => netSwitch.on);
+  });
+
+  await serial('network.request: reads the switch at call time; off answers networkOff and never calls fetch; on, the given fetch gets the url and init', async () => {
+    const f = fakeFetch();
+    netSwitch.on = false;
+    assert.deepStrictEqual(pick(await network.request('https://ntfy.sh/x', { method: 'POST' }, { fetch: f })), OFF);
+    assert.ok(network.isOff(await network.request('https://ntfy.sh/x', {}, {})), 'off with the global fetch too');
+    assert.strictEqual(f.calls.length, 0);
+    netSwitch.on = true;
+    const res = await network.request('https://ntfy.sh/x', { method: 'POST' }, { fetch: f });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(f.calls.map((c) => [c.url, c.init.method]), [['https://ntfy.sh/x', 'POST']]);
+    assert.ok(!network.isOff(res) && !network.isOff(null) && network.isOff(network.offResult()));
+    assert.notStrictEqual(network.offResult(), network.offResult(), 'a fresh object each time');
+  });
+
+  await serial('send: with the switch off, all nine channels answer networkOff without a request; describeError says so in all five languages', async () => {
+    netSwitch.on = false;
+    const f = fakeFetch();
+    try {
+      for (const id of push.CHANNEL_IDS) assert.deepStrictEqual(pick(await push.send(CFG[id], MSG, { fetch: f, timeoutMs: 20 })), OFF, id);
+      assert.strictEqual(f.calls.length, 0);
+    } finally {
+      netSwitch.on = true;
+    }
+    for (const loc of LOCALES) {
+      const text = push.describeError(network.offResult(), i18nLib.createI18n(loc));
+      assert.ok(text && !/\{\w+\}/.test(text) && !text.startsWith('push.'), `${loc}: ${text}`);
+    }
+    assert.strictEqual(push.describeError(network.offResult(), en), en.t('push.err.networkOff'));
+    // turned off after send() passed its own check: the gate in network.request() still refuses, and the result says so
+    const late = fakeFetch();
+    let first = true;
+    network.setAllowed(() => { if (first) { first = false; return true; } return false; });
+    try {
+      assert.deepStrictEqual(pick(await push.send(CFG.ntfy, MSG, { fetch: late })), OFF);
+      assert.strictEqual(late.calls.length, 0);
+    } finally {
+      network.setAllowed(() => netSwitch.on);
+    }
+  });
+
+  function rig(o = {}) {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-net-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const store = new Map([[rt.secretKeyOf('ntfy'), JSON.stringify(push.splitConfig(cfg).secrets)]]);
+    const fetch = fakeFetch();
+    const logs = [];
+    const warns = [];
+    const runtime = rt.createPushRuntime({
+      read: () => ({ enabled: true, channels: [push.splitConfig(cfg).settings] }), secret: async (k) => store.get(k),
+      claimDir: () => dir, i18n: en, log: (l) => logs.push(l), warn: (w) => warns.push(w), rescan: () => {}, fetch,
+      timing: { wait: () => 20, rescanLeadMs: 10, freshWaitMs: 50, limiter: { coalesceMs: o.coalesceMs || 5, perChannelMinMs: 0 } },
+    });
+    let seq = 0;
+    const feedRt = (list, quota) => runtime.update({ sessions: list, lamps: lampsOf(list), quota, seq: ++seq });
+    const markers = () => fs.readdirSync(dir).filter((f) => f !== rt.STORE_FILE);
+    return { runtime, fetch, logs, warns, feed: feedRt, markers };
+  }
+
+  await serial('runtime: with the network off, push on and a channel set up: errors, waits and usage limits are tracked but nothing is planned, claimed, queued or sent; allowing it later sends only what happens after', async () => {
+    netSwitch.on = false;
+    const x = rig();
+    try {
+      const now = Date.now();
+      x.feed([working({ updatedMs: now })], emptyQuota());
+      const evs = [
+        ...x.feed([failing(now - 2000, { updatedMs: now })], emptyQuota()),
+        ...x.feed([asking(now - 1000, { updatedMs: now })], claudeHit(now, now + HOUR)),
+      ];
+      assert.deepStrictEqual(evs.map((e) => e.type).sort(), ['error', 'limitHit', 'needsYou'], 'the tracker still sees them');
+      await sleep(120); // past the needsYou delay and any batch
+      assert.strictEqual(x.fetch.calls.length, 0);
+      assert.deepStrictEqual([x.runtime._state().waits, x.runtime._state().flushTimer], [0, false]);
+      assert.deepStrictEqual(x.markers(), [], 'an event was claimed');
+      // allowed again: what happened while it was off is not sent; a new error is, once
+      netSwitch.on = true;
+      x.runtime.onSettings();
+      x.feed([asking(now - 1000, { updatedMs: now })], claudeHit(now, now + HOUR));
+      await sleep(120);
+      assert.strictEqual(x.fetch.calls.length, 0, 'an old event was sent after allowing the network');
+      x.feed([working({ updatedMs: now })], claudeHit(now, now + HOUR));
+      x.feed([failing(now - 500, { updatedMs: now })], claudeHit(now, now + HOUR));
+      await sleep(60);
+      assert.strictEqual(x.fetch.calls.length, 1);
+    } finally {
+      netSwitch.on = true;
+      x.runtime.dispose();
+    }
+  });
+
+  await serial('runtime: test() with the network off answers networkOff without a request (logged, not counted as a failure); the network turned off while a batch is queued drops it', async () => {
+    netSwitch.on = false;
+    const x = rig({ coalesceMs: 40 });
+    try {
+      const r = await x.runtime.test('ntfy');
+      assert.deepStrictEqual(pick(r), OFF);
+      assert.strictEqual(x.fetch.calls.length, 0);
+      assert.ok(x.logs.includes(en.t('push.ui.testFailedChannel', { channel: 'ntfy', error: en.t('push.err.networkOff') })), x.logs.join('\n'));
+      // queued with the network on, then turned off before the batch is due
+      netSwitch.on = true;
+      const now = Date.now();
+      x.feed([working({ updatedMs: now })]);
+      x.feed([failing(now - 700, { updatedMs: now })]);
+      for (let i = 0; i < 50 && !x.runtime._state().flushTimer; i++) await new Promise((res) => setImmediate(res));
+      assert.ok(x.runtime._state().flushTimer, 'the batch was not queued');
+      netSwitch.on = false;
+      await sleep(80);
+      assert.strictEqual(x.fetch.calls.length, 0);
+      assert.deepStrictEqual([x.runtime._state().flushTimer, x.runtime._state().failures.size, x.warns.length], [false, 0, 0]);
+    } finally {
+      netSwitch.on = true;
+      x.runtime.dispose();
+    }
+  });
+
+  await serial('sources: every request goes through lib/network.js; no other file calls fetch or loads http, https, http2, net, tls or dgram', () => {
+    const walk = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+      const rel = `${dir}/${e.name}`;
+      return e.isDirectory() ? walk(rel) : /\.(c|m)?js$/.test(e.name) ? [rel] : [];
+    });
+    const files = ['extension.js', ...walk('lib'), ...walk('bin'), ...walk('media')];
+    assert.ok(files.includes('lib/push.js') && files.includes('lib/network.js') && files.length > 20, files.join(' '));
+    const code = (f) => read(f).replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+    // the global fetch in any form, any call of an injected one, other request APIs, and Node's network modules
+    const modules = /require\(\s*['"](?:node:)?(?:https?|http2|net|tls|dgram)['"]\s*\)|\bnet\.connect\b|\btls\.connect\b|\bhttps?\.(?:request|get)\b/;
+    const bad = new RegExp([
+      /(^|[^.\w$])fetch\b(?!\s*:)/.source, /\b(?:globalThis|window|self|global)\.fetch\b/.source, /\bfetch\s*\(/.source,
+      /\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b|\bsendBeacon\b/.source, modules.source,
+    ].join('|'));
+    for (const f of files) {
+      if (f === 'lib/network.js') continue;
+      const hit = code(f).split('\n').find((l) => bad.test(l));
+      assert.ok(!hit, `${f}: ${hit && hit.trim()}`);
+    }
+    // push.js and the runtime reach the network only through network.request()
+    assert.ok(/network\.request\(/.test(code('lib/push.js')));
+    const gate = code('lib/network.js');
+    assert.ok(!modules.test(gate), 'network.js loads no network module');
+    assert.strictEqual((gate.match(/return f\(url, init\);/g) || []).length, 1, 'fetch is called in one place');
+    assert.ok(gate.indexOf('if (!isAllowed()) return offResult();') < gate.indexOf('return f(url, init);'), 'the switch is checked first');
   });
 }
 
@@ -1327,7 +1678,9 @@ formatTests();
 console.log('runtime');
 runtimeTests();
 
-Promise.all(pending).then(() => {
+Promise.all(pending).then(async () => {
+  console.log('network switch');
+  await networkTests();
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   if (realFetchCalls) { results.push(false); console.log(`  FAIL  ${realFetchCalls} call(s) reached the real fetch`); }
   const failed = results.filter((r) => !r).length;

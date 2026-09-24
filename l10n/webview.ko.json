@@ -9,6 +9,7 @@
   "webview.col.tokens": "컨텍스트",
   "webview.col.tokens.tip": "최근 모델 호출의 토큰 수(입력 + 캐시 + 출력)로, Claude Code가 표시하는 값과 동일합니다",
   "webview.col.cost": "비용",
+  "webview.col.credits": "크레딧",
   "webview.col.time": "시간",
   "webview.col.time.tip": "에이전트가 실행 중인(또는 실행된) 시간",
   "webview.expand": "세부정보 표시: {name}",

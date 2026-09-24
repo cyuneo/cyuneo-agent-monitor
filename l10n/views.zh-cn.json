@@ -1,7 +1,7 @@
 {
   "scope.all": "所有会话",
   "scope.workspace": "当前工作区",
-  "scope.empty.all": "最近没有活跃的 Claude Code 或 Codex 会话。",
+  "scope.empty.all": "最近没有活跃的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 会话。",
   "scope.empty.workspace": "最近没有来自当前工作区的活跃会话。",
   "scope.noFolder": "没有打开文件夹，无法匹配当前工作区的会话。",
   "scope.showAll": "显示所有会话",
@@ -16,7 +16,7 @@
   "row.stalePending": "无最近活动（可能在等你批准）",
   "row.completedHidden": "已隐藏 {n} 个已完成",
 
-  "session.loading": "正在读取本机 Claude Code 与 Codex 的会话记录…",
+  "session.loading": "正在读取本机的智能体会话记录…",
   "session.none": "在会话列表里选择一个会话，查看它里面的智能体。",
   "session.gone": "这个会话已经不在列表里了，可能是长时间没有活动，或者被过滤掉了。",
   "session.cacheLeft": "缓存：还剩 {m} 分钟",
@@ -92,6 +92,7 @@
   "ext.handoffUnavailable": "交接笔记功能目前不可用，详情见“智能体监视器”输出面板。",
   "ext.autoCompactUnavailable": "目前无法设置自动压缩阈值，详情见“智能体监视器”输出面板。",
   "ext.storageUnavailable": "存储页面目前不可用，详情见“智能体监视器”输出面板。",
+  "ext.historyUnavailable": "用量历史页面目前不可用，详情见“智能体监视器”输出面板。",
   "ext.pushUnavailable": "推送通知目前不可用，详情见“智能体监视器”输出面板。",
   "ext.log.learnedCompact": "已实测 {model}（{window} 窗口）的自动压缩点：{tokens}",
   "ext.compactUnavailable": "目前无法压缩，详情见“智能体监视器”输出面板。",

@@ -262,7 +262,7 @@ async function sessionsTests() {
     prev = vm;
   });
 
-  await test('Row: lamp (shape + lamp name), short status = source · status · context, a11y, data-vscode-context carries compactable / resumable', () => {
+  await test('Row: lamp (shape + lamp name), short status = source · status · context, a11y, data-vscode-context carries compactable / resumable / handoff / autoCompact', () => {
     const vm = prev;
     const L = lampsOf(fixtures());
     for (const r of rowsOf(vm)) {
@@ -272,12 +272,15 @@ async function sessionsTests() {
       assert.ok(r.a11y.includes(r.title), r.a11y);
       assert.ok(r.tip.startsWith(r.title + '\n'), 'first tooltip line is the title');
       const ctx = JSON.parse(r.context);
-      assert.deepStrictEqual(Object.keys(ctx).sort(), ['compactable', 'preventDefaultContextMenuItems', 'resumable', 'sessionKey', 'webviewSection']);
+      assert.deepStrictEqual(Object.keys(ctx).sort(), ['autoCompact', 'compactable', 'handoff', 'preventDefaultContextMenuItems', 'resumable', 'sessionKey', 'webviewSection']);
       assert.strictEqual(ctx.webviewSection, 'session');
       assert.strictEqual(ctx.sessionKey, r.key);
       assert.strictEqual(ctx.preventDefaultContextMenuItems, true);
       assert.strictEqual(ctx.compactable, r.compactable);
       assert.strictEqual(ctx.resumable, r.resumable);
+      const cc = /^(claude|codex):/.test(r.key);
+      assert.strictEqual(ctx.handoff, cc, r.key);
+      assert.strictEqual(ctx.autoCompact, cc, r.key);
     }
     const alpha = rowOf(vm, 'claude:alpha');
     // Percentage uses Claude Code's formula: used / window. While running, the status is just "working" and does not change with every step
@@ -644,6 +647,106 @@ async function zoneTests() {
   });
 }
 
+// Copilot / Gemini CLI / Qwen Code sessions (shapes as lib/providers/{copilot,gemini,qwen}.js produce them)
+async function providerTests() {
+  const noCompact = (used, window, o = {}) => ({ display: used, contextUsed: used, contextWindow: window, compactAt: null, toCompact: null,
+    output: 900, processed: 50000, apiCalls: 4, ...o });
+  const cop = session({
+    id: 'cop', provider: 'copilot', title: 'Refactor auth', entry: 'vscode', entryRaw: 'panel', entrypoint: null, model: 'copilot/claude-sonnet-4.5',
+    live: true, liveStatus: 'waiting', contextWindow: 128000, contextWindowSource: 'copilot-model', compactAt: null, compactAtSource: null, costUsd: null,
+    main: agent({ model: 'copilot/claude-sonnet-4.5', status: st('awaitingInput', NOW - 30000, { question: 'askUser' }),
+      step: { kind: 'tool', tool: 'questionCarousel', detail: null, parallel: 0, sinceMs: NOW - 30000 },
+      tokens: noCompact(90000, 128000), costUsd: null, copilotCredits: 1.5 }),
+    agents: [agent({ id: 'sa1', kind: 'copilotSubagent', name: 'Explorer', agentType: 'Explore', description: 'Survey the repo', model: 'claude-haiku-4.5',
+      status: st('thinking', NOW - 5000), tokens: noCompact(0, null), costUsd: null, startedMs: NOW - MIN })],
+    copilot: { credits: 1.5, multiplier: 1, cachedTokens: 0, requests: 2, queued: 0, modelState: 4, mode: 'agent', permissionLevel: 'default', storage: 'workspace', workspaceFile: null },
+  });
+  const gem = session({
+    id: 'gem', provider: 'gemini', title: 'Fix the flaky test', entry: 'cli', entryRaw: null, entrypoint: null, model: 'gemini-2.5-pro',
+    liveCertainty: 'guess', contextWindow: 1048576, contextWindowSource: 'model-rule', compactAt: null, compactAtSource: null, costUsd: 0.05, doneAtMs: NOW - 2 * MIN,
+    main: agent({ model: 'gemini-2.5-pro', status: st('done', NOW - 2 * MIN, { certainty: 'guess' }),
+      tokens: noCompact(52000, 1048576, { input: 52000, cached: 30000, thoughts: 1200, tool: 300 }), costUsd: 0.05, costEstimated: true }),
+  });
+  const qw = session({
+    id: 'qw', provider: 'qwen', title: 'Summarise the repo', entry: 'cli', entryRaw: null, entrypoint: null, model: 'coder-model',
+    contextWindow: 1000000, contextWindowSource: 'qwen-record', compactAt: null, compactAtSource: null, costUsd: null, unpricedModel: 'coder-model', doneAtMs: NOW - MIN,
+    main: agent({ model: 'coder-model', status: st('done', NOW - MIN), tokens: noCompact(300000, 1000000), costUsd: null, unpricedModel: 'coder-model' }),
+    agents: [agent({ id: 'q1', kind: 'qwenSubagent', agentType: 'reviewer', status: st('maybeAwaitingApproval', NOW - 70000, { pendingTool: 'run_shell_command' }),
+      tokens: noCompact(2000, 1000000), costUsd: 0.001, costEstimated: true, startedMs: NOW - 2 * MIN })],
+  });
+  const all = [cop, gem, qw];
+  const tree = new AgentTreeProvider({ i18n, now: () => NOW });
+  tree.update({ sessions: all, lamps: lampsOf(all), now: NOW, hints: {} });
+  const item = (id) => { const n = tree.nodes.get(id); return tree.resolveTreeItem(tree.getTreeItem(n), n); };
+  const list = listFeeder()(all);
+
+  await test('Copilot / Gemini CLI / Qwen Code rows: product name first, Copilot waiting parts by name, sub-agents named like Claude ones, guessed statuses marked "~"', () => {
+    walk(tree);
+    assert.strictEqual(item('copilot:cop').description, 'Copilot · Waiting for your answer · 70% context \u25D4', 'zones use the share of the window');
+    assert.strictEqual(item('gemini:gem').description, 'Gemini CLI · ~Turn finished · 5% context');
+    assert.ok(item('qwen:qw').description.startsWith('Qwen Code · reviewer: May be waiting for your approval'), item('qwen:qw').description);
+    assert.strictEqual(item('copilot:cop/main').description, '90K · Waiting for your answer');
+    assert.strictEqual(item('copilot:cop/a/sa1').label, 'Survey the repo');
+    assert.strictEqual(item('gemini:gem/main').description, '52K · ~Turn finished');
+    const tip = hoverText(item('copilot:cop/main').tooltip.value);
+    assert.ok(tip.includes('Question for you'), tip);
+    for (const key of ['copilot:cop', 'gemini:gem', 'qwen:qw']) {
+      assert.ok(!/\bcompactable\b/.test(item(key).contextValue), key + ': no compact command');
+      assert.ok(rowOf(list, key).a11y.startsWith(all.find((x) => x.key === key).title), key);
+      assert.strictEqual(rowOf(list, key).compactable, false);
+    }
+  });
+
+  await test('Tooltips: Copilot credits and the lag / billing notes; Gemini guess note, "probably not open" and token breakdown; Qwen unpriced; never "auto-compact is off"', () => {
+    const copS = hoverText(item('copilot:cop').tooltip.value);
+    assert.ok(copS.includes('Copilot credits | 1.5 credits'), copS);
+    assert.ok(copS.includes('60 seconds') && copS.includes('Copilot bills in credits') && !copS.includes('list API prices'), copS);
+    const copMain = hoverText(item('copilot:cop/main').tooltip.value);
+    assert.ok(copMain.includes('Copilot credits | 1.5 credits'), copMain);
+    const copSub = hoverText(item('copilot:cop/a/sa1').tooltip.value);
+    assert.ok(copSub.includes("Counted in the session's Copilot credits") && copSub.includes('Subagent · Explorer'), copSub);
+    const gemS = hoverText(item('gemini:gem').tooltip.value);
+    assert.ok(gemS.includes('Gemini CLI · Terminal · probably not open'), gemS);
+    assert.ok(gemS.includes('Guessed from when the session log was last written'), gemS);
+    assert.ok(gemS.includes('2026-09-24'), 'Gemini price date');
+    const gemMain = hoverText(item('gemini:gem/main').tooltip.value);
+    assert.ok(gemMain.includes('Input 52K (cached 30K) · thoughts 1.2K · tool use 300'), gemMain);
+    assert.ok(gemMain.includes('$0.050 est.'), gemMain);
+    const qwMain = hoverText(item('qwen:qw/main').tooltip.value);
+    assert.ok(qwMain.includes('API-equivalent cost | No public price'), qwMain);
+    for (const id of ['copilot:cop', 'copilot:cop/main', 'gemini:gem', 'gemini:gem/main', 'qwen:qw', 'qwen:qw/main']) {
+      const t = hoverText(item(id).tooltip.value);
+      assert.ok(!t.includes('Auto-compact is off') && !t.includes(i18n.t('tip.autoCompact') + ' |'), id + ': ' + t);
+    }
+    for (const key of ['copilot:cop', 'gemini:gem', 'qwen:qw']) {
+      const t = rowOf(list, key).tip;
+      assert.ok(!t.includes('Auto-compact') && !/\{\w+\}/.test(t), t);
+    }
+  });
+
+  await test('Copilot token counts never recorded: "—" on the row (not "0"), "tokens not recorded" for screen readers, the reason in the tooltip, no "0% context"', () => {
+    const sa = tree.getTreeItem(tree.nodes.get('copilot:cop/a/sa1'));
+    assert.ok(sa.description.startsWith('— · '), sa.description);
+    assert.ok(sa.accessibilityInformation.label.includes(i18n.t('ctx.unknown')) && !sa.accessibilityInformation.label.includes('— tokens'), sa.accessibilityInformation.label);
+    const subTip = hoverText(item('copilot:cop/a/sa1').tooltip.value);
+    assert.ok(subTip.includes(i18n.t('ctx.unknown.sub')) && !subTip.includes('0 output'), subTip);
+    assert.ok(subTip.includes('Context | —'), subTip);
+    // A Copilot chat whose requests carry no usage at all
+    const bare = { ...cop, id: 'bare', key: 'copilot:bare', title: 'No usage yet',
+      main: { ...cop.main, tokens: noCompact(0, 128000, { output: 0, processed: 0, apiCalls: 0 }) }, agents: [] };
+    const t2 = new AgentTreeProvider({ i18n, now: () => NOW });
+    t2.update({ sessions: [bare], lamps: lampsOf([bare]), now: NOW, hints: {} });
+    const it2 = (id) => { const n = t2.nodes.get(id); return t2.resolveTreeItem(t2.getTreeItem(n), n); };
+    walk(t2);
+    assert.ok(!it2('copilot:bare').description.includes('context'), it2('copilot:bare').description);
+    assert.ok(it2('copilot:bare/main').description.startsWith('— · '), it2('copilot:bare/main').description);
+    const s = hoverText(it2('copilot:bare').tooltip.value);
+    assert.ok(s.includes('Context | — / 128K') && !s.includes('0%'), s);
+    const m = hoverText(it2('copilot:bare/main').tooltip.value);
+    assert.ok(m.includes('Context | — / 128K') && m.includes(i18n.t('ctx.unknown.note')) && m.includes('API calls: —'), m);
+  });
+}
+
 (async () => {
   console.log('Session list (agents-view.js buildSessionList + session-list.js)');
   await sessionsTests();
@@ -651,6 +754,8 @@ async function zoneTests() {
   await overviewTests();
   console.log('\nContext zone marks');
   await zoneTests();
+  console.log('\nCopilot / Gemini CLI / Qwen Code');
+  await providerTests();
   const failed = results.filter((x) => !x).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
   process.exit(failed ? 1 : 0);

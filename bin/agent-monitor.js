@@ -21,7 +21,8 @@ const S = require('../lib/core/status');
 const BRAND = 'CYUNEO Agent Monitor'; // product name, not translated
 const SEP = F.SEP;
 const DEFAULTS = Object.freeze({ window: 30, stale: 5, interval: 2 });
-const PROVIDERS = ['all', 'claude', 'codex'];
+const SOURCES = ['claude', 'codex', 'copilot', 'gemini', 'qwen']; // Monitor's providers, in footer order
+const PROVIDERS = ['all', ...SOURCES];
 const ONE_SHOT_BUDGET = 1e15; // a one-shot run with --today reads all of today's transcripts at once
 const RESULT_LINES = 12;      // max result lines shown in detail mode
 const TIMELINE_MAX = 12;
@@ -36,7 +37,7 @@ const OPTIONS = [
   { name: 'interval', flags: ['--interval'], value: 'SEC', type: 'number' },
   { name: 'window', flags: ['--window'], value: 'MIN', type: 'number' },
   { name: 'stale', flags: ['--stale'], value: 'MIN', type: 'number' },
-  { name: 'provider', flags: ['--provider'], value: 'all|claude|codex', type: 'string' },
+  { name: 'provider', flags: ['--provider'], value: 'NAME', type: 'string' }, // the help text lists the names
   { name: 'here', flags: ['--here'] },
   { name: 'session', flags: ['--session', '-s'], value: 'ID', type: 'string' },
   { name: 'today', flags: ['--today'] },
@@ -112,10 +113,11 @@ function monitorConfig(opts) {
     intervalMs: Math.round(opts.interval * 1000),
     activeWindowMinutes: opts.window,
     staleMinutes: opts.stale,
-    claude: { enabled: opts.provider !== 'codex' },
-    codex: { enabled: opts.provider !== 'claude' },
     daily,
   };
+  // --provider all (the default) reads every provider with its default folders; otherwise only the one named
+  const only = opts.provider && opts.provider !== 'all' ? opts.provider : null;
+  for (const src of SOURCES) cfg[src] = { enabled: !only || only === src };
   const cd = expandPath(opts.claudeDir);
   if (cd) cfg.claude.projectsDir = cd;
   const ch = expandPath(opts.codexHome);
@@ -323,7 +325,7 @@ function agentLine(view, s, r, L, now) {
   return indent + dot(view, cell.lamp) + ' ' + parts.join(SEP);
 }
 
-/** Account-level info: Codex quota, Claude's most recent quota hit, today's totals, errors */
+/** Account-level info: Codex quota, each provider's most recent usage-limit hit, today's totals, errors */
 function footerLines(view, snap, now) {
   const { i18n } = view;
   const out = [];
@@ -333,15 +335,14 @@ function footerLines(view, snap, now) {
     const cq = F.formatCodexQuota(q.codex, i18n, now);
     out.push(bold(view.color, cq.title) + '   ' + cq.lines.join(SEP));
   }
-  const hit = q && q.claude && F.formatClaudeLastHit(q.claude.lastHit, i18n, now);
-  if (hit) out.push(hit);
+  for (const hit of F.formatLastHits(q, i18n, now)) out.push(hit);
   if (view.showToday && snap.today) {
     const td = F.formatToday(snap.today, i18n);
     let s = i18n.t('cli.today', { label: i18n.t('cost.label'), usd: td.text });
     if (td.partialText) s += SEP + td.partialText;
     out.push(s);
   }
-  for (const src of ['claude', 'codex']) {
+  for (const src of SOURCES) {
     const e = snap.sources && snap.sources[src];
     if (e && e.enabled !== false && e.error) {
       out.push(fg(view.color, 196, i18n.t('cli.error.source', { source: F.providerLabel(src, i18n), message: oneLine(e.error) })));

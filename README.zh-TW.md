@@ -2,11 +2,11 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · **繁體中文** · [한국어](README.ko.md) · [日本語](README.ja.md)
 
-在一個地方看到你所有的 Claude Code 和 Codex 聊天視窗，就在終端機旁邊：哪些智慧體正在執行、哪些需要你處理，以及每個上下文用了多少。
+在一個地方看到你所有的 AI 程式設計聊天視窗，就在終端機旁邊：哪些智慧體正在執行、哪些需要你處理，以及每個上下文用了多少。支援 Claude Code、Codex 和 GitHub Copilot Chat，Gemini CLI 和 Qwen Code 目前是預覽。
 
 [**在 VS Code 中安裝**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [在 VS Code Marketplace 查看](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
-> **預覽版（0.4.0）。** 如果發現任何不對勁的地方，歡迎到 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 回報。
+> **預覽版（0.5.0）。** 如果發現任何不對勁的地方，歡迎到 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 回報。
 
 ![Agent Monitor 在 VS Code 面板中的動態示範，資料是虛構的範例：一個 Claude Code 聊天視窗裡，主智慧體和兩個子智慧體依序讀取檔案、搜尋、編輯、執行測試，token、費用和上下文百分比隨之上升。其中一個子智慧體要執行測試、等你核准時亮起洋紅色燈，清單裡這個聊天的燈和面板分頁上的計數也跟著改變。核准後繼續，所有智慧體完成，亮起綠燈。最後在清單裡點選一個 Codex 聊天，面板換成它的步驟](images/demo.gif)
 
@@ -23,12 +23,22 @@ Claude Code 和 Codex 現在會同時跑好幾個智慧體：子智慧體、背�
 
 - **一眼看完所有聊天。** 終端機旁邊的面板列出所有開啟中和最近的聊天，每個都帶狀態燈。點一個，就能看到它裡面的智慧體、各自在哪一步、用了多少 token 和費用。
 - **需要你的時候馬上知道。** 等你核准或回答的聊天會亮洋紅色燈；完成和出錯也各有顏色，狀態列上同樣看得到。
-- **不在電腦前也能收到提醒。** 聊天開始等你時，VS Code 或系統會通知你；願意的話，還可以把簡短訊息推播到手機或團隊聊天（ntfy、Bark、Server酱、飛書、釘釘、企業微信、Telegram、Discord、Slack），出錯和碰到額度上限時也會推播。
+- **不在電腦前也能收到提醒。** 聊天開始等你時，VS Code 或系統會通知你，願意的話還能響一聲；也可以把簡短訊息推播到手機或團隊聊天（ntfy、Bark、Server酱、飛書、釘釘、企業微信、Telegram、Discord、Slack），出錯和碰到額度上限時也會推播。設好勿擾時段，夜裡就不會打擾你。
+- **快到上限前先提醒你。** Codex 用量到 90% 時會提醒你；開啟相應設定後，今天的估算費用超過你訂的預算、某個聊天的上下文快到自動壓縮點時，也會提醒你。
 - **把上下文管好。** 看到每個聊天用了多滿；在面板裡直接壓縮（可以換便宜的模型，先看費用估算）；自己決定什麼時候自動壓縮；快取快過期前提醒你。
 - **碰到額度上限後接著做。** 顯示額度什麼時候重置，並準備好繼續用的提示詞或命令，複製就能用。
-- **知道聊天記錄存在哪。** 看到佔了多少空間，並提供把它們搬到別的磁碟的參考命令。
+- **看看這段時間用了多少。** 用量歷史頁面按天顯示 Claude Code 和 Codex 最近 30 天的估算費用和 token，也能依模型拆開來看。
+- **知道聊天記錄存在哪。** 看到 Claude Code 和 Codex 的聊天記錄佔了多少空間，並提供把它們搬到別的磁碟的參考命令。
 
-它只讀取 Claude Code 和 Codex 本來就寫在你電腦上的記錄，不收集任何資料；除非你開啟推播通知（預設關閉）或自己傳送測試訊息，擴充功能本身不連網。
+它只讀取所支援的工具本來就寫在你電腦上的記錄，不收集任何資料；除非你開啟 **允許連網**（預設關閉），擴充功能本身不連網；目前只有推播通知會用到它。
+
+## 支援的工具
+
+- **Claude Code** 和 **Codex**：VS Code 擴充功能、命令列或桌面應用程式裡的，包括它們的子智慧體。
+- **GitHub Copilot Chat**：VS Code 內建的聊天，包括智慧體模式。
+- **Gemini CLI** 和 **Qwen Code**，目前是**預覽**。對它們的支援是依照官方公開的記錄格式做的，還沒有用真實工作階段驗證過。如果發現不對勁的地方，歡迎到 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 回報。
+
+沒安裝的工具會直接略過，每個工具也都能在設定裡個別關閉。各工具能看到的內容不完全一樣：例如 Copilot Chat 顯示的是 Copilot credits，而不是美元費用；Gemini CLI 的狀態是推測出來的。壓縮、用量歷史、今日總費用和儲存頁面只涵蓋 Claude Code 和 Codex。詳見完整使用指南裡的[支援的工具](docs/GUIDE.zh-TW.md#支援的工具)。
 
 ## 開始使用
 
@@ -41,20 +51,21 @@ Claude Code 和 Codex 現在會同時跑好幾個智慧體：子智慧體、背�
 ## 系統需求
 
 - VS Code 1.94 或更高版本。
-- 在同一台電腦上使用 Claude Code 和/或 Codex（VS Code 擴充功能、命令列或桌面應用程式）。
+- 在同一台電腦上使用至少一個支援的工具：Claude Code 或 Codex（VS Code 擴充功能、命令列或桌面應用程式）、VS Code 裡的 GitHub Copilot Chat、Gemini CLI 或 Qwen Code。
 - 要在背景壓縮一個已關閉的聊天視窗，還需要 Claude Code 命令列。擴充功能會先在 PATH 裡找 `claude`，再到已安裝的 Claude Code 擴充功能裡找。你也可以設定 `agentMonitor.claude.cliPath`。
-- 已在 macOS 上測試。Windows 和 Linux 還沒有測試過。
+- 自動化測試在 macOS、Windows 和 Linux 上執行（Node.js 22，Linux 上另有 Node.js 20）。在 VS Code 裡的實際使用測試目前只在 macOS 上做過。
 
 ## 隱私
 
-- 沒有遙測；除非你開啟推播通知或自己傳送測試訊息，擴充功能本身不連網。你的對話只留在你自己的電腦上。
+- 沒有遙測；除非你開啟 **允許連網**（預設關閉），擴充功能本身不連網，目前只有推播通知會用到它。你的對話只留在你自己的電腦上。
 - 推播通知是選用的，預設關閉。開啟後，只有一則簡短訊息會傳到你設定的服務：專案資料夾名稱和狀態（你允許的話再加上對話標題和子智慧體名稱）。其他任何內容都不會離開你的電腦。
+- 用量歷史在你的電腦上計算，提示音由你自己的系統播放，都不會傳出任何資料。
 - 只有在你確認之後，它才會修改檔案或執行 Claude Code（見[免責聲明](#免責聲明)）。
 - 詳見指南裡的[它讀什麼](docs/GUIDE.zh-TW.md#它讀什麼)和[隱私](docs/GUIDE.zh-TW.md#隱私)。
 
 ## 非官方聲明
 
-CYUNEO Agent Monitor 是一個獨立的、非官方的專案，與 Anthropic 或 OpenAI 沒有關聯，未獲其認可或贊助。產品名稱歸其各自所有者所有，這裡使用它們僅為說明本擴充功能所對接的對象。
+CYUNEO Agent Monitor 是一個獨立的、非官方的專案，與 Anthropic、OpenAI、GitHub、Microsoft、Google 或 Alibaba 沒有關聯，未獲其認可或贊助。產品名稱歸其各自所有者所有，這裡使用它們僅為說明本擴充功能所對接的對象。
 
 ## 授權條款
 
@@ -70,7 +81,7 @@ CYUNEO Agent Monitor 依 [PolyForm Noncommercial License 1.0.0](LICENSE) 授權�
 - **只在你確認後才動手。** 本擴充功能讀取你電腦上的工作階段記錄。只有在你確認之後，它才會修改檔案或執行 Claude Code：修改自動壓縮設定（只改一項，並留有備份）、在背景壓縮、寫交接筆記。
 - **用量和費用由你承擔。** 背景壓縮和交接筆記執行的是你自己的 Claude Code，會計入你方案的用量額度或 API 帳單。顯示的費用是依官方價目表估算的，不是帳單。
 - **遷移資料風險自負。** 儲存頁只提供參考命令，由你自己核對並決定是否執行。
-- **遵守各服務的條款。** 你需要自行確保對 Claude Code、Codex 及其服務，以及你設定的推播服務的使用符合它們的條款。
+- **遵守各服務的條款。** 你需要自行確保對你所監控的 AI 程式設計工具及其服務，以及你設定的推播服務的使用符合它們的條款。
 - **不構成專業建議。** 上下文與壓縮小提示整理自公開資料，可能已經過時。
 
 ## 著作權與商標

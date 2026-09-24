@@ -905,12 +905,24 @@ test('observed compaction points: table from the extension > learned by this pro
   assert.strictEqual(p3.learned.size, 0);
 });
 
+function noOtherTools() {
+  const none = path.join(TMP, 'no-other-tools');
+  return {
+    copilot: { userDir: path.join(none, 'Code', 'User') },
+    gemini: { home: path.join(none, '.gemini'), homeSource: 'setting' },
+    qwen: { home: path.join(none, '.qwen') },
+  };
+}
+
 function monitorCfg(h, extra = {}) {
   return {
     activeWindowMinutes: 1e7, // synthetic data lies in the past: widen the window
     staleMinutes: 5,
     claude: { projectsDir: h.projects, home: h.home },
     codex: { enabled: false, home: path.join(TMP, 'no-codex') },
+    // Copilot / Gemini / Qwen stay on but point at missing temp dirs (never the real VS Code / ~/.gemini / ~/.qwen), so a
+    // machine with those tools installed behaves like CI without them
+    ...noOtherTools(),
     daily: false,
     ...extra,
   };
@@ -946,6 +958,32 @@ test('normalizeConfig: fills in defaults; also accepts the legacy { root } form'
   const raw = { claude: { projectsDir: '/p/projects' }, intervalMs: 3000 };
   assert.ok(sameExceptObserved(normalizeConfig(raw, {}), normalizeConfig({ ...raw, observedCompact: { 'x|1': 9 } }, {})));
   assert.ok(!sameExceptObserved(normalizeConfig(raw, {}), normalizeConfig({ ...raw, intervalMs: 4000 }, {})));
+});
+
+test('Monitor test config: every provider looks only inside the temp dir (same result with or without the tools installed)', () => {
+  const h = makeHome();
+  const mon = new Monitor(monitorCfg(h, { codex: { enabled: true, home: path.join(TMP, 'no-codex') } }));
+  const touched = [];
+  const spied = ['statSync', 'lstatSync', 'readdirSync', 'openSync', 'readFileSync', 'existsSync'];
+  const real = Object.fromEntries(spied.map((n) => [n, fs[n]]));
+  for (const n of spied) fs[n] = function (p, ...rest) { touched.push(String(p)); return real[n].call(fs, p, ...rest); };
+  let snap;
+  try {
+    snap = mon.snapshot(T(5));
+    mon.snapshot(T(5) + 60e3);
+  } finally {
+    for (const n of spied) fs[n] = real[n];
+  }
+  // Allowed: the temp dir, the synthetic sessions' own cwd (Claude looks up project settings there), and this repo (the
+  // provider modules load on first use)
+  const allowed = [TMP, '/tmp/am-fixture', path.join(__dirname, '..')].map((d) => path.resolve(d) + path.sep);
+  const outside = touched.filter((p) => !allowed.some((d) => path.resolve(p).startsWith(d)));
+  assert.deepStrictEqual(outside, [], 'nothing outside the temp dir is read');
+  for (const name of ['copilot', 'gemini', 'qwen']) {
+    assert.deepStrictEqual([snap.sources[name].enabled, snap.sources[name].found, snap.sources[name].ok], [true, false, true], name);
+  }
+  assert.ok(snap.sessions.every((s) => s.provider === 'claude'));
+  mon.dispose();
 });
 
 test('Monitor: Snapshot v2 structure, sorted by startedMs descending, focus includes details, quota lastHit', () => {
@@ -1213,7 +1251,7 @@ test('worker: storage message (real lib/storage.js, synthetic dirs) cached withi
 
 // ---------- Real-data smoke test (read-only; prints only counts, status distribution and timings) ----------
 
-test('real-data smoke test (read-only ~/.claude, ~/.codex)', () => {
+test('real-data smoke test (read-only: the real Claude, Codex, Copilot, Gemini and Qwen dirs)', () => {
   const realProjects = path.join(os.homedir(), '.claude', 'projects');
   if (process.env.AGENT_MONITOR_SKIP_REAL === '1' || !fs.existsSync(realProjects)) {
     console.log('        (skipped: no local transcripts, or AGENT_MONITOR_SKIP_REAL=1 is set)');
