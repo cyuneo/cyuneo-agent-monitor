@@ -1,6 +1,6 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "在 VS Code 裡顯示每個 Claude Code 和 Codex 智慧體的狀態、目前步驟和上下文占用。面板排得像終端機：一側是聊天視窗清單，旁邊是選取視窗的子智慧體和工作流程。只讀取 Claude Code 和 Codex 在本機的工作階段記錄；擴充功能本身不會發出任何網路請求，也不收集資料。非官方專案，與 Anthropic 或 OpenAI 沒有關聯。個人和非商業用途免費；商業用途需另行授權。",
+  "description": "在終端機旁邊看到你所有的 Claude Code 和 Codex 聊天：哪些智慧體在工作、哪些在等你、每個上下文用了多少。可以用便宜的模型壓縮，快取過期前提醒你，碰到額度上限後幫你接著做。只讀取本機的工作階段記錄，擴充功能本身不連網。非官方專案，與 Anthropic 或 OpenAI 沒有關聯。個人和非商業用途免費；商業用途需另行授權。",
   "capabilities.untrusted": "在受限模式下，指向其他資料夾或程式的設定（Claude Code 命令列路徑、Claude 專案資料夾、Codex 主目錄）只會從你的使用者設定裡讀取。",
 
   "container.title": "智慧體監視器",

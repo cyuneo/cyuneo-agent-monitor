@@ -1,6 +1,6 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "Shows each Claude Code and Codex agent's status, current step and context usage in VS Code, in a panel laid out like the terminal: your chats in a side list, the selected chat's subagents and workflows next to it. Reads only the local session logs of Claude Code and Codex; the extension itself makes no network requests and collects no data. Unofficial; not affiliated with Anthropic or OpenAI. Free for personal and noncommercial use; commercial use needs a license.",
+  "description": "See all your Claude Code and Codex chats next to the terminal: which agents are working, which need you, and how full each context is. Compact with a cheaper model, get a reminder before the cache expires, and resume after a usage limit. Reads only the local session logs; the extension itself makes no network requests. Unofficial; not affiliated with Anthropic or OpenAI. Free for personal and noncommercial use; commercial use needs a license.",
   "capabilities.untrusted": "In Restricted Mode, the settings that point to other folders or programs (Claude Code CLI path, Claude projects folder, Codex home) are only read from your user settings.",
 
   "container.title": "Agent Monitor",

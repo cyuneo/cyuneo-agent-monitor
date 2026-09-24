@@ -1199,7 +1199,7 @@ async function manifestTests() {
 
   await test('发布字段：名字、版本、预览、许可、发布者、仓库、图标、分类', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.3.0');
+    assert.strictEqual(pkg.version, '0.3.1');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');

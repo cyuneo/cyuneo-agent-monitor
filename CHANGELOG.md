@@ -4,6 +4,14 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-24
+
+### Changed
+
+- **New license.** From this version on, CYUNEO Agent Monitor is licensed under the PolyForm Noncommercial License 1.0.0: free for personal and noncommercial use; commercial use needs a separate license. See the License, Disclaimer and Copyright sections of the README.
+- **Shorter README.** It now explains why the extension exists, what it does for you and how to get started, with an **Install in VS Code** link. Every feature, command and setting is described in the [full guide](docs/GUIDE.md).
+- **Clearer Marketplace description and more search keywords.**
+
 ## [0.3.0] - 2026-09-24
 
 First public release, published as a **preview**.
@@ -48,7 +56,7 @@ First public release, published as a **preview**.
 - **Command Palette.** Compact, handoff and the auto-compact threshold can be run from the Command Palette (they ask which chat), and so can the storage page. Commands that need a chat row, such as Copy Resume Prompt, are no longer listed there.
 - **Marketplace category.** The extension is now listed under **AI**.
 - The `staleAsNeedsYou` setting from the private 0.2 builds is gone; `agentMonitor.approvalGuess` replaces it.
-- **New name and license.** The extension ID is now `cyuneo.cyuneo-agent-monitor`, and it is source-available under the PolyForm Noncommercial License 1.0.0: free for personal and noncommercial use; commercial use needs a separate license.
+- **New name and license.** The extension ID is now `cyuneo.cyuneo-agent-monitor`, and it is released under the MIT License.
 
 ### Fixed
 
