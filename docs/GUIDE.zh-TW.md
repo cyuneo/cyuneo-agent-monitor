@@ -34,6 +34,46 @@
 
 對於能回報即時狀態的 Claude Code 版本（見 [它讀什麼](#它讀什麼)），「需要你處理」是確定的。對於更早的版本和 Codex，擴充功能只能推測。當一個快速工具（讀取、寫入或編輯檔案、搜尋、修補）連續 60 秒沒有結果時，聊天視窗會顯示 **可能在等你核准**。Shell 命令等長時間命令永遠不會被推測。你可以用 `agentMonitor.approvalGuess` 修改或關閉這個推測。
 
+### 「需要你處理」通知
+
+- 當一個聊天視窗或其中的智慧體開始等你（核准、回答或對話框，也包括推測出的 **可能在等你核准**）時，智慧體監視器會通知你。如果有 VS Code 視窗在前景，它會在那個視窗裡顯示一則訊息，附一個 **查看** 按鈕：點它會在面板裡選取這個聊天視窗。如果目前範圍裡看不到它，它會暫時加到這個視窗的清單裡，直到你選取別的聊天視窗或切換範圍；範圍設定本身不會改。你正在看的聊天視窗（它的分頁在最前面，或面板正在顯示它）不會顯示訊息。
+- 如果所有 VS Code 視窗都不在前景，則改為發送系統通知（macOS 和 Linux）。在 Windows 和遠端視窗（SSH、WSL、容器）中，訊息會在你接下來切換到的 VS Code 視窗裡顯示，前提是這個聊天視窗還在等。
+- 不管開了幾個視窗，每次等待只通知一次，由一個視窗負責；裝了這個擴充功能的不同編輯器（VS Code、VS Code Insiders、Cursor 等）之間也是如此。視窗開啟時就已經在等的聊天視窗不會通知，只是因為你改了設定才出現的聊天視窗（例如開啟了 Codex）也不會通知；不在這個視窗範圍裡的聊天視窗也會通知。
+- 用 `agentMonitor.notifyNeedsYou` 可以關閉通知。所有 VS Code 視窗都不在前景時，記錄改為每 5 秒讀一次，而不是每 2 秒（`agentMonitor.backgroundRefreshSeconds`）。發送系統通知之前還會再讀一次記錄，這樣你已經回答過的提示就不會再通知。所以通知可能要過幾秒才會到。
+- 如果你沒及時處理時還想在手機上收到訊息，見[推播到手機或團隊聊天](#推播到手機或團隊聊天)。
+
+### 推播到手機或團隊聊天
+
+選用功能，**預設關閉**。開啟後，遇到下面這些情況，智慧體監視器可以向你的手機或團隊聊天傳送一則簡短訊息：
+
+- **智慧體需要你**，而且過了 `agentMonitor.push.delaySeconds`（預設 30 秒）還在等。會先顯示桌面通知；你及時處理了就不推播。如果等待期間電腦進入睡眠，醒來後不會再推播這次等待。
+- **智慧體因 API 錯誤停止**（立即推播）。
+- **Claude Code 或 Codex 的使用額度用完**，以及**額度重置**時。
+
+這四種預設都開啟。可以在設定選單的 **選擇推播事件…** 裡或用 `agentMonitor.push.events` 選擇。
+
+**傳送什麼：** 專案資料夾名稱和狀態，例如「智慧體需要你 · my-app」；額度相關的訊息則是產品名稱和重置時間。開啟 `agentMonitor.push.includeTitle` 後會加上對話標題（以及子智慧體名稱），但只限真正的標題：你自己設定的，或智慧體、應用程式產生的。從你第一則提示詞擷取的標題永遠不會傳送。擴充功能不會附加提示詞、程式碼、檔案路徑、token 數或費用；標題和子智慧體名稱按原樣傳送，裡面可能帶有檔案名稱。
+
+**設定方法：** 從命令選擇區或面板標題列的 **…** 選單執行 **智慧體監視器：推播通知…**，選擇 **新增推播管道**。選一個服務，閱讀隱私說明（每個服務只顯示一次），填寫各欄位，再傳送一則測試訊息。權杖、金鑰和 Webhook 網址保存在 VS Code 的安全儲存空間裡，絕不會寫進 `settings.json`。編輯管道時，機密欄位留空就會保留已儲存的值；選填的機密（ntfy 存取權杖、飛書或釘釘的簽章密鑰）輸入 `-` 即可刪除。機密不會在電腦之間同步：開啟設定同步後，在另一台電腦上新增的管道會顯示 **這台電腦上尚未設定**，需要在這台電腦上再設定一次；移除管道時，只會刪掉目前這台電腦上的機密（留在其他電腦上的那份不會再被使用）。自架的 ntfy 或 Bark 伺服器只有本機和內網位址才能用 `http://`。它不加密，而且換到別的網路（咖啡廳、飯店）時，同一個位址可能是別人的裝置，所以只在你自己管理的網路裡使用。同一個選單會顯示推播是否開啟、有幾個管道在使用，還能傳送測試訊息、編輯、關閉或移除管道、開關推播以及選擇事件。
+
+| 服務 | 需要準備什麼 |
+| --- | --- |
+| **ntfy** | 安裝 ntfy App，訂閱設定時建議的主題。主題是隨機產生的，因為在 ntfy.sh 上任何知道主題的人都能讀到它。也可以用自己的伺服器和存取權杖。 |
+| **Bark**（iPhone） | Bark App 裡的裝置金鑰：範例網址裡緊接在伺服器位址後面的那一段。 |
+| **Server酱**（微信） | 在 sct.ftqq.com 取得的 SendKey（`SCT…`，Server酱³ 是 `sctp…`）。免費方案每天只能傳 5 則，所以這個管道的每日上限預設是 5。 |
+| **飛書 / Lark** | 在群組裡新增自訂機器人，複製它的 Webhook 網址。開啟了簽名驗證就填上密鑰；設定了自訂關鍵字就填其中一個。 |
+| **釘釘** | 在群組裡新增自訂機器人，複製它的 Webhook 網址。安全設定用「加簽」時填上密鑰（以 `SEC` 開頭），用「自訂關鍵字」時填其中一個。 |
+| **企業微信** | 新增群機器人，複製它的 Webhook 網址。 |
+| **Telegram** | 用 @BotFather 建立機器人，貼上它的權杖和你的 Chat ID。先傳一則訊息給機器人，因為機器人不能主動發起聊天。 |
+| **Discord** | 在頻道設定的「整合 > Webhook」裡新增一個 Webhook，複製它的網址。 |
+| **Slack** | 為頻道建立一個傳入 Webhook，複製它的網址。 |
+
+**上限：** 幾秒內接連發生的動態會合併成一則訊息。每個管道最多每 10 秒一則、每小時 20 則；設定了 **每日上限**（0 表示不限）的話也會遵守。超出每小時或每日上限的訊息直接略過，不會稍後補傳，智慧體監視器的輸出面板裡會記下來。上限在所有視窗之間共同計算，每個事件只由一個視窗傳送。某個管道連續失敗三次時，會顯示一則帶 **開啟推播設定** 按鈕的警告；在傳到這個管道的訊息再次成功之前不會重複提醒。
+
+**遠端視窗：** 推播從執行擴充功能的那台機器發出。在遠端視窗（SSH、WSL、容器）裡就是遠端機器，它需要能連到對應的服務。管道的機密也會在那台機器上使用（VS Code 會把它們交給那裡的擴充功能），所以推播開啟時，只在你信任的機器上開啟遠端視窗，或者先關閉推播。
+
+**Proxy：** 推播經由 VS Code 發出，所以只要 VS Code 把 Proxy 設定交給擴充功能使用（`http.fetchAdditionalSupport`，新版本預設開啟），你在 VS Code 裡設定的 Proxy（`http.proxy`）就會生效。在 Proxy 環境下推播失敗時，請檢查這些設定。
+
 ### 順序不會跳動
 
 - 聊天視窗依開始時間排序，最新的在最上面。智慧體依開始時間排序，最早的在最上面。
@@ -92,7 +132,7 @@ Claude Code 會在上下文到達某個容量時自動壓縮，這發生在你�
 - **Claude Code 自己的建議：**「The auto setting picks a window tuned for your model and is strongly recommended for the best cost and performance. Overriding auto may result in high token usage, especially when resuming long sessions.」（auto 設定會為你的模型選一個調好的容量，為了最好的成本和效能，強烈推薦使用它；覆寫 auto 可能導致 token 用量偏高，尤其是接續長工作階段時。）它沒有說明原因。可能的原因：接續一個已經比新閾值還大的舊聊天視窗時會立刻壓縮，而且快取是冷的；閾值離聊天視窗一開始的大小太近，會反覆壓縮；摘要裡遺失的細節可能導致額外呼叫去重新讀取檔案。
 - 如果為 Claude Code 設定了 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，它會覆蓋以上所有設定。
 
-完整的參考說明，附帶出處（其他工具的預設值、廠商評測、部落格建議和成本模型），見 [docs/compaction-threshold-guide.md](compaction-threshold-guide.md)（簡體中文）。
+完整的參考說明，附帶出處（其他工具的預設值、廠商評測、部落格建議和成本模型），見 [docs/compaction-threshold-guide.zh-CN.md](compaction-threshold-guide.zh-CN.md)（簡體中文）。
 
 ### 詳情
 
@@ -211,14 +251,18 @@ node bin/agent-monitor.js --json           # 以 JSON 形式輸出資料
 
 擴充功能在 VS Code 自己的儲存空間裡保留一些很小的東西：哪些聊天視窗你已經看過、哪些提醒你關掉了、每個模型實測的自動壓縮點，以及它改過的設定檔的備份。只有在你點擊複製或壓縮相關操作時，它才會寫入剪貼簿。
 
+只要 `agentMonitor.shareScanAcrossWindows` 是開啟的（預設如此），即使只開了一個視窗，各視窗也會在擴充功能的全域儲存空間裡共用一個資料夾（`shared-scan`）。裡面記著由哪個視窗讀取記錄，這個視窗還會把最新結果存到 `shared-scan/snapshot.json` 給其他視窗使用：聊天標題、專案資料夾、步驟和費用。結果一變這個檔案就會被覆寫，這個視窗正常關閉時會刪除它。通知方面，每次等待會在系統暫存目錄下的一個私人資料夾裡留一個小標記（只有雜湊值，沒有聊天內容），確保在所有編輯器裡只有一個視窗顯示這則通知。標記一天後刪除。開啟推播後，每個推播管道的傳送時間（不含訊息內容）也記在同一個資料夾裡（`push-sent.json`），這樣上限能在各視窗之間共同生效。
+
 ## 隱私
 
-- **擴充功能不會發出任何網路請求。** 它沒有遙測、沒有分析、沒有遠端內容，不會因為它而有任何東西離開你的電腦。
-- **唯一的例外是在背景壓縮一個已關閉的聊天視窗**，而且只在你確認之後。這時擴充功能會執行你本機的 Claude Code（`claude -p --resume <session> --model <model> --output-format json "/compact …"`）。Claude Code 會像你自己使用它時一樣連線到 Anthropic，用量會計入你的方案或 API 帳單。
+- **除非你開啟推播或自己傳送測試訊息，擴充功能不會發出任何網路請求。** 它沒有遙測、沒有分析、沒有遠端內容。
+- **推播通知是選用的，預設關閉。** 開啟後，只有一則簡短訊息會傳到你設定的服務：專案資料夾名稱和狀態（你允許的話再加上對話標題和子智慧體名稱）。其他任何內容都不會離開你的電腦。和任何網路請求一樣，服務商會看到這則訊息和你的 IP 位址。權杖和 Webhook 網址保存在 VS Code 的安全儲存空間裡，在顯示或記錄的錯誤訊息裡都會被遮蓋。
+- **在背景壓縮一個已關閉的聊天視窗要透過 Claude Code**，而且只在你確認之後。這時擴充功能會執行你本機的 Claude Code（`claude -p --resume <session> --model <model> --output-format json "/compact …"`）。Claude Code 會像你自己使用它時一樣連線到 Anthropic，用量會計入你的方案或 API 帳單。
 - **壓縮一個開啟中的聊天視窗，或是設定它的自動壓縮閾值，都只是把文字放進它的輸入框**（`/compact …` 或 `/autocompact …`）。在你按下 Enter 之前，什麼都不會傳送。（聊天視窗沒開啟，或是只對這個專案生效時，閾值改為寫進設定檔，見[它讀什麼](#它讀什麼)。）
 - **搬移資料由你自己決定。** 儲存頁面只產生命令，擴充功能絕不會自己執行；**在終端機中開啟** 也不會替你按 Enter。
 - **參考說明連結** 只有在你點擊時，才會在瀏覽器裡開啟 GitHub 上的一個頁面。
-- **你的對話內容留在本機。** 聊天標題、步驟和結果只會顯示在你自己的 VS Code 裡。
+- **桌面通知只在本機顯示。** 通知由 VS Code 或系統內建的通知命令顯示（macOS 用 `osascript`，Linux 用 `notify-send`），內容是聊天視窗的標題和專案資料夾名稱。不會透過網路傳送任何東西。
+- **你的對話內容留在本機。** 聊天標題、步驟和結果只會顯示在你自己的 VS Code 裡（通知則顯示在你自己電腦的通知區域）。
 - **這些數字是給你看的，不是給模型看的。** 上下文大小、快取倒數和費用永遠不會傳給模型。
 
 ## 命令
@@ -242,6 +286,7 @@ node bin/agent-monitor.js --json           # 以 JSON 形式輸出資料
 | **寫交接筆記並開新工作階段…** | 聊天視窗右鍵選單、壓縮選單、命令選擇區 | 讓模型寫一份 `HANDOFF.md`，然後引導你 `/clear` 並繼續 |
 | **設定自動壓縮閾值…** | 聊天視窗詳細資料裡的「自動壓縮」、聊天視窗右鍵選單或 **…**、命令選擇區 | 見[自己設定自動壓縮容量](#自己設定自動壓縮容量) |
 | **儲存位置與占用** | 面板標題列的 **…** 選單、命令選擇區 | 見[聊天視窗存在哪裡](#聊天視窗存在哪裡以及怎麼搬移) |
+| **推播通知…** | 面板標題列的 **…** 選單、命令選擇區 | 見[推播到手機或團隊聊天](#推播到手機或團隊聊天) |
 
 ## 設定
 
@@ -254,11 +299,14 @@ node bin/agent-monitor.js --json           # 以 JSON 形式輸出資料
 | `agentMonitor.statusBarBackground` | `true` | 有事情需要你處理時用警告背景，出錯時用錯誤背景 |
 | `agentMonitor.showCost` | `true` | 顯示等值 API 費用 |
 | `agentMonitor.sessionListPosition` | `auto` | 聊天視窗清單位於面板的哪一側：`auto`（跟終端機分頁清單同一側）、`left` 或 `right` |
+| `agentMonitor.notifyNeedsYou` | `true` | 聊天視窗開始等你時通知你：在前景視窗裡顯示訊息；所有 VS Code 視窗都不在前景時發送系統通知（macOS 和 Linux；其他情況下在你接下來切換到的視窗裡顯示訊息） |
 | `agentMonitor.refreshSeconds` | `2` | 多久重新讀取一次工作階段記錄 |
 | `agentMonitor.activeWindowMinutes` | `30` | 顯示這麼多分鐘內活躍過的聊天視窗（開啟中和選取的聊天視窗始終顯示） |
 | `agentMonitor.staleMinutes` | `5` | 多少分鐘沒有新記錄就算智慧體無活動 |
 | `agentMonitor.approvalGuess` | `fastTools` | 當聊天視窗無法回報真實狀態時，如何推測「可能在等你核准」：`fastTools`、`allTools` 或 `off` |
 | `agentMonitor.approvalGuessSeconds` | `60` | 快速工具多少秒沒有結果就開始推測 |
+| `agentMonitor.backgroundRefreshSeconds` | `5` | 所有 VS Code 視窗都不在前景時，改為依這個間隔（秒）讀取記錄（2–60；不會比 `refreshSeconds` 更快） |
+| `agentMonitor.shareScanAcrossWindows` | `true` | 讓多個 VS Code 視窗共用一次記錄讀取（一個視窗讀取，其他視窗顯示它的結果） |
 | `agentMonitor.claude.enabled` | `true` | 讀取 Claude Code 的記錄 |
 | `agentMonitor.claude.projectsDir` | `""` | Claude Code 記錄資料夾（留空則用 `$CLAUDE_CONFIG_DIR/projects` 或 `~/.claude/projects`） |
 | `agentMonitor.claude.cliPath` | `""` | Claude Code 命令列，僅用於背景壓縮（留空則先在 PATH 裡找 `claude`，再到 Claude Code 擴充功能裡找） |
@@ -274,11 +322,18 @@ node bin/agent-monitor.js --json           # 以 JSON 形式輸出資料
 | `agentMonitor.cacheReminderShortTtl` | `false` | 也提醒使用 5 分鐘快取的聊天視窗 |
 | `agentMonitor.closeReminder` | `true` | 當你關閉一個快取仍然有效的大型聊天視窗時，提示你壓縮它或寫交接筆記 |
 | `agentMonitor.postCompactHint` | `true` | 聊天視窗壓縮後，提醒你檢查關鍵規則是否還在 |
+| `agentMonitor.push.enabled` | `false` | 推播到手機或團隊聊天，見[推播到手機或團隊聊天](#推播到手機或團隊聊天) |
+| `agentMonitor.push.events` | 全部開啟 | 哪些事件要推播：`needsYou`、`error`、`limitHit`、`limitReset` |
+| `agentMonitor.push.delaySeconds` | `30` | 聊天視窗等你多少秒仍未處理才推播（0–600） |
+| `agentMonitor.push.includeTitle` | `false` | 同時傳送對話標題和子智慧體名稱（從你的提示詞擷取的標題除外） |
+| `agentMonitor.push.channels` | `[]` | 不含密鑰的推播管道清單；請用 **推播通知…** 修改 |
 | `agentMonitor.onlyWorkspace` | `false` | 已淘汰：被 `agentMonitor.scope` 取代，會自動遷移 |
+
+推播相關的設定只從你的使用者設定裡讀取，所以工作區設定既不能開啟推播，也不能改變推播的去向。
 
 ## 上下文與壓縮小提示
 
-這些提示來自對公開研究和官方文件的整理。完整筆記與出處見 [docs/research-context-compaction.md](research-context-compaction.md)（簡體中文）。關於怎麼選自動壓縮容量，見 [docs/compaction-threshold-guide.md](compaction-threshold-guide.md)（簡體中文）和[自己設定自動壓縮容量](#自己設定自動壓縮容量)。
+這些提示來自對公開研究和官方文件的整理。完整筆記與出處見 [docs/research-context-compaction.zh-CN.md](research-context-compaction.zh-CN.md)（簡體中文）。關於怎麼選自動壓縮容量，見 [docs/compaction-threshold-guide.zh-CN.md](compaction-threshold-guide.zh-CN.md)（簡體中文）和[自己設定自動壓縮容量](#自己設定自動壓縮容量)。
 
 1. **不要為了保險就壓縮。** 如果任務進行順利，1M 上下文的模型還在 200K token 左右以下，就不用管它。低於約 50K 時幾乎沒什麼可省的，壓縮只會遺失細節。
 2. **在節點處壓縮，並說明要保留什麼。** 好的時機是探索階段結束，或是一個子功能做完了，而不是任務進行到一半。用 `/compact 請保留：目標、決定及原因、未解決的問題、檔案路徑，以及「不要推送」之類的約束`。超過約 500K 時，在下一個節點處理，不要等自動壓縮在任務中途觸發。
@@ -298,8 +353,11 @@ node bin/agent-monitor.js --json           # 以 JSON 形式輸出資料
 - **分頁跟隨有盲點。** 它靠分頁標題比對 Claude Code，靠對話 ID 比對 Codex。側邊欄檢視（而不是編輯器分頁）裡顯示的聊天視窗無法被偵測到。
 - **可選模型的背景壓縮只支援 Claude Code。** Codex 在自己內部壓縮。一個聊天視窗開啟時不能在背景壓縮。
 - **Claude Code 的環境變數對擴充功能不可見。** `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 和 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 可能讓 Claude Code 在跟介面顯示不同的地方壓縮。只有模型自動壓縮過一次之後，才會出現實測值。
-- **每個 VS Code 視窗各自獨立讀取記錄。**
+- **多個視窗共用一次記錄讀取。** 開著多個 VS Code 視窗時，由其中一個視窗讀取記錄，其他視窗顯示它的結果，通常只晚一點點。這個視窗關閉時，另一個視窗會立刻接手；如果它沒有回應，大約 10 秒內接手（所有 VS Code 視窗都不在前景時會更久，因為這時各視窗只依 `agentMonitor.backgroundRefreshSeconds` 的間隔互相確認）。讀取設定不同（資料夾、活躍時間範圍、推測方式）或擴充功能版本不同的視窗會各自讀取；共用的資料夾寫不進去時（例如磁碟滿了），每個視窗也會各自讀取。可以用 `agentMonitor.shareScanAcrossWindows` 關閉共用。
+- **系統通知比較簡單。** 在 macOS 上通知透過 AppleScript 顯示，所以會顯示在 **指令碼編寫程式**（Script Editor）名下，允許或靜音它們也要到「系統設定 > 通知」裡找指令碼編寫程式。點擊通知會開啟指令碼編寫程式，而不是 VS Code：請自己切回 VS Code，在等你的聊天視窗亮著洋紅色的燈。在 Windows 和遠端視窗中暫時沒有系統通知，訊息會改在你接下來切換到的 VS Code 視窗裡顯示。在 Linux 上如果沒有安裝 `notify-send`，會改為顯示 VS Code 訊息。
 - **Windows 的遷移命令還沒有在 Windows 上實測過。** 儲存位置頁面產生的 `robocopy` 和 `mklink /J` 命令只核對過文字。執行前請先看一遍，確認一切正常之前不要刪掉 `.bak` 備份資料夾。
+- **終端機版不推播。** 推播通知只由 VS Code 擴充功能傳送。
+- **釘釘加簽還沒有用真實機器人試過。** 簽名依照釘釘的文件實作，也只對照文件核對過。如果開啟加簽的機器人拒收訊息，請把它的安全設定改用自訂關鍵字，並在 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 告訴我們。
 
 ---
 

@@ -1,0 +1,59 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Superseded pushes to the same PR cancel older runs; runs on main always finish.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22]
+        include:
+          # VS Code 1.94 (the minimum in engines.vscode) ships Node 20.
+          - os: ubuntu-latest
+            node: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+        env:
+          # Tests create their temp dirs here instead of os.tmpdir(). On Windows runners os.tmpdir()
+          # is an 8.3 short path (C:\Users\RUNNER~1\...) that native realpath expands, which breaks path equality checks.
+          AGENT_MONITOR_TEST_TMP: ${{ runner.temp }}
+
+  package:
+    name: package (.vsix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # @vscode/vsce requires Node >= 22.
+          node-version: 22
+      - run: npx --yes @vscode/vsce package --no-yarn
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: '*.vsix'
+          if-no-files-found: error
+          retention-days: 7

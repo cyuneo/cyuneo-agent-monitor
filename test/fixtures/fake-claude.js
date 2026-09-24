@@ -2,6 +2,7 @@
 'use strict';
 // Fake Claude Code CLI, used only by test/compact.test.js (never calls the real claude and never touches ~/.claude).
 // Simulates: claude -p --resume <id> --model <model> --output-format json "<prompt>"
+// Started directly through its shebang line; on Windows test/compact.test.js runs it with node instead.
 // - appends a system/compact_boundary entry to the synthetic transcript and prints a result JSON to stdout;
 // - behavior is controlled by environment variables:
 //   FAKE_CLAUDE_PROJECTS  look for <id>.jsonl in this directory (and one level below); required (unless FAKE_CLAUDE_TRANSCRIPT is set)
@@ -16,25 +17,35 @@
 
 const fs = require('fs');
 const path = require('path');
+const tty = require('tty');
 
 const env = process.env;
 const argv = process.argv.slice(2);
 const mode = env.FAKE_CLAUDE_MODE || 'ok';
 
+/** What stdin is: devnull | pipe | tty | other | closed */
 function stdinKind() {
+  if (tty.isatty(0)) return 'tty';
+  let st = null;
+  try { st = fs.fstatSync(0); } catch (err) {
+    if (err && err.code === 'EBADF') return 'closed';
+    // Windows: some Node versions cannot fstat the NUL device; decided by the read below
+  }
+  if (st && st.isFIFO()) return 'pipe';
+  if (st && st.isCharacterDevice()) {
+    try {
+      const dn = fs.statSync(process.platform === 'win32' ? 'NUL' : '/dev/null');
+      if (dn.isCharacterDevice() && dn.rdev === st.rdev) return 'devnull';
+    } catch { /* ignore */ }
+  }
+  if (process.platform !== 'win32') return st ? 'other' : 'closed';
+  // Windows: NUL may report as a char device, a regular file or nothing at all, depending on the Node version.
+  // Not a console and not a pipe (both handled above), empty, and a read hits end of file at once: that is NUL.
+  if (st && st.size > 0) return 'other';
   try {
-    const st = fs.fstatSync(0);
-    if (st.isFIFO()) return 'pipe';
-    if (st.isCharacterDevice()) {
-      try {
-        const dn = fs.statSync(process.platform === 'win32' ? 'NUL' : '/dev/null');
-        if (dn.rdev === st.rdev) return 'devnull';
-      } catch { /* ignore */ }
-      return 'tty';
-    }
-    return 'other';
-  } catch {
-    return 'closed';
+    return fs.readSync(0, Buffer.alloc(1), 0, 1, null) === 0 ? 'devnull' : 'other';
+  } catch (err) {
+    return err && err.code === 'EBADF' ? 'closed' : 'other';
   }
 }
 

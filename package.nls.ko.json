@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "터미널 옆에서 모든 Claude Code와 Codex 채팅을 확인하세요. 어떤 에이전트가 작업 중인지, 어떤 채팅이 나를 기다리는지, 각 컨텍스트가 얼마나 찼는지 보여 줍니다. 더 저렴한 모델로 압축하고, 캐시가 만료되기 전에 알림을 받고, 사용량 한도 이후에도 이어서 작업할 수 있습니다. 로컬 세션 기록만 읽으며 확장 자체는 네트워크에 접속하지 않습니다. 비공식 프로젝트이며 Anthropic 또는 OpenAI와 관련이 없습니다. 개인 및 비상업적 용도는 무료이며, 상업적 용도는 별도 라이선스가 필요합니다.",
-  "capabilities.untrusted": "제한 모드에서는 다른 폴더나 프로그램을 가리키는 설정(Claude Code CLI 경로, Claude 프로젝트 폴더, Codex 홈)을 사용자 설정에서만 읽어옵니다.",
+  "description": "터미널 옆에서 모든 Claude Code와 Codex 채팅을 확인하세요. 어떤 에이전트가 작업 중인지, 어떤 채팅이 나를 기다리는지, 각 컨텍스트가 얼마나 찼는지 보여 줍니다. 더 저렴한 모델로 압축하고, 캐시가 만료되기 전에 알림을 받고, 사용량 한도 이후에도 이어서 작업할 수 있습니다. 로컬 세션 기록만 읽으며, 선택 기능인 푸시 알림을 켜거나 테스트 메시지를 보내지 않는 한 확장 자체는 네트워크에 접속하지 않습니다. 비공식 프로젝트이며 Anthropic 또는 OpenAI와 관련이 없습니다. 개인 및 비상업적 용도는 무료이며, 상업적 용도는 별도 라이선스가 필요합니다.",
+  "capabilities.untrusted": "제한 모드에서는 다른 폴더나 프로그램을 가리키는 설정(Claude Code CLI 경로, Claude 프로젝트 폴더, Codex 홈)을 사용자 설정에서만 읽어옵니다. 푸시 알림 설정은 항상 사용자 설정에서만 읽어옵니다.",
 
   "container.title": "에이전트 모니터",
   "view.overview": "개요",
@@ -33,6 +33,7 @@
   "cmd.handoff": "인수인계 메모 작성 후 새로 시작…",
   "cmd.setAutoCompact": "자동 압축 임계값 설정…",
   "cmd.storage": "저장 위치와 사용량",
+  "cmd.pushSetup": "푸시 알림…",
   "submenu.scope.all": "범위: 모든 세션",
   "submenu.scope.workspace": "범위: 이 워크스페이스",
 
@@ -56,6 +57,7 @@
   "config.sessionListPosition.auto": "터미널의 탭 목록과 같은 쪽입니다(기본값은 오른쪽).",
   "config.sessionListPosition.left": "왼쪽에 표시하고, 에이전트는 오른쪽에 표시합니다.",
   "config.sessionListPosition.right": "오른쪽에 표시하고, 에이전트는 왼쪽에 표시합니다.",
+  "config.notifyNeedsYou": "채팅이나 에이전트가 답변 또는 승인을 기다리기 시작하면 알려줍니다. 포커스가 있는 VS Code 창에는 메시지를(지금 보고 있는 채팅은 제외), 포커스가 있는 VS Code 창이 없으면 시스템 알림을 표시합니다(macOS, Linux). Windows와 원격 창에서는 대신 다음에 전환하는 VS Code 창에 메시지가 표시됩니다. 대기 하나당 한 창에서만 알립니다.",
   "config.refreshSeconds": "세션 기록을 다시 읽는 주기(초)입니다.",
   "config.activeWindowMinutes": "이 분 수 이내에 활성화되었던 세션을 표시합니다. 열려 있는 세션과 선택된 세션은 항상 표시됩니다.",
   "config.staleMinutes": "새 기록 줄이 이 분 수 동안 없으면 에이전트를 활동 없음으로 표시합니다.",
@@ -64,6 +66,8 @@
   "config.approvalGuess.allTools": "무활동 시간(staleMinutes)이 지나면 모든 도구에 대해 적용됩니다.",
   "config.approvalGuess.off": "절대 추측하지 않습니다.",
   "config.approvalGuessSeconds": "빠른 도구 모드에서, 빠른 도구 호출이 결과 없이 몇 초 지나면 승인 대기 중일 가능성이 있다고 판단할지 설정합니다.",
+  "config.backgroundRefreshSeconds": "포커스가 있는 VS Code 창이 없는 동안에는 `#agentMonitor.refreshSeconds#` 대신 이 초마다 세션 기록을 다시 읽습니다(둘 중 긴 쪽 적용). 값이 작을수록 '확인 필요' 알림이 더 빨리 옵니다.",
+  "config.shareScanAcrossWindows": "모든 VS Code 창이 세션 기록 읽기를 함께 사용합니다. 한 창이 읽고 다른 창은 그 결과를 표시하므로 CPU와 메모리를 아낍니다. 끄면 창마다 따로 읽습니다.",
   "config.claude.enabled": "Claude Code 세션 기록을 읽습니다.",
   "config.claude.projectsDir": "Claude Code 세션 기록이 있는 폴더입니다. 비워 두면 `$CLAUDE_CONFIG_DIR/projects` 또는 `~/.claude/projects`를 사용합니다.",
   "config.claude.cliPath": "Claude Code 명령줄 프로그램의 경로입니다. 닫힌 세션을 백그라운드에서 압축할 때만 사용됩니다. 비워 두면 PATH에서 `claude`를 찾은 다음, 설치된 Claude Code 확장 프로그램에서 찾습니다.",
@@ -79,6 +83,15 @@
   "config.cacheReminderShortTtl": "5분 캐시를 사용하는 세션에 대해서도 알립니다.",
   "config.closeReminder": "캐시가 아직 유효한 대형 Claude Code 세션을 닫으면 압축하거나 인수인계 메모를 작성하도록 제안합니다.",
   "config.postCompactHint": "세션이 압축된 후, 주요 규칙과 제약 사항이 여전히 남아 있는지 확인하도록 알려줍니다.",
+  "config.push.enabled": "에이전트가 나를 기다리거나, 오류로 멈추거나, 사용 한도에 도달하거나 한도가 풀리면 휴대폰이나 팀 채팅으로 짧은 푸시 메시지를 보냅니다. 기본값은 꺼짐이며, 보낼 곳은 [푸시 알림…](command:agentMonitor.push.setup)에서 정합니다. 프로젝트 폴더 이름과 상태만 보냅니다(대화 제목과 하위 에이전트 이름은 `#agentMonitor.push.includeTitle#`을 켠 경우에만). 네트워크를 사용하는 기능은 이것뿐입니다.",
+  "config.push.events": "푸시가 켜져 있을 때 어떤 이벤트를 푸시할지 정합니다.",
+  "config.push.events.needsYou": "에이전트가 답변이나 승인을 기다림(지연 시간이 지나도 계속 기다릴 때만 푸시).",
+  "config.push.events.error": "에이전트가 API 오류로 멈춤.",
+  "config.push.events.limitHit": "Claude Code 또는 Codex 사용 한도에 도달함.",
+  "config.push.events.limitReset": "사용 한도가 초기화됨.",
+  "config.push.delaySeconds": "에이전트가 몇 초 동안 계속 기다리면 푸시할지 정합니다. 데스크톱 알림이 먼저 표시되며, 그 사이에 응답하면 푸시하지 않습니다. `0`이면 바로 푸시합니다.",
+  "config.push.includeTitle": "대화 제목(과 하위 에이전트 이름)도 함께 보냅니다. 직접 정했거나 에이전트·앱이 만든 실제 제목만 보내며, 첫 프롬프트로 만든 제목은 절대 보내지 않습니다.",
+  "config.push.channels": "푸시를 보낼 곳입니다(비밀이 아닌 부분만). 이 목록을 직접 고치지 말고 [푸시 알림…](command:agentMonitor.push.setup)에서 채널을 추가, 테스트, 편집, 삭제하세요. 토큰, 키, 웹후크 URL은 여기가 아니라 VS Code 보안 저장소에 보관됩니다.",
   "config.onlyWorkspace": "현재 워크스페이스의 세션만 표시합니다.",
   "config.onlyWorkspace.deprecated": "범위 설정(agentMonitor.scope)으로 대체되었습니다. 기존 값은 자동으로 마이그레이션됩니다."
 }

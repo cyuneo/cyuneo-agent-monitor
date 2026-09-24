@@ -704,7 +704,7 @@ try {
   incrementalTests();
   realSmoke();
 } finally {
-  fs.rmSync(TMP, { recursive: true, force: true });
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5 }); } catch { /* ignore */ }
 }
 const failed = results.filter((x) => !x).length;
 console.log(`\n${results.length - failed}/${results.length} passed`);

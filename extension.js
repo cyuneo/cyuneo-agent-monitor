@@ -6,7 +6,16 @@
 //   globalState. The extension owns the selection and pushes it to the page; clicking a session shows it in the
 //   content area, and the selection sticks until the user clicks another one (or switches to another chat tab, followActiveChat).
 // - Sidebar overview tree agentMonitor.tree (lib/tree.js); overall lamp in the status bar; two viewing scopes (all / workspace).
-// - Scanning runs on a worker thread (lib/worker.js; messages: config / focus / refresh / storage).
+// - Scanning runs on a worker thread (lib/worker.js; messages: config / focus / refresh / storage / pause / resume / interval).
+// - Windows share one scan (lib/shared-scan.js, agentMonitor.shareScanAcrossWindows): the leader window's worker scans and
+//   publishes its snapshots, the other windows (followers) keep their worker paused and render the leader's snapshots.
+//   While no VS Code window has focus, the scanning worker slows to agentMonitor.backgroundRefreshSeconds.
+// - "Needs you" notifications (lib/notify.js, agentMonitor.notifyNeedsYou): a toast in the focused window (not for the
+//   chat the user is looking at), or a system notification when no window has focus (Windows and remote windows: a toast
+//   in the window that gets focus next); a claim file makes sure only one window reports each wait.
+// - Remote push (lib/push.js, lib/push-runtime.js, setup in lib/push-setup.js; off by default): after each render the
+//   push runtime gets all sessions and the quota snapshot; it claims each event in the same shared claim dir, so one
+//   window sends it whatever its role in the shared scan. agentMonitor.push.* settings are read from user settings only.
 // - lib/compact.js registers the compact command agentMonitor.compact itself; here we only call activateCompact on
 //   activation and forward every snapshot to it. The handoff-note command agentMonitor.handoff is registered here and
 //   calls runHandoff exported by compact.js.
@@ -29,12 +38,17 @@ const seenLib = require('./lib/seen');
 const scopeLib = require('./lib/scope');
 const { createSessionOrder } = require('./lib/order');
 const { AgentTreeProvider, esc } = require('./lib/tree');
+const notifyLib = require('./lib/notify');
+const sharedScanLib = require('./lib/shared-scan');
 
 const PKG = require('./package.json');
 const VERSION = PKG.version;
 const EXT_ID = 'cyuneo.cyuneo-agent-monitor';
 const AGENTS_VIEW = 'agentMonitor.agents';
 const TREE_VIEW = 'agentMonitor.tree';
+// Hidden overview tree in the bottom panel. Tree views exist from activation (webview views only after first shown),
+// so its badge is what puts the count on the panel tab even before the panel has been opened.
+const PANEL_TREE_VIEW = 'agentMonitor.panelOverview';
 const INTRO_KEY = 'agentMonitor.panelIntro.v1';     // globalState: the bottom panel was focused on first activation
 const LIST_WIDTH_KEY = 'agentMonitor.sessionListWidth';   // globalState: width of the session list in the bottom panel
 const OBSERVED_KEY = 'agentMonitor.observedCompact';       // globalState: { 'model|window': observed auto-compaction point }
@@ -43,6 +57,9 @@ const COMPACT_CMD = 'agentMonitor.compact';
 const AUTOCOMPACT_CMD = 'agentMonitor.setAutoCompact';
 const HANDOFF_CMD = 'agentMonitor.handoff';
 const STORAGE_CMD = 'agentMonitor.storage';
+const PUSH_CMD = 'agentMonitor.push.setup';
+// Push settings (application scope, read with inspect().globalValue so a workspace can neither turn push on nor redirect it)
+const PUSH_KEYS = ['push.enabled', 'push.events', 'push.delaySeconds', 'push.includeTitle', 'push.channels'];
 const STORAGE_WAIT_MS = 120000; // the storage scan stats recursively; large dirs can take tens of seconds
 // Settings that require rebuilding the worker; other settings just recompute from the last snapshot on the main thread
 const MONITOR_KEYS = [
@@ -50,7 +67,15 @@ const MONITOR_KEYS = [
   'claude.enabled', 'claude.projectsDir', 'codex.enabled', 'codex.home',
   'approvalGuess', 'approvalGuessSeconds',
 ];
+const NOTIFY_DIR = 'notify';           // under globalStorageUri: claim markers, so one window reports each wait
+const SHARED_DIR = 'shared-scan';      // under globalStorageUri: leader election and the leader's snapshots
+const BACKGROUND_SECONDS = Object.freeze({ dflt: 5, min: 2, max: 60 }); // agentMonitor.backgroundRefreshSeconds
 const WORKER_RETRIES = 3;
+const WORKER_HEALTHY_MS = 10 * 60e3; // a worker that still sends snapshots this long after starting gets its retry budget back
+// "Needs you" in an unfocused window: rescan this long before the claim delay is up, so the check sees current data; if no
+// newer snapshot has arrived by then, the check waits for one, at most NOTIFY_FRESH_WAIT_MS more
+const NOTIFY_RESCAN_LEAD_MS = 1200;
+const NOTIFY_FRESH_WAIT_MS = 10000;
 // Memory limits for the worker thread: parsing transcripts creates almost only short-lived temporary objects, so capping
 // the young generation at 6MB keeps the heap from ballooning during scans without slowing them down; the 512MB old
 // generation is only a safety net (normal use is far below it); if exceeded, V8 terminates the thread and it is
@@ -58,6 +83,9 @@ const WORKER_RETRIES = 3;
 const WORKER_LIMITS = Object.freeze({ maxYoungGenerationSizeMb: 6, maxOldGenerationSizeMb: 512 });
 const REFRESH_WAIT_MS = 10000;
 const noop = () => {};
+// Signature of the live Claude sessions (compact.js confirms a closed window from these)
+const liveSig = (sessions) => (Array.isArray(sessions) ? sessions : [])
+  .filter((s) => s && s.provider === 'claude' && s.live).map((s) => String(s.key)).sort().join('\n');
 
 let ctl = null;
 
@@ -67,7 +95,7 @@ function activate(context) {
 }
 
 function deactivate() {
-  if (ctl) ctl.stopWorker();
+  if (ctl) ctl.shutdown();
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +129,26 @@ class Controller {
     this.agentsMod = null;
     this.chrome = { contexts: {}, sBadge: null, tBadge: null, sDesc: null, tDesc: null, barSig: null };
     this.tabTypes = { TabInputWebview: vscode.TabInputWebview, TabInputCustom: vscode.TabInputCustom };
+    this.shared = null;          // lib/shared-scan.js while windows share one scan; null = this window scans alone
+    this.sharedErr = null;       // last shared-scan error logged (the same one is not logged again)
+    this.replayTimer = null;     // follower: re-runs the last snapshot while the leader has nothing new to publish
+    this.intervalMs = null;      // background slowdown sent to the worker ({ type: 'interval' }); null = refreshSeconds
+    this.workerRetries = 0;      // automatic restarts of the worker since it was last started on purpose
+    this.workerStartedAt = 0;
+    this.cfgGen = 0;             // bumped when a setting changes what is scanned; the worker echoes it in its snapshots
+    this.pubLive = null;         // leader: liveSig of the last published snapshot
+    this.echoNext = false;       // leader: publish the next snapshot even if unchanged (see publishShared)
+    this.dataSeq = 0;            // real snapshots rendered (replays not counted)
+    this.revealKeys = new Set(); // sessions shown although outside the scope, after "Show" in a notification
+    this.needsYou = notifyLib.createNeedsYouTracker(); // fed all sessions, not just this window's scope
+    this.notifyReseed = false;   // the next snapshot built with the current settings seeds a new tracker
+    this.needsLamps = null;      // lamps of all sessions (key -> sessionLamps) from the last render
+    this.notifyPending = new Map(); // key -> transitionId waiting CLAIM_DELAY_MS in an unfocused window
+    this.notifyAwaiting = new Map(); // key -> item whose check waits for a snapshot newer than the one that showed it
+    this.notifyDeferred = new Map(); // key -> item: no system notification here; shown when a window gets focus
+    this.notifyTimers = new Set();
+    this.push = null;            // lib/push-runtime.js (null when it failed to load)
+    this.stopped = false;
   }
 
   t(key, vars) { return this.i18n.t(key, vars); }
@@ -140,6 +188,8 @@ class Controller {
     this.overview = new AgentTreeProvider({ i18n: this.i18n, hideCompleted: this.cfg().get('hideCompleted', false) });
     this.treeView = vscode.window.createTreeView(TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
     sub(this.overview, this.treeView);
+    this.panelTree = vscode.window.createTreeView(PANEL_TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
+    sub(this.panelTree);
 
     // Bottom panel: session list + agents (one webview)
     this.setupAgentsView();
@@ -157,13 +207,29 @@ class Controller {
     this.setupCompact();
     this.setupAutoCompact();
     this.setupStorage();
+    this.setupPush();
     this.listen();
 
     this.updateChrome();
     this.updateAgents(Date.now());
     this.introFocus();
+    // With a shared scan the worker starts paused and resumes once this window leads (or scans alone)
+    this.shared = this.createShared();
     this.startWorker();
-    sub({ dispose: () => this.stopWorker() });
+    this.startShared();
+    this.updateInterval();
+    sub({ dispose: () => this.shutdown() });
+  }
+
+  // Deactivation: leave the shared scan first (another window takes over at once), then stop the worker
+  shutdown() {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const timer of this.notifyTimers) clearTimeout(timer);
+    this.notifyTimers.clear();
+    if (this.push) this.guard('push', () => this.push.dispose());
+    this.stopShared();
+    this.stopWorker();
   }
 
   setupAgentsView() {
@@ -306,7 +372,13 @@ class Controller {
     sub(
       vscode.workspace.onDidChangeConfiguration((e) => this.onConfig(e)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.render()),
-      vscode.window.onDidChangeWindowState(() => { this.onTabs(); this.updateViewDwell(); }),
+      vscode.window.onDidChangeWindowState(() => {
+        this.onTabs();
+        this.updateViewDwell();
+        if (this.shared) this.shared.setWindowFocused(this.windowFocused()); // onPresence updates the interval
+        else this.updateInterval();
+        this.guard('notify', () => this.deliverDeferred());
+      }),
     );
     const tg = vscode.window.tabGroups;
     if (tg) {
@@ -364,6 +436,23 @@ class Controller {
     };
   }
 
+  refreshMs() { return Math.max(1, num(this.cfg().get('refreshSeconds', 2), 2)) * 1000; }
+
+  backgroundMs() {
+    const B = BACKGROUND_SECONDS;
+    return Math.min(B.max, Math.max(B.min, num(this.cfg().get('backgroundRefreshSeconds', B.dflt), B.dflt))) * 1000;
+  }
+
+  /**
+   * Windows share a scan only when this matches: the extension version (windows not yet reloaded after an update scan on
+   * their own) and the WorkerConfig without observedCompact (learned per window, and swapped without a rebuild) and
+   * intervalMs (so a different refresh speed does not split windows; the leader's applies).
+   */
+  cfgKey() {
+    const { observedCompact, intervalMs, ...rest } = this.workerConfig(); // eslint-disable-line no-unused-vars
+    return JSON.stringify({ version: VERSION, ...rest });
+  }
+
   /** WorkerConfig: default paths are resolved on the main thread and passed in */
   workerConfig() {
     const c = this.cfg();
@@ -381,7 +470,7 @@ class Controller {
     const codexHome = codexSetting || (env.CODEX_HOME ? expandHome(env.CODEX_HOME, home) : path.join(home, '.codex'));
     const codexHomeSource = codexSetting ? 'setting' : env.CODEX_HOME ? 'env' : 'default';
     return {
-      intervalMs: Math.max(1, num(c.get('refreshSeconds', 2), 2)) * 1000,
+      intervalMs: this.refreshMs(),
       activeWindowMinutes: num(c.get('activeWindowMinutes', 30), 30),
       staleMinutes: num(c.get('staleMinutes', 5), 5),
       claude: {
@@ -406,37 +495,66 @@ class Controller {
       return;
     }
     const hit = (keys) => keys.some((k) => e.affectsConfiguration(`agentMonitor.${k}`));
-    if (hit(MONITOR_KEYS) && this.worker) this.worker.postMessage({ type: 'config', cfg: this.workerConfig() });
+    if (hit(MONITOR_KEYS)) {
+      this.cfgGen++;
+      // Sessions that only show up under the new settings (another folder, a provider turned on, ...) are not new waits
+      if (hit(MONITOR_KEYS.filter((k) => k !== 'refreshSeconds'))) this.notifyReseed = true;
+      if (this.worker) this.worker.postMessage({ type: 'config', cfg: this.workerConfig(), gen: this.cfgGen });
+      if (this.shared) this.shared.setCfgKey(this.cfgKey());
+    }
+    if (hit(['scope'])) this.revealKeys.clear();
+    if (hit(PUSH_KEYS) && this.push) this.guard('push', () => this.push.onSettings());
+    if (hit(['shareScanAcrossWindows'])) this.guard('sharedScan', () => this.applySharing());
+    if (hit(['backgroundRefreshSeconds']) && this.shared) this.shared.setIdleHeartbeatMs(this.backgroundMs());
+    if (hit(['refreshSeconds', 'backgroundRefreshSeconds'])) this.updateInterval();
     if (e.affectsConfiguration('agentMonitor.onlyWorkspace')) this.migrateScope();
     this.render(); // scope, hide-completed, cost, status bar, etc.: recompute from the last snapshot now instead of waiting for the next scan
   }
 
   // ---------- worker ----------
 
-  startWorker(retries = 0) {
-    const w = new Worker(path.join(this.context.extensionPath, 'lib', 'worker.js'), { workerData: this.workerConfig(), resourceLimits: WORKER_LIMITS });
+  /**
+   * restart: an automatic restart after a crash (counts against WORKER_RETRIES); otherwise the worker is started on purpose
+   * (activation, Refresh, a storage request, becoming leader) and gets a full retry budget.
+   */
+  startWorker(restart = false) {
+    if (!restart) this.workerRetries = 0;
+    // A new worker comes back paused unless this window scans (alone, or as the shared scan's leader / solo)
+    const scan = this.scanning();
+    const cfg = { ...this.workerConfig(), cfgGen: this.cfgGen };
+    const w = new Worker(path.join(this.context.extensionPath, 'lib', 'worker.js'), { workerData: scan ? cfg : { ...cfg, paused: true }, resourceLimits: WORKER_LIMITS });
     this.worker = w;
+    this.workerStartedAt = Date.now();
     this.focusSig = null; // new worker: tell it again which sessions need details
     w.on('message', (m) => {
       if (!m || typeof m !== 'object') return;
-      if (m.type === 'snapshot') {
-        this.guard('snapshot', () => this.onSnapshot(m));
-        for (const done of this.waiters.splice(0)) done();
-      } else if (m.type === 'storage') this.onStorage(m);
+      if (m.type === 'snapshot') this.onWorkerSnapshot(m);
+      else if (m.type === 'storage') this.onStorage(m);
       else if (m.type === 'error') this.log(this.t('ext.log.source', { source: String(m.source || 'worker'), message: String(m.message || '') }));
     });
     w.on('error', (err) => this.log(this.t('ext.log.workerError', { error: errText(err) })));
     w.on('exit', (code) => {
       if (w !== this.worker) return; // stopped on purpose or already replaced
       this.worker = null;
-      if (code !== 0 && retries < WORKER_RETRIES) {
-        this.log(this.t('ext.log.workerExit', { code }));
-        this.startWorker(retries + 1);
+      if (code === 0) return;
+      this.log(this.t('ext.log.workerExit', { code }));
+      if (this.workerRetries < WORKER_RETRIES) {
+        this.workerRetries++;
+        this.startWorker(true);
+        return;
       }
+      // Given up: with a shared scan, leave the scanning to a window whose worker works and show its snapshots
+      // (a leader would otherwise keep beating and freeze every window); Refresh starts a worker and allows leading again
+      if (this.shared) this.guard('sharedScan', () => this.shared.setCanLead(false));
     });
+    // Shared scan: the worker scans for the union of all windows' focus (an unchanged union is not reported again)
+    if (this.shared && scan) w.postMessage({ type: 'focus', keys: this.shared.focusKeys() });
     this.sendFocus();
+    if (this.intervalMs) w.postMessage({ type: 'interval', ms: this.intervalMs });
     // If someone is still waiting for a storage scan when the worker was replaced, ask the new worker again
     if (this.storageWaiters.length) w.postMessage({ type: 'storage', force: this.storageForce });
+    // Last, since it may make this window leader at once (onRole then resumes this worker)
+    if (!restart && this.shared) this.guard('sharedScan', () => this.shared.setCanLead(true));
   }
 
   stopWorker() {
@@ -445,10 +563,45 @@ class Controller {
     if (w) w.terminate();
   }
 
-  // Ask the worker to rescan now; restart it if it died. The progress indicator spins until the next snapshot arrives
+  /** Whether this window's worker scans: always when scanning alone; with a shared scan only as leader or solo */
+  scanning() {
+    if (!this.shared) return true;
+    const role = this.shared.role;
+    return role === sharedScanLib.ROLES.LEADER || role === sharedScanLib.ROLES.SOLO;
+  }
+
+  onWorkerSnapshot(m) {
+    // Only crashes in a row count: a worker that has run for a while gets its retry budget back
+    if (this.workerRetries && Date.now() - this.workerStartedAt >= WORKER_HEALTHY_MS) this.workerRetries = 0;
+    const current = m.cfgGen === this.cfgGen; // built with the current settings (not one scanned just before a change)
+    if (this.shared) {
+      const role = this.shared.role;
+      if (role === sharedScanLib.ROLES.FOLLOWER) return; // a scan that finished just before the pause; the leader's snapshots are shown instead
+      if (role === sharedScanLib.ROLES.LEADER && current) this.guard('sharedScan', () => this.publishShared(m));
+    }
+    if (current && this.notifyReseed) this.reseedNeedsYou();
+    this.guard('snapshot', () => this.onSnapshot(m));
+    for (const done of this.waiters.splice(0)) done();
+  }
+
+  /**
+   * Leader: publish the snapshot (skipped when only now changed). After a publish that changed which Claude sessions are
+   * live, the next one is published even if unchanged: compact.js confirms a closed window only after two snapshots in a
+   * row, and in a follower only real snapshots count (not its replays).
+   */
+  publishShared(m) {
+    if (!this.shared.publish(m, { force: this.echoNext })) return;
+    const live = liveSig(m.sessions);
+    this.echoNext = this.pubLive !== null && live !== this.pubLive;
+    this.pubLive = live;
+  }
+
+  // Ask the worker to rescan now; restart it if it died. The progress indicator spins until the next snapshot arrives.
+  // With a shared scan a follower asks the leader, whose next publish carries the result even if nothing changed
   refresh() {
-    if (this.worker) this.worker.postMessage({ type: 'refresh' });
-    else this.startWorker();
+    if (!this.worker) this.startWorker();
+    else if (!this.shared) this.worker.postMessage({ type: 'refresh' });
+    if (this.shared) this.shared.requestRefresh(); // leader / solo: onRefreshRequest -> refreshWorker
     const next = new Promise((resolve) => {
       const timer = setTimeout(resolve, REFRESH_WAIT_MS); // don't let the progress indicator spin forever if the worker never answers
       if (timer && typeof timer.unref === 'function') timer.unref();
@@ -459,16 +612,139 @@ class Controller {
     return vscode.window.withProgress({ location: { viewId } }, () => next);
   }
 
+  /** Scan now in this window's worker, starting one if it died */
+  refreshWorker() {
+    if (this.worker) this.worker.postMessage({ type: 'refresh' });
+    else this.startWorker();
+  }
+
   sendFocus() {
     const keys = [...new Set([this.shownKey, this.follower && this.follower.key].filter(Boolean))];
     const sig = keys.join('\n');
     if (sig === this.focusSig) return;
     this.focusSig = sig;
-    if (this.worker) this.worker.postMessage({ type: 'focus', keys });
+    if (this.shared) this.shared.setFocus(keys); // the scanning window's worker gets the union through onFocusUnion
+    else if (this.worker) this.worker.postMessage({ type: 'focus', keys });
+  }
+
+  /**
+   * Background slowdown: while no VS Code window has focus (any window when sharing a scan, else this one), the worker scans
+   * every max(refreshSeconds, backgroundRefreshSeconds); back to refreshSeconds as soon as a window has focus.
+   */
+  updateInterval() {
+    const anyFocused = this.shared ? this.shared.anyWindowFocused() : this.windowFocused();
+    const bg = this.backgroundMs();
+    const ms = !anyFocused && bg > this.refreshMs() ? bg : null;
+    if (ms === this.intervalMs) return;
+    this.intervalMs = ms;
+    if (this.worker) this.worker.postMessage({ type: 'interval', ms });
+  }
+
+  // ---------- Shared scan across windows ----------
+
+  sharingWanted() {
+    const u = this.context.globalStorageUri;
+    return !!(u && u.fsPath) && this.cfg().get('shareScanAcrossWindows', true) !== false;
+  }
+
+  /** A shared scan (not started yet), or null when the setting is off or there is no global storage dir */
+  createShared() {
+    if (!this.sharingWanted()) return null;
+    const shared = sharedScanLib.createSharedScan({
+      dir: path.join(this.context.globalStorageUri.fsPath, SHARED_DIR),
+      cfgKey: this.cfgKey(),
+      idleHeartbeatMs: this.backgroundMs(), // while no window has focus, the windows check on each other less often too
+      onRole: (role) => this.guard('sharedScan', () => this.onRole(role)),
+      onSnapshot: (snap) => this.guard('snapshot', () => this.onSharedSnapshot(snap)),
+      onFocusUnion: (keys) => { if (this.worker) this.worker.postMessage({ type: 'focus', keys }); },
+      onRefreshRequest: () => this.guard('sharedScan', () => this.refreshWorker()),
+      onPresence: () => this.guard('sharedScan', () => this.updateInterval()),
+      onError: (err) => this.logSharedError(err),
+    });
+    shared.setWindowFocused(this.windowFocused()); // before anyone asks anyWindowFocused()
+    return shared;
+  }
+
+  startShared() {
+    const shared = this.shared;
+    if (!shared) return;
+    this.focusSig = null;
+    this.sendFocus(); // kept until start writes this window's file
+    shared.start(); // may already pick the role (and render the leader's snapshot) before returning
+    this.updateInterval();
+  }
+
+  stopShared() {
+    const shared = this.shared;
+    if (!shared) return;
+    this.shared = null;
+    this.scheduleReplay(); // clears the follower's timer
+    shared.stop();
+  }
+
+  /** agentMonitor.shareScanAcrossWindows changed: join the shared scan, or leave it and scan alone again */
+  applySharing() {
+    if (this.stopped || this.sharingWanted() === !!this.shared) return;
+    if (!this.shared) {
+      this.shared = this.createShared();
+      this.startShared();
+      return;
+    }
+    this.stopShared();
+    this.focusSig = null;
+    this.sendFocus();
+    if (this.worker) this.worker.postMessage({ type: 'resume' });
+    else this.startWorker();
+    this.updateInterval();
+  }
+
+  // Leader / solo: this window's worker scans (onFocusUnion has just given it its focus); follower: pause it and show the leader's snapshots
+  onRole(role) {
+    const scan = role === sharedScanLib.ROLES.LEADER || role === sharedScanLib.ROLES.SOLO;
+    if (role === sharedScanLib.ROLES.LEADER) { this.pubLive = null; this.echoNext = false; }
+    if (this.worker) this.worker.postMessage({ type: scan ? 'resume' : 'pause' });
+    else if (scan) this.startWorker();
+    this.scheduleReplay();
+  }
+
+  // Follower: a snapshot published by the leader. Its content is current, but its now is from when the leader last wrote it
+  // (publishing is skipped while only now changes), so the local clock is used instead
+  onSharedSnapshot(snap) {
+    if (this.notifyReseed) this.reseedNeedsYou(); // only the current leader's snapshots under this window's cfgKey get here
+    this.onSnapshot({ ...snap, now: Date.now() });
+    for (const done of this.waiters.splice(0)) done();
+  }
+
+  /**
+   * Follower: while the leader has nothing new to publish, re-run the last snapshot with the local clock at the scan interval,
+   * as a local worker would send it. Relative times ("5 min ago", durations, cache countdowns), the dwell timers and
+   * compact.js' cache reminders then advance as without sharing. Replays carry replay: true: they are not new data, so
+   * compact.js does not count them towards confirming a closed window and they do not count as a fresh look for the
+   * "needs you" check. Changes that depend on time (stale, approval guess, leaving the activity window) are computed by
+   * the leader's worker, change its snapshot and are published. Called after every snapshot and role change; clears the
+   * timer otherwise.
+   */
+  scheduleReplay() {
+    if (this.replayTimer) clearTimeout(this.replayTimer);
+    this.replayTimer = null;
+    if (this.stopped || !this.last || !this.shared || this.shared.role !== sharedScanLib.ROLES.FOLLOWER) return;
+    this.replayTimer = setTimeout(() => {
+      this.replayTimer = null;
+      this.guard('snapshot', () => this.onSnapshot({ ...this.last, now: Date.now(), replay: true }));
+    }, this.intervalMs || this.refreshMs());
+    if (typeof this.replayTimer.unref === 'function') this.replayTimer.unref();
+  }
+
+  logSharedError(err) {
+    const text = String((err && err.message) || err);
+    if (text === this.sharedErr) return; // e.g. an unwritable dir fails on every heartbeat
+    this.sharedErr = text;
+    this.log(this.t('ext.log.failed', { what: 'sharedScan', error: errText(err) }));
   }
 
   onSnapshot(m) {
     const first = !this.last;
+    if (!m.replay) this.dataSeq++;
     this.last = { ...m, sessions: Array.isArray(m.sessions) ? m.sessions : [] };
     this.byKey = new Map(this.last.sessions.filter((s) => s && typeof s.key === 'string').map((s) => [s.key, s]));
     // Following: match against the current tab once on the first snapshot; afterwards only handle the late follow for a session that didn't exist yet at tab switch
@@ -485,6 +761,7 @@ class Controller {
       this.guard('compact', () => this.compactApi.onSnapshot(this.last));
     }
     this.guard('observedCompact', () => this.learnObservedCompact(this.last.sessions));
+    this.scheduleReplay();
   }
 
   // ---------- Observed compaction points ----------
@@ -529,7 +806,7 @@ class Controller {
       Promise.resolve(gs.update(OBSERVED_AT_KEY, { ...this.observedAt })).catch(noop);
       if (changed) Promise.resolve(gs.update(OBSERVED_KEY, { ...this.observed })).catch(noop);
     }
-    if (changed && this.worker) this.worker.postMessage({ type: 'config', cfg: this.workerConfig() });
+    if (changed && this.worker) this.worker.postMessage({ type: 'config', cfg: this.workerConfig(), gen: this.cfgGen });
     return changed;
   }
 
@@ -571,8 +848,15 @@ class Controller {
 
   // ---------- Rendering ----------
 
+  // Sessions in this window's scope, plus any revealed from a notification ("Show") until the user selects another row
+  // or changes the scope
   currentScoped() {
-    return this.last ? scopeLib.filterByScope(this.last.sessions, this.scope(), this.ws()) : [];
+    if (!this.last) return [];
+    const scoped = scopeLib.filterByScope(this.last.sessions, this.scope(), this.ws());
+    if (!this.revealKeys.size) return scoped;
+    const have = new Set(scoped.map((s) => s.key));
+    const extra = this.last.sessions.filter((s) => s && this.revealKeys.has(s.key) && !have.has(s.key));
+    return extra.length ? scoped.concat(extra) : scoped;
   }
 
   render() {
@@ -597,6 +881,7 @@ class Controller {
     this.sendFocus();
     this.updateTabDwell();
     this.updateViewDwell();
+    this.guard('notify', () => this.checkNeedsYou());
   }
 
   // What the content area shows: the selection -> current conversation -> first row. If nothing was ever selected, select by the same rules and keep it
@@ -619,9 +904,262 @@ class Controller {
    */
   userSelect(key) {
     if (typeof key !== 'string' || !this.byKey.has(key) || !this.leftKeys.includes(key)) return;
+    if (this.revealKeys.size && !this.revealKeys.has(key)) this.revealKeys.clear(); // back to the scope alone
     this.selectedKey = key;
     Promise.resolve(this.seen.mark(key)).then((changed) => { if (changed) this.render(); }, noop);
     this.render();
+  }
+
+  // ---------- "Needs you" notifications ----------
+
+  notifyEnabled() { return this.cfg().get('notifyNeedsYou', true) !== false; }
+
+  /**
+   * Claim markers, so one window reports each wait: a private folder under the system temp dir that every VS Code-family
+   * app of this user shares (so VS Code and Cursor, say, do not both report it), else this app's global storage.
+   * No dir: claimOnce lets every window report.
+   */
+  notifyDir() {
+    const shared = notifyLib.sharedClaimDir();
+    if (shared) return shared;
+    const u = this.context.globalStorageUri;
+    return u && u.fsPath ? path.join(u.fsPath, NOTIFY_DIR) : '';
+  }
+
+  /** A system notification can be shown from here: not in a remote window (it would appear on the remote machine) */
+  systemNotifier() {
+    return !vscode.env.remoteName && notifyLib.hasSystemNotifier();
+  }
+
+  reseedNeedsYou() {
+    this.notifyReseed = false;
+    this.needsYou = notifyLib.createNeedsYouTracker();
+    if (this.push) this.guard('push', () => this.push.reseed());
+  }
+
+  /**
+   * After each render: the tracker gets all sessions (not the scoped list, so switching scope never reports a wait that
+   * began earlier) and reports the ones that just started waiting; the first call only seeds it. It is updated even while
+   * notifications are off, so turning them on does not report waits that were already there.
+   */
+  checkNeedsYou() {
+    const sessions = this.last.sessions;
+    const lamps = lampLib.computeLamps(sessions, { seen: this.seen.reader() });
+    this.needsLamps = lamps.bySession;
+    for (const item of this.needsYou.update(sessions, lamps)) this.notifyNeedsYou(item);
+    // Remote push: the same sessions and lamps, plus the quota snapshot (usage limits); seq counts real snapshots only
+    if (this.push) this.guard('push', () => this.push.update({ sessions, lamps, quota: this.last.quota, seq: this.dataSeq }));
+    for (const key of [...this.notifyDeferred.keys()]) if (!this.currentWait(key)) this.notifyDeferred.delete(key);
+    if (this.notifyAwaiting.size && !this.last.replay) {
+      for (const item of [...this.notifyAwaiting.values()]) {
+        if (this.dataSeq <= item.seq) continue;
+        this.notifyAwaiting.delete(item.key);
+        this.notifyLater(item).catch((err) => this.log(this.t('ext.log.failed', { what: 'notify', error: errText(err) })));
+      }
+    }
+  }
+
+  /** The item for the session's current wait, from the last rendered data; null when it does not wait */
+  currentWait(key) {
+    const s = this.byKey.get(key);
+    const L = this.needsLamps && this.needsLamps.get(key);
+    return s && L && L.lamp === S.LAMP.NEEDS_YOU ? notifyLib.itemFor(s, L) : null;
+  }
+
+  /** The user is looking at this chat in this focused window: its tab is the active editor tab, or the panel shows it */
+  lookingAt(key) {
+    if (!this.windowFocused() || !this.last) return false;
+    if (this.agentsView && this.agentsView.visible && this.shownKey === key) return true;
+    const info = scopeLib.classifyTab(this.activeTab(), this.tabTypes);
+    return !!info && scopeLib.matchChatTab(info, this.last.sessions, this.ws()) === key;
+  }
+
+  // Focused window: claim now and show a toast (claimed but not shown for the chat the user is looking at, so no other
+  // window reports it either). Unfocused: give a focused window CLAIM_DELAY_MS to claim it first
+  notifyNeedsYou(item) {
+    if (this.stopped) return;
+    const how = notifyLib.plan({ enabled: this.notifyEnabled(), windowFocused: this.windowFocused() });
+    if (how === 'toast') {
+      if (notifyLib.claimOnce(this.notifyDir(), item.transitionId, Date.now()) && !this.lookingAt(item.key)) this.needsYouToast(item);
+    } else if (how === 'claimLater') {
+      this.notifyPending.set(item.key, item.transitionId); // a newer wait of the same session replaces this one
+      const pending = { ...item, seq: this.dataSeq, until: Date.now() + notifyLib.CLAIM_DELAY_MS + NOTIFY_FRESH_WAIT_MS };
+      // The snapshot that showed the wait can be a background interval old, and nothing new would arrive before the check
+      // below: rescan shortly before it (a follower asks the leader, whose next publish is then written even if unchanged)
+      this.later(() => {
+        if (this.notifyPending.get(item.key) === item.transitionId) this.rescan();
+      }, Math.max(0, notifyLib.CLAIM_DELAY_MS - NOTIFY_RESCAN_LEAD_MS));
+      this.later(() => this.notifyLater(pending), notifyLib.CLAIM_DELAY_MS);
+    }
+  }
+
+  /** Scan now, for a check that wants current data: a follower asks the leader, whose next publish is written even if unchanged */
+  rescan() {
+    if (this.stopped) return;
+    if (this.shared) this.shared.requestRefresh();
+    else if (this.worker) this.worker.postMessage({ type: 'refresh' });
+  }
+
+  /** A notification timer, cleared on shutdown; errors are logged */
+  later(fn, ms) {
+    const timer = setTimeout(() => {
+      this.notifyTimers.delete(timer);
+      try {
+        Promise.resolve(fn()).catch((err) => this.log(this.t('ext.log.failed', { what: 'notify', error: errText(err) })));
+      } catch (err) {
+        this.log(this.t('ext.log.failed', { what: 'notify', error: errText(err) }));
+      }
+    }, ms);
+    this.notifyTimers.add(timer);
+  }
+
+  // CLAIM_DELAY_MS later, on data scanned after the wait was seen (waits for it, up to NOTIFY_FRESH_WAIT_MS): only if
+  // notifications are still on, the session still waits and no window claimed that wait. A system notification unless
+  // this window got focus meanwhile (then a toast). Where there is no system notification (Windows, remote windows), the
+  // wait is kept, unclaimed, and shown by the window that gets focus first; a failed command falls back to a toast.
+  async notifyLater(item) {
+    if (this.stopped || this.notifyPending.get(item.key) !== item.transitionId) return;
+    if (this.dataSeq <= item.seq && Date.now() < item.until) {
+      if (!this.notifyAwaiting.has(item.key)) this.later(() => this.notifyLater(item), item.until - Date.now());
+      this.notifyAwaiting.set(item.key, item); // checked again as soon as a newer snapshot is rendered
+      return;
+    }
+    this.notifyAwaiting.delete(item.key);
+    this.notifyPending.delete(item.key);
+    const cur = this.currentWait(item.key); // its id may have changed meanwhile (e.g. answered, then asked again)
+    if (!this.notifyEnabled() || !cur) return;
+    const focused = this.windowFocused();
+    if (!focused && !this.systemNotifier()) {
+      this.notifyDeferred.set(cur.key, cur);
+      return;
+    }
+    if (!notifyLib.claimOnce(this.notifyDir(), cur.transitionId, Date.now())) return;
+    const msg = notifyLib.formatNeedsYou(cur, this.i18n);
+    if (focused) {
+      if (!this.lookingAt(cur.key)) this.needsYouToast(cur, msg);
+    } else if (!(await notifyLib.sendSystemNotification(msg))) {
+      this.needsYouToast(cur, msg);
+    }
+  }
+
+  /** This window got focus: show the waits kept for lack of a system notification, if they still wait and no window has yet */
+  deliverDeferred() {
+    if (this.stopped || !this.notifyDeferred.size || !this.windowFocused()) return;
+    const keys = [...this.notifyDeferred.keys()];
+    this.notifyDeferred.clear();
+    if (!this.notifyEnabled()) return;
+    for (const key of keys) {
+      const cur = this.currentWait(key);
+      if (cur && notifyLib.claimOnce(this.notifyDir(), cur.transitionId, Date.now()) && !this.lookingAt(key)) this.needsYouToast(cur);
+    }
+  }
+
+  needsYouToast(item, msg = notifyLib.formatNeedsYou(item, this.i18n)) {
+    const show = this.t('ext.notify.show');
+    Promise.resolve(vscode.window.showInformationMessage(msg.toast, show))
+      .then((pick) => (pick === show && !this.stopped ? this.revealSession(item.key) : undefined))
+      .catch((err) => this.log(this.t('ext.log.failed', { what: 'notify', error: errText(err) })));
+  }
+
+  // "Show": select the session in the bottom panel and reveal it. When this window's scope hides it, it is added to this
+  // window's list until the user selects another row or changes the scope (no setting is written)
+  async revealSession(key) {
+    if (this.byKey.has(key) && !this.currentScoped().some((s) => s.key === key)) {
+      this.revealKeys.add(key);
+      this.render();
+    }
+    this.userSelect(key);
+    await vscode.commands.executeCommand(`${AGENTS_VIEW}.focus`);
+  }
+
+  // ---------- Remote push ----------
+
+  // The runtime (lib/push-runtime.js) and the agentMonitor.push.setup command (lib/push-setup.js); if either fails to
+  // load, the command explains that push is unavailable and nothing is ever sent
+  setupPush() {
+    const context = this.context;
+    let runtimeLib = null;
+    let setupLib = null;
+    try {
+      runtimeLib = require('./lib/push-runtime');
+      setupLib = require('./lib/push-setup');
+    } catch (err) {
+      this.log(this.t('ext.log.moduleFailed', { module: 'push', error: errText(err) }));
+    }
+    const secrets = context.secrets || null;
+    if (runtimeLib && typeof runtimeLib.createPushRuntime === 'function') {
+      try {
+        this.push = runtimeLib.createPushRuntime({
+          read: () => this.pushSettings(),
+          secret: (key) => (secrets ? secrets.get(key) : undefined),
+          claimDir: () => this.notifyDir(),
+          i18n: this.i18n,
+          log: (line) => this.log(line),
+          warn: (text) => this.pushWarn(text),
+          notice: (text) => { Promise.resolve(vscode.window.showInformationMessage(text)).catch(noop); },
+          rescan: () => this.rescan(),
+        });
+      } catch (err) {
+        this.push = null;
+        this.log(this.t('ext.log.moduleFailed', { module: 'push', error: errText(err) }));
+      }
+    }
+    context.subscriptions.push(vscode.commands.registerCommand(PUSH_CMD, () => {
+      if (!this.push || !setupLib || typeof setupLib.runPushSetup !== 'function') {
+        vscode.window.showErrorMessage(this.t('ext.pushUnavailable'));
+        return undefined;
+      }
+      return Promise.resolve(setupLib.runPushSetup({
+        i18n: this.i18n,
+        secrets,
+        globalState: context.globalState,
+        read: () => this.pushSettings(),
+        write: (key, value) => this.cfg().update(key, value, vscode.ConfigurationTarget.Global),
+        runtime: this.push,
+        openSettings: () => vscode.commands.executeCommand('workbench.action.openSettings', 'agentMonitor.push'),
+      })).catch((err) => this.pushSetupFailed(err));
+    }));
+  }
+
+  /** The setup flow failed (e.g. settings.json can't be written, or the keychain refused): say so, not only in the log */
+  pushSetupFailed(err) {
+    this.log(this.t('ext.log.failed', { what: 'push', error: errText(err) }));
+    if (this.stopped) return;
+    const show = this.t('push.ui.showOutput');
+    const error = String((err && err.message) || err).split('\n')[0].slice(0, 300); // the stack is in the output
+    Promise.resolve(vscode.window.showErrorMessage(this.t('push.ui.setupFailed', { error }), show))
+      .then((pick) => { if (pick === show && this.output) this.output.show(true); })
+      .catch(noop);
+  }
+
+  /** Push settings from user settings only: a workspace value is ignored (inspect().globalValue), defaults in lib/push.js */
+  pushSettings() {
+    const c = this.cfg();
+    const g = (k) => {
+      try {
+        const i = c.inspect(k);
+        return i ? i.globalValue : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const channels = g('push.channels');
+    return {
+      enabled: g('push.enabled') === true,
+      events: g('push.events'),
+      delaySeconds: g('push.delaySeconds'),
+      includeTitle: g('push.includeTitle') === true,
+      channels: Array.isArray(channels) ? channels : [],
+    };
+  }
+
+  /** A channel keeps failing: one warning (the runtime does not repeat it until a send works again) */
+  pushWarn(text) {
+    if (this.stopped) return;
+    const open = this.t('push.ui.openSetup');
+    Promise.resolve(vscode.window.showWarningMessage(text, open))
+      .then((pick) => (pick === open && !this.stopped ? vscode.commands.executeCommand(PUSH_CMD) : undefined))
+      .catch((err) => this.log(this.t('ext.log.failed', { what: 'push', error: errText(err) })));
   }
 
   // ---------- Session list position and width ----------
@@ -741,7 +1279,7 @@ class Controller {
     return parts.join('\n\n');
   }
 
-  // View chrome: badge (on the bottom panel's webview view), description next to the title, empty-state context key (used by the overview tree's welcome view)
+  // View chrome: badge (sidebar tree, and the hidden panel tree so it shows on the panel tab), description next to the title, empty-state context key (used by the overview tree's welcome view)
   updateChrome() {
     const i18n = this.i18n;
     const loaded = !!this.last;
@@ -755,14 +1293,14 @@ class Controller {
     const badge = b.value ? { value: b.value, tooltip: b.tooltip } : undefined;
     const bSig = badge ? `${badge.value}\u0001${badge.tooltip}` : '';
     const av = this.agentsView;
-    if (bSig !== this.chrome.sBadge && av && typeof av.setBadge === 'function') { this.chrome.sBadge = bSig; av.setBadge(badge); }
+    if (bSig !== this.chrome.sBadge) { this.chrome.sBadge = bSig; this.panelTree.badge = badge; }
     if (bSig !== this.chrome.tBadge) { this.chrome.tBadge = bSig; this.treeView.badge = badge; }
 
     const scopeText = scope === scopeLib.SCOPE.WORKSPACE ? fmt.formatScope(scope, i18n).label : '';
     const sDesc = scopeText || undefined;
     if (sDesc !== this.chrome.sDesc && av && typeof av.setDescription === 'function') { this.chrome.sDesc = sDesc; av.setDescription(sDesc); }
     const tDesc = [scopeText, this.settings().hideCompleted ? i18n.t('tree.hideCompleted') : ''].filter(Boolean).join(fmt.SEP) || undefined;
-    if (tDesc !== this.chrome.tDesc) { this.chrome.tDesc = tDesc; this.treeView.description = tDesc; }
+    if (tDesc !== this.chrome.tDesc) { this.chrome.tDesc = tDesc; this.treeView.description = tDesc; this.panelTree.description = tDesc; }
   }
 
   setContext(key, value) {

@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "在终端旁边看到你所有的 Claude Code 和 Codex 聊天：哪些智能体在干活、哪些在等你、每个上下文用了多少。可以用便宜的模型压缩，缓存过期前提醒你，撞额度后帮你接着干。只读取本机的会话记录，扩展本身不联网。非官方项目，与 Anthropic 或 OpenAI 没有关联。个人和非商业用途免费；商业用途需另行授权。",
-  "capabilities.untrusted": "在受限模式下，指向其它文件夹或程序的设置（Claude Code 命令行路径、Claude 项目文件夹、Codex 主目录）只会从你的用户设置里读取。",
+  "description": "在终端旁边看到你所有的 Claude Code 和 Codex 聊天：哪些智能体在干活、哪些在等你、每个上下文用了多少。可以用便宜的模型压缩，缓存过期前提醒你，撞额度后帮你接着干。只读取本机的会话记录；除非你开启可选的推送通知或发送测试消息，扩展本身不联网。非官方项目，与 Anthropic 或 OpenAI 没有关联。个人和非商业用途免费；商业用途需另行授权。",
+  "capabilities.untrusted": "在受限模式下，指向其它文件夹或程序的设置（Claude Code 命令行路径、Claude 项目文件夹、Codex 主目录）只会从你的用户设置里读取。推送通知的设置则始终只从你的用户设置里读取。",
 
   "container.title": "智能体监视器",
   "view.overview": "总览",
@@ -33,6 +33,7 @@
   "cmd.handoff": "写交接笔记并开新会话…",
   "cmd.setAutoCompact": "设置自动压缩阈值…",
   "cmd.storage": "存储位置与占用",
+  "cmd.pushSetup": "推送通知…",
   "submenu.scope.all": "范围：所有会话",
   "submenu.scope.workspace": "范围：当前工作区",
 
@@ -56,6 +57,7 @@
   "config.sessionListPosition.auto": "跟终端的标签列表同一侧（默认右侧）。",
   "config.sessionListPosition.left": "在左侧，智能体在右侧。",
   "config.sessionListPosition.right": "在右侧，智能体在左侧。",
+  "config.notifyNeedsYou": "会话或智能体开始等你回复或批准时通知你：在有焦点的 VS Code 窗口里弹出消息（你正在看的会话除外）；所有 VS Code 窗口都不在前台时发系统通知（macOS 和 Linux）。在 Windows 和远程窗口中，消息会改在你接下来切换到的 VS Code 窗口里显示。每次等待只由一个窗口通知。",
   "config.refreshSeconds": "重新读取会话记录的间隔（秒）。",
   "config.activeWindowMinutes": "显示这么多分钟内活跃过的会话。打开中的会话和当前选中的会话始终显示。",
   "config.staleMinutes": "超过这么多分钟没有新的记录行，就标记智能体为无活动。",
@@ -64,6 +66,8 @@
   "config.approvalGuess.allTools": "对所有工具生效，在无活动时长（staleMinutes）之后。",
   "config.approvalGuess.off": "从不推测。",
   "config.approvalGuessSeconds": "在快工具模式下，快工具调用超过多少秒没有结果，就算作可能在等批准。",
+  "config.backgroundRefreshSeconds": "所有 VS Code 窗口都不在前台时，改为每隔这么多秒重新读取会话记录，而不是按 `#agentMonitor.refreshSeconds#`（取两者中较长的）。数值越小，“需要你处理”的通知来得越快。",
+  "config.shareScanAcrossWindows": "让所有 VS Code 窗口共用一次会话记录读取：由一个窗口读取，其他窗口直接显示它的结果，更省 CPU 和内存。关闭后每个窗口各自读取。",
   "config.claude.enabled": "读取 Claude Code 的会话记录。",
   "config.claude.projectsDir": "存放 Claude Code 会话记录的文件夹。留空则使用 `$CLAUDE_CONFIG_DIR/projects` 或 `~/.claude/projects`。",
   "config.claude.cliPath": "Claude Code 命令行程序的路径，仅在后台压缩已关闭的会话时使用。留空则先在 PATH 里找 `claude`，再到已安装的 Claude Code 扩展里找。",
@@ -79,6 +83,15 @@
   "config.cacheReminderShortTtl": "也提醒使用 5 分钟缓存的会话。",
   "config.closeReminder": "当你关闭一个缓存仍然有效的大型 Claude Code 会话时，提示你压缩它或写一份交接笔记。",
   "config.postCompactHint": "会话压缩后，提醒你检查关键规则和约束是否还在。",
+  "config.push.enabled": "智能体需要你、因错误停止、撞上或解除使用额度时，向你的手机或团队聊天发送一条简短推送。默认关闭；用 [推送通知…](command:agentMonitor.push.setup) 选择推送到哪里。只发送项目文件夹名和状态（开启 `#agentMonitor.push.includeTitle#` 才会带上对话标题和子智能体名称）。这是扩展里唯一会联网的功能。",
+  "config.push.events": "推送开启时，哪些事件会发送推送。",
+  "config.push.events.needsYou": "智能体在等你回复或批准（过了延迟时间仍在等才推送）。",
+  "config.push.events.error": "智能体因 API 错误停止。",
+  "config.push.events.limitHit": "Claude Code 或 Codex 的使用额度用完。",
+  "config.push.events.limitReset": "使用额度已重置。",
+  "config.push.delaySeconds": "智能体等你多少秒后仍未处理才推送。会先弹出桌面通知；在这段时间内处理了就不推送。设为 `0` 则立即推送。",
+  "config.push.includeTitle": "同时发送对话标题（以及子智能体名称）。只发送真正的标题（你设置的，或智能体、应用生成的）；由你第一条提示词截取的标题永远不会发送。",
+  "config.push.channels": "推送发往哪里（只含不涉密的部分）。请用 [推送通知…](command:agentMonitor.push.setup) 添加、测试、编辑或删除渠道，不要手动编辑这个列表：令牌、密钥和 Webhook 地址保存在 VS Code 的安全存储里，不在这里。",
   "config.onlyWorkspace": "只显示当前工作区的会话。",
   "config.onlyWorkspace.deprecated": "已被范围设置（agentMonitor.scope）取代。已有的值会自动迁移。"
 }

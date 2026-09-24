@@ -209,7 +209,7 @@ function writeRegistry(home, pid, sid, o = {}) {
   }));
 }
 
-// Copy the fake CLI into the temp dir and make it executable
+// Copy the fake CLI into the temp dir and make it executable (chmod only toggles the read-only bit on Windows)
 const BIN = mkdirp(path.join(TMP, 'bin'));
 const FAKE = path.join(BIN, 'claude-fake');
 fs.copyFileSync(path.join(__dirname, 'fixtures', 'fake-claude.js'), FAKE);
@@ -221,6 +221,9 @@ function guardedSpawn(cli, args, opts) {
   assert.strictEqual(opts.shell, false);
   assert.deepStrictEqual(opts.stdio, ['ignore', 'pipe', 'pipe']);
   spawned.push({ cli, args, opts });
+  // Windows cannot start a script from its shebang line. There the product spawns claude.exe directly (a .cmd shim is refused
+  // before spawn), so the equivalent is running the fake CLI with this Node binary: still no shell, same args and options.
+  if (process.platform === 'win32') return cp.spawn(process.execPath, [cli, ...args], opts);
   return cp.spawn(cli, args, opts);
 }
 
@@ -486,19 +489,23 @@ test('CLI lookup order: cliPath setting → PATH (pure JS) → binary bundled wi
   const ext = path.join(root, 'ext');
   const extBin = mk(path.join(ext, 'resources', 'native-binary', 'claude'));
   const setting = mk(path.join(root, 'custom', 'my-claude'));
-  const PATH = ['relative/bin', dirN, dirA, dirB].join(':');
-  const env = { PATH, HOME: root };
+  const env = { HOME: root };
   const f = (o) => compact.findCli({ platform: 'darwin', env, extensionPath: ext, ...o });
 
   assert.deepStrictEqual(f({ cliPath: setting }), { path: setting, source: 'setting' });
   assert.deepStrictEqual(f({ cliPath: '~/custom/my-claude' }), { path: setting, source: 'setting' });
   assert.deepStrictEqual(f({ cliPath: path.join(root, 'missing') }), { error: 'cliPath', path: path.join(root, 'missing') });
-  assert.strictEqual(f({ cliPath: path.join(dirN, 'claude') }).error, 'cliPath', 'not executable');
   assert.strictEqual(f({ cliPath: 'claude' }).error, 'cliPath', 'relative');
-  assert.deepStrictEqual(f({ cliPath: '' }), { path: inA, source: 'path' });
-  assert.deepStrictEqual(f({ env: { PATH: dirN } }), { path: extBin, source: 'extension' });
-  assert.deepStrictEqual(f({ env: { PATH: dirN }, extensionPath: null }), { error: 'notFound' });
   assert.deepStrictEqual(f({ env: { PATH: '' }, extensionPath: path.join(root, 'no-ext') }), { error: 'notFound' });
+  // The POSIX lookup needs a real execute bit and a ':'-separated PATH. A Windows host has neither: X_OK only checks
+  // that the file exists, and drive letters (C:\...) contain ':'. The Windows lookup below runs on every host.
+  if (process.platform !== 'win32') {
+    const PATH = ['relative/bin', dirN, dirA, dirB].join(':');
+    assert.strictEqual(f({ cliPath: path.join(dirN, 'claude') }).error, 'cliPath', 'not executable');
+    assert.deepStrictEqual(f({ cliPath: '', env: { PATH, HOME: root } }), { path: inA, source: 'path' });
+    assert.deepStrictEqual(f({ env: { PATH: dirN } }), { path: extBin, source: 'extension' });
+    assert.deepStrictEqual(f({ env: { PATH: dirN }, extensionPath: null }), { error: 'notFound' });
+  }
 
   // Windows: .exe wins; a lone .cmd ranks after the extension's bundled .exe; .cmd needs a shell, so it is blocked before spawn
   const w = mkdirp(path.join(root, 'win'));
@@ -515,6 +522,30 @@ test('CLI lookup order: cliPath setting → PATH (pure JS) → binary bundled wi
   assert.strictEqual(shim.path, path.join(wCmd, 'claude.cmd'));
   assert.strictEqual(compact.needsShell(shim.path), true);
   assert.strictEqual(compact.needsShell(inA), false);
+});
+
+test('CLI path setting: ~ is HOME on macOS/Linux; on Windows it is USERPROFILE (HOME may be a Git Bash path), then the OS home dir', () => {
+  const root = mkdirp(path.join(TMP, 'home-expand'));
+  const posixHome = mkdirp(path.join(root, 'posix'));
+  const winHome = mkdirp(path.join(root, 'win'));
+  const mk = (p) => { mkdirp(path.dirname(p)); fs.writeFileSync(p, '#!/bin/sh\n'); fs.chmodSync(p, 0o755); return p; };
+  const inPosix = mk(path.join(posixHome, 'bin', 'claude'));
+  const inWin = mk(path.join(winHome, 'bin', 'claude.exe'));
+  const both = { HOME: posixHome, USERPROFILE: winHome };
+  // macOS / Linux: unchanged, HOME wins and USERPROFILE is ignored
+  assert.strictEqual(compact.homeFor(both, 'darwin'), posixHome);
+  assert.strictEqual(compact.homeFor(both, 'linux'), posixHome);
+  assert.strictEqual(compact.homeFor({ USERPROFILE: winHome }, 'linux'), os.homedir());
+  assert.deepStrictEqual(compact.findCli({ platform: 'darwin', env: both, cliPath: '~/bin/claude' }), { path: inPosix, source: 'setting' });
+  // Windows: USERPROFILE wins over a POSIX-style HOME; without USERPROFILE, the OS home dir (HOME is not used)
+  const gitBash = { HOME: '/c/Users/someone', USERPROFILE: winHome };
+  assert.strictEqual(compact.homeFor(gitBash, 'win32'), winHome);
+  assert.strictEqual(compact.homeFor({ HOME: '/c/Users/someone' }, 'win32'), os.homedir());
+  assert.strictEqual(compact.homeFor(null, 'win32'), os.homedir());
+  assert.deepStrictEqual(compact.findCli({ platform: 'win32', env: gitBash, cliPath: '~/bin/claude.exe' }), { path: inWin, source: 'setting' });
+  if (process.platform === 'win32') {
+    assert.deepStrictEqual(compact.findCli({ platform: 'win32', env: gitBash, cliPath: '~\\bin\\claude.exe' }), { path: inWin, source: 'setting' });
+  }
 });
 
 test('result parsing: whole-output JSON, last result line among many, garbage output', () => {
@@ -750,7 +781,7 @@ test('flow: compactConfirm off and registry readable → no confirmation; regist
 
   resetUi();
   const sc2 = scenario('bg-unverified');
-  fs.rmSync(path.join(sc2.home, 'sessions'), { recursive: true, force: true });
+  fs.rmSync(path.join(sc2.home, 'sessions'), { recursive: true, force: true, maxRetries: 5 });
   config.compactConfirm = false;
   ui.onQuickPick = pickBackground('claude-sonnet-5');
   try {
@@ -1032,6 +1063,30 @@ test('reminder: window closed (live → gone) shows once; closing several at onc
   } finally { rig.h.dispose(); }
 });
 
+test('reminder: a replayed snapshot (replay: true, a follower window re-running the last one) never confirms a closed window; the next real one does', async () => {
+  resetUi();
+  const now = Date.now();
+  const open = claudeSession({ live: true, liveStatus: 'busy', lastApiMs: now - 20 * MIN });
+  const closed = { ...open, live: false, liveStatus: null };
+  const { h } = reminderRig([open]);
+  try {
+    h.onSnapshot({ now, sessions: [open] });
+    h.onSnapshot({ now: now + 2000, sessions: [closed] }); // one failed registry read
+    h.onSnapshot({ now: now + 4000, sessions: [closed], replay: true });
+    h.onSnapshot({ now: now + 6000, sessions: [closed], replay: true });
+    await tick(10);
+    assert.strictEqual(log.messages.length, 0, 'replays counted as a second look');
+    h.onSnapshot({ now: now + 7000, sessions: [open] }); // the next real scan sees it live again
+    await tick(10);
+    assert.strictEqual(log.messages.length, 0);
+    h.onSnapshot({ now: now + 9000, sessions: [closed] });
+    h.onSnapshot({ now: now + 11000, sessions: [closed], replay: true });
+    h.onSnapshot({ now: now + 13000, sessions: [closed] });
+    await tick(10);
+    assert.strictEqual(log.messages.filter((m) => m.items.includes(t('compact.remind.close.compact'))).length, 1, 'two real snapshots confirm it');
+  } finally { h.dispose(); }
+});
+
 test('reminder: compact count goes up → prompt once to check constraints; no prompt on first sight; nothing more after "do not show again"', async () => {
   resetUi();
   const now = Date.now();
@@ -1102,7 +1157,7 @@ test('safety: every spawn in these tests runs the fake CLI from the temp dir', (
       console.log(`  FAIL  ${name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5 }); } catch { /* ignore */ }
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);
   process.exitCode = passed === results.length ? 0 : 1;

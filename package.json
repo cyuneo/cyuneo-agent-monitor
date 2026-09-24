@@ -2,7 +2,7 @@
   "name": "cyuneo-agent-monitor",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "preview": true,
   "publisher": "cyuneo",
   "author": {
@@ -75,12 +75,17 @@
       "restrictedConfigurations": [
         "agentMonitor.claude.cliPath",
         "agentMonitor.claude.projectsDir",
-        "agentMonitor.codex.home"
+        "agentMonitor.codex.home",
+        "agentMonitor.push.enabled",
+        "agentMonitor.push.events",
+        "agentMonitor.push.delaySeconds",
+        "agentMonitor.push.includeTitle",
+        "agentMonitor.push.channels"
       ]
     }
   },
   "scripts": {
-    "test": "for f in test/*.test.js; do echo \"== $f\"; AGENT_MONITOR_SKIP_REAL=1 node \"$f\" || exit 1; done"
+    "test": "node test/run.js"
   },
   "contributes": {
     "viewsContainers": {
@@ -115,6 +120,13 @@
           "name": "%view.agents%",
           "icon": "media/icon.svg",
           "contextualTitle": "%container.title%"
+        },
+        {
+          "id": "agentMonitor.panelOverview",
+          "name": "%view.overview%",
+          "icon": "media/icon.svg",
+          "contextualTitle": "%container.title%",
+          "visibility": "hidden"
         }
       ]
     },
@@ -136,6 +148,26 @@
       },
       {
         "view": "agentMonitor.tree",
+        "contents": "%welcome.noFolder%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
+        "when": "agentMonitor.filteredOut && agentMonitor.noFolder"
+      },
+      {
+        "view": "agentMonitor.panelOverview",
+        "contents": "%welcome.loading%",
+        "when": "!agentMonitor.loaded"
+      },
+      {
+        "view": "agentMonitor.panelOverview",
+        "contents": "%welcome.empty.all%\n[%welcome.openSettings%](command:agentMonitor.openSettings)",
+        "when": "agentMonitor.loaded && !agentMonitor.filteredOut"
+      },
+      {
+        "view": "agentMonitor.panelOverview",
+        "contents": "%welcome.empty.workspace%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
+        "when": "agentMonitor.filteredOut && !agentMonitor.noFolder"
+      },
+      {
+        "view": "agentMonitor.panelOverview",
         "contents": "%welcome.noFolder%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
         "when": "agentMonitor.filteredOut && agentMonitor.noFolder"
       }
@@ -247,6 +279,12 @@
         "title": "%cmd.storage%",
         "category": "%category%",
         "icon": "$(database)"
+      },
+      {
+        "command": "agentMonitor.push.setup",
+        "title": "%cmd.pushSetup%",
+        "category": "%category%",
+        "icon": "$(bell)"
       }
     ],
     "submenus": [
@@ -319,85 +357,90 @@
           "group": "8_storage@1"
         },
         {
-          "command": "agentMonitor.openSettings",
+          "command": "agentMonitor.push.setup",
           "when": "view == agentMonitor.agents",
           "group": "9_settings@1"
         },
         {
+          "command": "agentMonitor.openSettings",
+          "when": "view == agentMonitor.agents",
+          "group": "9_settings@2"
+        },
+        {
           "command": "agentMonitor.hideCompleted",
-          "when": "view == agentMonitor.tree && !config.agentMonitor.hideCompleted",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && !config.agentMonitor.hideCompleted",
           "group": "navigation@1"
         },
         {
           "command": "agentMonitor.showCompleted",
-          "when": "view == agentMonitor.tree && config.agentMonitor.hideCompleted",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.hideCompleted",
           "group": "navigation@1"
         },
         {
           "submenu": "agentMonitor.scopeMenu.all",
-          "when": "view == agentMonitor.tree && config.agentMonitor.scope != 'workspace'",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.scope != 'workspace'",
           "group": "navigation@2"
         },
         {
           "submenu": "agentMonitor.scopeMenu.workspace",
-          "when": "view == agentMonitor.tree && config.agentMonitor.scope == 'workspace'",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.scope == 'workspace'",
           "group": "navigation@2"
         },
         {
           "command": "agentMonitor.refresh",
-          "when": "view == agentMonitor.tree",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/",
           "group": "navigation@3"
         },
         {
           "command": "agentMonitor.openSettings",
-          "when": "view == agentMonitor.tree",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/",
           "group": "navigation@4"
         }
       ],
       "view/item/context": [
         {
           "command": "agentMonitor.compact",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bcompactable\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bcompactable\\b/",
           "group": "1_session@1"
         },
         {
           "command": "agentMonitor.handoff",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "1_session@2"
         },
         {
           "command": "agentMonitor.setAutoCompact",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "1_session@3"
         },
         {
           "command": "agentMonitor.copyResume",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bresumable\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bresumable\\b/",
           "group": "1_session@4"
         },
         {
           "command": "agentMonitor.markSeen",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "1_session@5"
         },
         {
           "command": "agentMonitor.openTranscript",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
           "group": "2_open@1"
         },
         {
           "command": "agentMonitor.revealTranscript",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "2_open@2"
         },
         {
           "command": "agentMonitor.copyTranscriptPath",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "2_open@3"
         },
         {
           "command": "agentMonitor.openTranscript",
-          "when": "view == agentMonitor.tree && viewItem =~ /\\bagent\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bagent\\b/",
           "group": "inline@1"
         }
       ],
@@ -607,6 +650,12 @@
           "markdownDescription": "%config.sessionListPosition%",
           "order": 7
         },
+        "agentMonitor.notifyNeedsYou": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.notifyNeedsYou%",
+          "order": 8
+        },
         "agentMonitor.refreshSeconds": {
           "type": "number",
           "default": 2,
@@ -650,6 +699,22 @@
           "minimum": 5,
           "description": "%config.approvalGuessSeconds%",
           "order": 14
+        },
+        "agentMonitor.backgroundRefreshSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "maximum": 60,
+          "scope": "machine",
+          "markdownDescription": "%config.backgroundRefreshSeconds%",
+          "order": 15
+        },
+        "agentMonitor.shareScanAcrossWindows": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "%config.shareScanAcrossWindows%",
+          "order": 16
         },
         "agentMonitor.claude.enabled": {
           "type": "boolean",
@@ -749,6 +814,74 @@
           "default": true,
           "description": "%config.postCompactHint%",
           "order": 39
+        },
+        "agentMonitor.push.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "%config.push.enabled%",
+          "order": 50
+        },
+        "agentMonitor.push.events": {
+          "type": "object",
+          "properties": {
+            "needsYou": {
+              "type": "boolean",
+              "default": true,
+              "description": "%config.push.events.needsYou%"
+            },
+            "error": {
+              "type": "boolean",
+              "default": true,
+              "description": "%config.push.events.error%"
+            },
+            "limitHit": {
+              "type": "boolean",
+              "default": true,
+              "description": "%config.push.events.limitHit%"
+            },
+            "limitReset": {
+              "type": "boolean",
+              "default": true,
+              "description": "%config.push.events.limitReset%"
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "needsYou": true,
+            "error": true,
+            "limitHit": true,
+            "limitReset": true
+          },
+          "scope": "application",
+          "markdownDescription": "%config.push.events%",
+          "order": 51
+        },
+        "agentMonitor.push.delaySeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 600,
+          "scope": "application",
+          "markdownDescription": "%config.push.delaySeconds%",
+          "order": 52
+        },
+        "agentMonitor.push.includeTitle": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "%config.push.includeTitle%",
+          "order": 53
+        },
+        "agentMonitor.push.channels": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "%config.push.channels%",
+          "order": 54
         },
         "agentMonitor.onlyWorkspace": {
           "type": "boolean",

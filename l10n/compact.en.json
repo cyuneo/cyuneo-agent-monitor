@@ -163,7 +163,7 @@
   "autocompact.custom.detail": "Enter 100K–1M, for example 300k, 300000 or 300 (= 300K)",
   "autocompact.custom.detail.codex": "Enter a token count, for example 200k or 200000; Codex caps it at 90% of the window",
   "autocompact.guide": "View the reference guide",
-  "autocompact.guide.detail": "Opens the guide on GitHub (in Chinese): other tools' defaults, vendor benchmarks, blog advice and the cost model behind these numbers",
+  "autocompact.guide.detail": "Opens the guide on GitHub: other tools' defaults, vendor benchmarks, blog advice and the cost model behind these numbers",
 
   "autocompact.input.title": "Custom auto-compact window · “{title}”",
   "autocompact.input.prompt": "Tokens from 100K to 1M: 300k, 300000 or 300 (= 300K). Type auto for the default. This model's window is {window}; a larger value is capped at it.",

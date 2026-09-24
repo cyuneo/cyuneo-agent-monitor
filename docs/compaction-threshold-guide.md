@@ -1,171 +1,173 @@
-# 自动压缩阈值怎么选：参考说明
+# Choosing an auto-compact threshold: reference notes
 
-> 调研日期：2026-09-24。每个数字都附了出处，查不到的直接写“查不到”。
-> 文中的“压缩”指 compaction：上下文快满时，把前面的对话总结成一段摘要，腾出空间。
-> 百分比默认以**整个模型窗口**为分母，另有说明的除外。
+**English** · [简体中文](compaction-threshold-guide.zh-CN.md)
 
----
-
-## 1. 一句话结论
-
-**没有任何厂商或论文给过“调研用 X%、写代码用 Y%”这样的标准答案。** 能确定的只有两点：在 1M 窗口的模型上，把压缩点从默认约 967K 调到 200K–400K，按下面的成本模型，每次调用能省约 45–59%，代价是压缩次数多 3–7 倍，而每次压缩都会丢信息；在 200K 窗口的模型上调低阈值几乎不省钱，调低只能是为了质量。
+> Research date: 2026-09-24. Every number comes with a source; where nothing could be found, the text says "not found".
+> "Compaction" here means: when the context is nearly full, the earlier conversation is summarized into a short summary to free up space.
+> Percentages use the **whole model window** as the denominator unless stated otherwise.
 
 ---
 
-## 2. 各家工具默认在哪里压缩
+## 1. The short answer
 
-| 工具 | 默认压缩点 | 能否配置 | 官方理由 | 出处 |
+**No vendor or paper gives a standard answer such as "X% for research, Y% for coding."** Only two things are certain. On a model with a 1M window, moving the compaction point from the default of about 967K down to 200K–400K saves about 45–59% per call under the cost model below, at the price of 3–7 times as many compactions, and every compaction loses information. On a model with a 200K window, lowering the threshold saves almost nothing, so the only reason to lower it there is quality.
+
+---
+
+## 2. Where each tool compacts by default
+
+| Tool | Default compaction point | Configurable? | Stated rationale | Source |
 |---|---|---|---|---|
-| **Claude Code** | 1M 窗口模型约 **967K**（96.7%）；200K 窗口模型在 **200K 边界** | 能：`/autocompact`、`autoCompactWindow`（100K–1M）、`--autocompact`、环境变量 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（优先级最高）；另有 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`（1–100%，分母是压缩窗口，只能调低） | /autocompact 对话框原文：“auto 按模型调过，为成本和性能强烈推荐”（这是产品内文案，在 v2.1.278 里找到，公开文档里没有）。最近几个版本一直把默认压缩点往后推：v2.1.247 从约 934K 改到约 967K；v2.1.260 让 Opus/Fable 接近 1M 才压缩；v2.1.273 把“约半个窗口就压缩”当 bug 修掉了 | https://code.claude.com/docs/en/model-config ；https://code.claude.com/docs/en/env-vars ；https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md |
-| **Codex CLI** | 窗口的 **90%**。默认窗口 272K，所以约 **244,800** | 能：`model_auto_compact_token_limit`，只能调低，超过 90% 会被封顶 | 文档只写了“unset uses model defaults”，90% 出自源码 `min(用户值, 窗口×9/10)` | https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs |
-| Gemini CLI | **50%**（2025-11-20 对 API key 用户从 70% 下调），压缩后保留最近 30% | 能 | PR 里只说“更早触发压缩” | https://github.com/google-gemini/gemini-cli/pull/13517 |
-| Qwen Code | **85%**（从 70% **上调**） | 能：`context.autoCompactThreshold` | 1M 模型在 70% 时还剩约 300K，而摘要加输出只要约 33K，压得太早 | https://github.com/QwenLM/qwen-code/blob/main/docs/design/auto-compaction-threshold-redesign.md |
-| GitHub Copilot CLI | 80% 开始后台压缩，95% 暂停等待 | 文档未写 | 留约 20% 空间，压缩期间工具调用还能继续 | https://docs.github.com/en/copilot/concepts/agents/copilot-cli/context-management |
-| VS Code Copilot Chat | 缓存热时约 80%（在 0.78–0.82 之间浮动），缓存冷时 ≥90%，溢出时前台压缩 | 否（有内部设置，但没开放给用户） | 官方只写“窗口满时”，数字来自一篇读源码的博客 | https://alexop.dev/posts/how-vscode-copilot-chat-conversation-compaction-works/ （2026-09-23） |
-| Cline | 约窗口的 **81%**（可用输入预算的 90%） | 未核实 | 文档里没有数字。网上流传的“70%”已经过时 | https://github.com/cline/cline/blob/main/sdk/packages/core/src/extensions/context/compaction-shared.ts |
-| Goose | **80%** | 能：`GOOSE_AUTO_COMPACT_THRESHOLD`，设 0 关闭 | 未说明 | https://goose-docs.ai/docs/guides/sessions/smart-context-management/ |
-| Zed | **90%** | 能：可以写百分比、已用 token 数或剩余 token 数，也可以关闭 | 未说明 | https://zed.dev/docs/ai/agent-settings |
-| Roo Code | 滑块默认 100%（第三方文章说实际约 86–92% 就触发，未核实） | 能 | 交给用户决定 | https://roocodeinc.github.io/Roo-Code/features/intelligent-context-condensing |
-| Kilo Code | 不设百分比时，剩余空间低于 20K buffer 就压缩 | 能：`threshold_percent` 1–100 | 保证压缩请求本身不会失败 | https://kilo.ai/docs/customize/context/context-condensing |
-| Aider | 只管聊天历史：输入窗口的 1/16（1K–8K，约 6%） | 能 | 未说明 | https://github.com/Aider-AI/aider/blob/main/aider/models.py |
-| OpenHands | 按事件条数算：满 120 条压到约 60 条，保留最前面 4 条 | 能 | 保留开头的设定和最近的事件 | https://docs.openhands.dev/sdk/arch/condenser |
-| Amp | **不自动压缩**，2025-10 起改成手动 Handoff | — | 压缩有损，摘要里有没有你要的东西“取决于 agent”；压缩还会让线程越拖越长、越来越散 | https://ampcode.com/news/handoff |
-| Cursor | 不公开百分比。员工在论坛回复：“在当前窗口接近顶部时触发” | 否 | 过早触发多半是 node_modules 这类目录被拉进了上下文 | https://forum.cursor.com/t/context-keeps-summarizing-at-10-20-of-total-context-window/163850 （2026-06-22） |
-| Windsurf、opencode | **查不到可靠数字**。opencode 有两种第三方说法，互相矛盾 | — | — | — |
+| **Claude Code** | About **967K** (96.7%) on 1M-window models; at the **200K boundary** on 200K-window models | Yes: `/autocompact`, `autoCompactWindow` (100K–1M), `--autocompact`, and the environment variable `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (highest priority). There is also `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1–100%, with the compaction window as the denominator; it can only lower the point) | The /autocompact dialog describes auto as tuned per model and strongly recommended for cost and performance (in-product copy found in v2.1.278; the public docs don't have it). Recent releases have kept pushing the default later: v2.1.247 moved it from about 934K to about 967K; v2.1.260 made Opus/Fable compact only near 1M; v2.1.273 fixed "compacting at about half the window" as a bug | https://code.claude.com/docs/en/model-config ; https://code.claude.com/docs/en/env-vars ; https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md |
+| **Codex CLI** | **90%** of the window. The default window is 272K, so about **244,800** | Yes: `model_auto_compact_token_limit`, which can only lower the point; anything above 90% is capped | The docs only say "unset uses model defaults"; the 90% comes from the source code, `min(user value, window×9/10)` | https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs |
+| Gemini CLI | **50%** (lowered from 70% for API key users on 2025-11-20); keeps the most recent 30% after compaction | Yes | The PR only says it makes compaction trigger earlier | https://github.com/google-gemini/gemini-cli/pull/13517 |
+| Qwen Code | **85%** (**raised** from 70%) | Yes: `context.autoCompactThreshold` | At 70%, a 1M model still has about 300K left, while the summary plus output needs only about 33K, so it compacted too early | https://github.com/QwenLM/qwen-code/blob/main/docs/design/auto-compaction-threshold-redesign.md |
+| GitHub Copilot CLI | Starts background compaction at 80%; pauses and waits at 95% | Not documented | Leaves about 20% headroom so tool calls can continue while compaction runs | https://docs.github.com/en/copilot/concepts/agents/copilot-cli/context-management |
+| VS Code Copilot Chat | About 80% with a warm cache (floating between 0.78 and 0.82), ≥90% with a cold cache, foreground compaction on overflow | No (internal settings exist but aren't exposed to users) | The official docs only say "when the window is full"; the numbers come from a blog post that reads the source | https://alexop.dev/posts/how-vscode-copilot-chat-conversation-compaction-works/ (2026-09-23) |
+| Cline | About **81%** of the window (90% of the usable input budget) | Not verified | The docs give no number. The widely repeated "70%" is out of date | https://github.com/cline/cline/blob/main/sdk/packages/core/src/extensions/context/compaction-shared.ts |
+| Goose | **80%** | Yes: `GOOSE_AUTO_COMPACT_THRESHOLD`; 0 turns it off | Not stated | https://goose-docs.ai/docs/guides/sessions/smart-context-management/ |
+| Zed | **90%** | Yes: as a percentage, tokens used or tokens remaining; it can also be turned off | Not stated | https://zed.dev/docs/ai/agent-settings |
+| Roo Code | Slider defaults to 100% (a third-party article says it actually triggers at about 86–92%; not verified) | Yes | Left to the user | https://roocodeinc.github.io/Roo-Code/features/intelligent-context-condensing |
+| Kilo Code | With no percentage set, compacts when free space drops below a 20K buffer | Yes: `threshold_percent` 1–100 | Makes sure the compaction request itself doesn't fail | https://kilo.ai/docs/customize/context/context-condensing |
+| Aider | Manages chat history only: 1/16 of the input window (1K–8K, about 6%) | Yes | Not stated | https://github.com/Aider-AI/aider/blob/main/aider/models.py |
+| OpenHands | Counts events: at 120 events it condenses down to about 60, keeping the first 4 | Yes | Keeps the setup at the start and the most recent events | https://docs.openhands.dev/sdk/arch/condenser |
+| Amp | **No auto-compaction**; switched to manual Handoff in 2025-10 | — | Compaction is lossy, and whether the summary keeps what you need depends on the agent; compaction also makes threads drag on and lose focus | https://ampcode.com/news/handoff |
+| Cursor | No published percentage. A staff member replied on the forum that it triggers when the current window gets close to the top | No | Early triggering usually means directories such as node_modules were pulled into the context | https://forum.cursor.com/t/context-keeps-summarizing-at-10-20-of-total-context-window/163850 (2026-06-22) |
+| Windsurf, opencode | **No reliable number found.** For opencode there are two third-party claims that contradict each other | — | — | — |
 
-**能看出的规律：** 各家默认值从约 6%（Aider）到 100%（Roo）都有，多数落在 80–90%。调整方向也不统一：Gemini 往前调（70%→50%），Qwen 和 Claude Code 往后调（70%→85%，934K→967K）。可见业界**没有公认的最优百分比**。
+**The pattern:** defaults range from about 6% (Aider) to 100% (Roo), and most sit between 80% and 90%. Recent changes don't point the same way either: Gemini moved earlier (70%→50%), while Qwen and Claude Code moved later (70%→85%, 934K→967K). The industry has **no agreed optimal percentage**.
 
 ---
 
-## 3. 厂商跑评测时在哪里压缩
+## 3. Where vendors compact when running benchmarks
 
-### 调研 / 检索类
+### Research / retrieval
 
-| 谁 | 模型与窗口 | 压缩点 | 结果 | 出处 |
+| Who | Model and window | Compaction point | Result | Source |
 |---|---|---|---|---|
-| Anthropic（Opus 4.6 发布文，2026-02） | Opus 4.6 | BrowseComp：**50K** 触发，总预算 10M；HLE：50K 触发，总预算 3M | 拿下当时的最高分 | https://www.anthropic.com/news/claude-opus-4-6 |
-| Anthropic cookbook（2026-06-25） | 新模型 | BrowseComp：**200K** 触发，总预算 3M；最新 model card 里的 DeepSearchQA 不压缩（1M 窗口装得下） | 触发点越低，越容易在压缩后丢掉原始问题（一道题可能被压好几次），200K 时这个问题小一些 | https://platform.claude.com/cookbook/evals-agentic-search-reproduce-agentic-search-benchmarks |
-| DeepSeek-V3.2（2025-12） | 128K 窗口 | 用量到窗口的 **80%**（约 102K）时触发 | 不做管理 51.4 → 做摘要 60.2（要 364 步）→ 直接丢掉全部旧工具结果 **67.6** | https://arxiv.org/html/2512.02556 |
-| Kimi K2.5（2026-02） | 256K 窗口 | 窗口的 **80%** 触发 discard-all；HLE 在 96K 触发 | BrowseComp 60.6 → **74.9** | https://huggingface.co/moonshotai/Kimi-K2.5/discussions/13 （Moonshot 员工的说明）、arXiv 2602.02276 |
+| Anthropic (Opus 4.6 launch post, 2026-02) | Opus 4.6 | BrowseComp: triggers at **50K**, total budget 10M; HLE: triggers at 50K, total budget 3M | Top score at the time | https://www.anthropic.com/news/claude-opus-4-6 |
+| Anthropic cookbook (2026-06-25) | Newer models | BrowseComp: triggers at **200K**, total budget 3M; DeepSearchQA in the latest model card runs without compaction (it fits in the 1M window) | The lower the trigger, the more likely the original question is lost after compaction (a single question may be compacted several times); at 200K this is less of a problem | https://platform.claude.com/cookbook/evals-agentic-search-reproduce-agentic-search-benchmarks |
+| DeepSeek-V3.2 (2025-12) | 128K window | Triggers when usage reaches **80%** of the window (about 102K) | No management 51.4 → summarization 60.2 (taking 364 steps) → simply discarding all old tool results **67.6** | https://arxiv.org/html/2512.02556 |
+| Kimi K2.5 (2026-02) | 256K window | Discard-all triggers at **80%** of the window; HLE triggers at 96K | BrowseComp 60.6 → **74.9** | https://huggingface.co/moonshotai/Kimi-K2.5/discussions/13 (explanation from a Moonshot employee), arXiv 2602.02276 |
 
-### 写代码类
+### Coding
 
-| 谁 | 设置 | 结果 | 出处 |
+| Who | Setup | Result | Source |
 |---|---|---|---|
-| JetBrains《Complexity Trap》（2025-08，SWE-bench Verified，Qwen3-Coder 480B） | 只保留最近 **10 轮**工具输出，更早的丢掉 | 解决率 54.8%，每题 $0.61；不做管理 53.4%，$1.29；LLM 摘要（31 轮时触发）53.8%，$0.64；保留 20 轮反而更差 | https://arxiv.org/html/2508.21433v3 |
-| OpenHands 博客（2025-04-04） | 上下文压缩（文中没给触发阈值） | 解决率 53% → 54%，单轮成本降了一半以上 | https://www.openhands.dev/blog/openhands-context-condensensation-for-more-efficient-ai-agents |
-| arXiv 2609.20804（2026-09-17） | 窗口预算分 32K/64K/96K/128K 四档 | “有管理”和“无管理”的差距从 35.7 分缩小到 2.7 分，收益主要来自避免溢出截断 | https://arxiv.org/html/2609.20804 |
-| Claude API 默认值（vendor-doc，不是评测） | context editing 在 100K 时清旧工具结果，保留 3 次；API compaction 默认 150K 触发，最低 50K | 官方原话是合适的值取决于你的 agent 怎么用工具结果，“多试几种配置” | https://platform.claude.com/docs/en/build-with-claude/compaction-threshold |
+| JetBrains, *The Complexity Trap* (2025-08, SWE-bench Verified, Qwen3-Coder 480B) | Keeps only the last **10 turns** of tool output and drops anything older | 54.8% solved at $0.61 per task; no management 53.4% at $1.29; LLM summarization (triggered at 31 turns) 53.8% at $0.64; keeping 20 turns did worse | https://arxiv.org/html/2508.21433v3 |
+| OpenHands blog (2025-04-04) | Context condensation (the post gives no trigger threshold) | Solve rate 53% → 54%, cost per turn cut by more than half | https://www.openhands.dev/blog/openhands-context-condensensation-for-more-efficient-ai-agents |
+| arXiv 2609.20804 (2026-09-17) | Four window budgets: 32K/64K/96K/128K | The gap between "managed" and "unmanaged" shrinks from 35.7 points to 2.7 points; most of the gain comes from avoiding overflow truncation | https://arxiv.org/html/2609.20804 |
+| Claude API defaults (vendor-doc, not a benchmark) | Context editing clears old tool results at 100K and keeps 3; API compaction triggers at 150K by default, minimum 50K | The docs say the right value depends on how your agent uses tool results, and suggest trying several configurations | https://platform.claude.com/docs/en/build-with-claude/compaction-threshold |
 
-**说明什么：** 调研类评测普遍**压得早、丢得狠**（50K–200K，或窗口的 80%），因为网页原文读完、提炼出结论后就没用了。写代码类研究更看重**保留最近几轮的原始输出**，而写代码工具的默认值都设得很晚（90%–96.7%）。**要注意：评测配置是为了刷分，不是给交互使用的建议。** Anthropic 自家的 BrowseComp 触发点也从 50K 改成了 200K，理由就是压得太早会丢掉原始问题。
+**What this shows:** research benchmarks generally **compact early and discard aggressively** (50K–200K, or 80% of the window), because raw web pages are useless once the findings have been extracted. Coding studies care more about **keeping the raw output of the last few turns**, yet coding tools set their defaults very late (90%–96.7%). **Keep in mind that benchmark configurations are tuned for scores; they are not advice for interactive use.** Anthropic itself moved its BrowseComp trigger from 50K to 200K, precisely because compacting too early loses the original question.
 
 ---
 
-## 4. 博客与从业者的意见
+## 4. What bloggers and practitioners say
 
-| 谁 | 建议 | 针对什么任务 | 有没有数据 | 出处 |
+| Who | Recommendation | Task type | Data? | Source |
 |---|---|---|---|---|
-| **langwatch / Rogerio Chaves**（2026-08-02） | PR 驱动 200–250K；**研究 250–300K**；QA 250–350K；**构建/理解代码 300–450K**；成本最优点约 220K（170K–316K 都在最优的 10% 以内） | 分任务类型 | **有**：162 天、2,451 个会话、873 次压缩；压缩后 5 步内纠错率从 17.7% 升到 41.9%。**局限**：只有作者一个人的数据，是观察不是实验；研究类会话很少超过 150K，所以研究那档是外推的；文中没说用的哪个模型；给的是绝对 token 数，不是百分比 | https://langwatch.ai/blog/context-tax-when-to-compact |
-| HumanLayer / Dex Horthy（约 2025-08） | 上下文利用率保持在 **40–60%**，经常主动压缩 | 写代码（研究→计划→实现） | 无实验，是经验方法 | https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md |
-| Dex Horthy 访谈（Pragmatic Engineer，2026-07-15） | 1M 模型用到 **300–400K**；200K 模型约 **100K** 就停 | 写代码 | 无。网传的“40% 进入 dumb zone”“依据 10 万+会话”在访谈原文里找不到 | https://newsletter.pragmaticengineer.com/p/context-engineering-with-dex-horthy |
-| WorkOS / Mitch Fultz（2026-08-14） | 320K 窗口、预留 64K，约 256K（80%）时压缩 | 写代码 | 无。作者自己说这是“需要用你自己的工作负载去验证的工程假设” | https://workos.com/blog/coding-agent-context-window-compaction-settings |
-| LangChain deepagents（2026-03-11） | 85% 触发，保留最近 10% | 写代码（不是“研究专用”） | 没有阈值对比。核心主张是让模型自己决定什么时候压缩 | https://www.langchain.com/blog/autonomous-context-compression |
-| Hermes（mem0 博客，2026-05-14 发布，09-15 更新） | 主压缩在 50%，85% 做兜底 | 通用 | 工程上的双层设计，不是按任务调出来的 | https://mem0.ai/blog/how-hermes-and-claude-handle-context-compression-in-real-production-agents-(and-what-you-should-extract) |
-| mindstudio（2026-07-09） | 通用任务 70–75%，复杂推理 60–70% | 通用 | 无。文中说“研究表明”，但没给出处 | https://www.mindstudio.ai/blog/context-rot-ai-agents-auto-compact-fix |
-| nathanonn（2026-05-01） | 50–60% 手动压缩，60% 以上直接重开；1M Opus 用到 15–20% 就重开 | 写代码 | 作者的一次个人经历 | https://www.nathanonn.com/claude-code-never-auto-compact/ |
-| howdoiuseai（2026-04-16） | 约 60% | 通用 | 无 | https://www.howdoiuseai.com/blog/2026-04-16-what-does-compact-do-in-claude-code-context-management |
-| **网传“Anthropic 的 Thariq 建议 50–60%”** | — | — | **查不到出处。** Thariq 在 Anthropic 官方博客（2026-04-15）的文章里没有任何百分比，只说 1M 窗口让你“有更多时间主动 /compact”，以及“模型在压缩的那一刻最不聪明”。50–60% 最早见于 albertsikkema.com（2026-04-23），属于误归因 | https://claude.com/blog/using-claude-code-session-management-and-1m-context |
-| badlogic gist（2025-12-02） | 嫌默认 95% 太晚，建议 85–90% | 写代码 CLI | 无 | https://gist.github.com/badlogic/cd2ef65b0697c4dbe2d13fbecb0a0a5f |
-| Geoffrey Huntley（2025-04-07） | Claude 3.7 标称 200K，到 147–152K 就开始变差；主张不压缩，直接开新会话，把状态写进规格文件 | 长时间自主循环 | 个人观察，模型已经过时 | https://ghuntley.com/redlining/ |
-| Anthropic《Effective context engineering》（2025） | **不给数字**：来回对话多的用 compaction，按里程碑推进的开发记笔记，复杂研究用多 agent | 按技术手段分场景，不按百分比分 | — | https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents |
+| **langwatch / Rogerio Chaves** (2026-08-02) | PR-driven work 200–250K; **research 250–300K**; QA 250–350K; **building/understanding code 300–450K**; cost optimum about 220K (anything from 170K to 316K is within 10% of it) | Per task type | **Yes**: 162 days, 2,451 sessions, 873 compactions; the correction rate within 5 steps after a compaction rose from 17.7% to 41.9%. **Limitations**: data from the author alone; observational, not an experiment; research sessions rarely went past 150K, so the research band is extrapolated; the post doesn't say which model was used; the figures are absolute token counts, not percentages | https://langwatch.ai/blog/context-tax-when-to-compact |
+| HumanLayer / Dex Horthy (around 2025-08) | Keep context utilization at **40–60%** and compact proactively and often | Coding (research → plan → implement) | No experiment; a rule of thumb | https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md |
+| Dex Horthy interview (Pragmatic Engineer, 2026-07-15) | Go up to **300–400K** on 1M models; stop at about **100K** on 200K models | Coding | None. The widely quoted "the dumb zone starts at 40%" and "based on 100K+ sessions" don't appear in the interview | https://newsletter.pragmaticengineer.com/p/context-engineering-with-dex-horthy |
+| WorkOS / Mitch Fultz (2026-08-14) | 320K window with 64K reserved; compact at about 256K (80%) | Coding | None. The author himself calls it an engineering hypothesis you need to validate against your own workload | https://workos.com/blog/coding-agent-context-window-compaction-settings |
+| LangChain deepagents (2026-03-11) | Trigger at 85%, keep the most recent 10% | Coding (not "research only") | No threshold comparison. The main argument is to let the model decide when to compact | https://www.langchain.com/blog/autonomous-context-compression |
+| Hermes (mem0 blog, published 2026-05-14, updated 09-15) | Main compaction at 50%, with 85% as a fallback | General | A two-tier engineering design, not tuned per task | https://mem0.ai/blog/how-hermes-and-claude-handle-context-compression-in-real-production-agents-(and-what-you-should-extract) |
+| mindstudio (2026-07-09) | 70–75% for general tasks, 60–70% for complex reasoning | General | None. The post says "research shows" but cites nothing | https://www.mindstudio.ai/blog/context-rot-ai-agents-auto-compact-fix |
+| nathanonn (2026-05-01) | Compact manually at 50–60% and start over above 60%; on 1M Opus, start over at 15–20% | Coding | One personal experience of the author's | https://www.nathanonn.com/claude-code-never-auto-compact/ |
+| howdoiuseai (2026-04-16) | About 60% | General | None | https://www.howdoiuseai.com/blog/2026-04-16-what-does-compact-do-in-claude-code-context-management |
+| **The widely shared "Anthropic's Thariq recommends 50–60%"** | — | — | **No source found.** Thariq's post on the official Anthropic blog (2026-04-15) contains no percentages at all. It only says the 1M window gives you more time to /compact proactively, and that the model is at its least intelligent at the moment it compacts. The 50–60% first shows up on albertsikkema.com (2026-04-23) and is a misattribution | https://claude.com/blog/using-claude-code-session-management-and-1m-context |
+| badlogic gist (2025-12-02) | Finds the default 95% too late and suggests 85–90% | Coding CLI | None | https://gist.github.com/badlogic/cd2ef65b0697c4dbe2d13fbecb0a0a5f |
+| Geoffrey Huntley (2025-04-07) | Claude 3.7 is rated at 200K but starts to degrade at 147–152K; argues against compaction: start a new session instead and keep state in a spec file | Long autonomous loops | Personal observation, on a model that is now outdated | https://ghuntley.com/redlining/ |
+| Anthropic, *Effective context engineering* (2025) | **No numbers**: compaction for long back-and-forth conversations, note-taking for milestone-driven development, multiple agents for complex research | Splits scenarios by technique, not by percentage | — | https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents |
 
-**点评：**
-- **最有参考价值的是 langwatch**。它是唯一一篇按任务类型给数字、而且有真实数据的文章，但数据只来自一个人，研究类那档还是外推的。
-- 网上流传的“40–60%”基本都来自 HumanLayer 的经验方法和别人的转述。**挂在 Anthropic 名下的“50–60%”不成立**，产品文案里不要这样写。
-- 这些百分比大多是在 200K 窗口时代提出的。agentpatterns 汇总的老模型测试显示，性能开始下降的点更接近一个**绝对 token 数**（约 32K–100K），而不是某个百分比（https://agentpatterns.ai/context-engineering/context-window-dumb-zone/ ）。同样是 50%，放在 200K 模型和 1M 模型上意义完全不同。所以插件按 token 数来设是对的。
-
----
-
-## 5. 论文实验说明了什么
-
-**压得晚（阈值高）的代价**
-- 上下文越长，模型越容易出错。Chroma《Context Rot》（2025-07）；MRCR v2 8-needle 测试中，从 128–256K 到 512K–1M，Opus 4.6 从 91.9% 降到 78.3%，GPT-5.4 从 79.3% 降到 36.6%（上一轮调研的结果）。
-- langwatch 的数据：上下文超过 600K 时，只有约 2.5% 的内容还真正被用到；低于 50K 时这个比例是 47.5%。
-- 每次调用都要把整个上下文重读一遍，阈值越高越贵，见第 6 节。
-
-**压得早（阈值低）的代价**
-- 压缩有损。Lost in Compaction（2026-07）：会话里的约束平均只剩 17%；arXiv 2608.01326：逐字信息几乎全丢（上一轮调研的结果）。阈值越低，压缩次数越多，损失会累积。
-- ACON（arXiv 2510.00615）专门做了阈值消融：阈值越小越省 token，但压缩次数越多、准确率越低。它的阈值是 4096/1024 这类很小的绝对值，不能直接套到 Claude Code 上。
-- Anthropic cookbook：触发点越低，越容易在压缩后丢掉“原始问题”。
-- langwatch：压缩后 5 步内的纠错率是平时的 2.37 倍，120 步后还没完全恢复。
-- 阈值离“启动时的上下文大小”太近，会陷入反复压缩。Claude Code issue #61351：阈值约 70%，加上很大的 CLAUDE.md 和记忆文件，几乎每轮都在压缩，58 分钟花了约 $9.18（https://github.com/anthropics/claude-code/issues/61351 ）。
-
-**几个反直觉的发现**
-- 压缩不一定降分。OpenHands 压缩后解决率 53%→54%；JetBrains 的“只留最近 10 轮”比不管理更好，价格还不到一半。
-- 调研类任务里，**怎么处理**比**什么时候触发**更关键。DeepSeek 和 Kimi 在同样的 80% 触发，直接丢掉旧搜索结果比做摘要分数高得多（67.6 对 60.2）。
-- **时机**比**比例**重要。Self-Compacting LM Agents（arXiv 2606.23525）发现，按固定 token 数触发可能在推理进行到一半时把中间结果丢掉；让模型自己选时机，效果不比固定间隔差，每题成本还低 30–70%。
-- 窗口越大，上下文管理带来的准确率收益越小（arXiv 2609.20804：差距从 35.7 分缩到 2.7 分）。
-
-**目前缺的：** 没有任何论文直接测过“Claude Code / Codex 在 X% 压缩”的效果。所以下面的档位建议都是**从间接证据推出来的**，不是实验结论。
+**Assessment:**
+- **langwatch is the most useful reference.** It is the only post that gives numbers per task type backed by real data, but the data come from one person and the research band is extrapolated.
+- The "40–60%" going around online mostly traces back to HumanLayer's rule of thumb and retellings of it. **The "50–60%" credited to Anthropic doesn't hold up**; don't put it in product copy.
+- Most of these percentages date from the 200K-window era. Tests on older models collected by agentpatterns suggest that performance starts to drop at something closer to an **absolute token count** (about 32K–100K) than a percentage (https://agentpatterns.ai/context-engineering/context-window-dumb-zone/ ). The same 50% means something entirely different on a 200K model and on a 1M model, so the extension is right to work in token counts.
 
 ---
 
-## 6. 成本账（自己算的模型）
+## 5. What the research experiments show
 
-### 假设
-- 价格按 **Opus 5.5**，已对照 Anthropic 官方 SDK 资料核对：输入 $4、输出 $20、缓存读 $0.20；1 小时缓存写入是输入价的 2 倍，即 $8。单位都是每百万 token。
-- **缓存一直是热的**：两次调用间隔不超过 1 小时，也就是用 1 小时缓存。
-- 每次调用：之前的整个上下文按缓存读计费，新增的约 3K token 按 1 小时缓存写入计费。常规回复的输出费用各档一样，不影响比较，所以没算进去。
-- 压缩后剩约 30K，之后每次调用涨 3K，直到压缩点。
-- 每次压缩的费用 = 按缓存读价把当前上下文读一遍 + 摘要输出（压缩点的 4%，限定在 2K–20K 之间）+ 压缩后把 30K 重新写入缓存。
-- 压缩费用平摊到这一轮的每次调用上。
+**The cost of compacting late (high threshold)**
+- The longer the context, the more mistakes the model makes. Chroma, *Context Rot* (2025-07); on MRCR v2 8-needle, going from 128–256K to 512K–1M, Opus 4.6 drops from 91.9% to 78.3% and GPT-5.4 from 79.3% to 36.6% (results from our previous round of research).
+- langwatch's data: above 600K of context, only about 2.5% of the content is actually used; below 50K the share is 47.5%.
+- Every call rereads the whole context, so the higher the threshold, the more each call costs; see section 6.
 
-### 结果
+**The cost of compacting early (low threshold)**
+- Compaction is lossy. Lost in Compaction (2026-07): on average only 17% of in-session constraints survive; arXiv 2608.01326: verbatim information is almost entirely lost (results from our previous round of research). The lower the threshold, the more compactions there are, and the losses add up.
+- ACON (arXiv 2510.00615) ran a threshold ablation: smaller thresholds save more tokens but mean more compactions and lower accuracy. Its thresholds are tiny absolute values such as 4096/1024, so they don't carry over directly to Claude Code.
+- Anthropic cookbook: the lower the trigger, the more likely the "original question" is lost after compaction.
+- langwatch: the correction rate within 5 steps after a compaction is 2.37 times the usual rate, and it still hasn't fully recovered after 120 steps.
+- A threshold too close to the "startup context size" leads to repeated compaction. Claude Code issue #61351: with the threshold at about 70%, plus a large CLAUDE.md and memory files, it compacted almost every turn and spent about $9.18 in 58 minutes (https://github.com/anthropics/claude-code/issues/61351 ).
 
-| 压缩点 | 一轮能跑几次调用 | 平均上下文 | 每次：重读上下文 | 每次：写入新内容 | 单次压缩费用 | 平摊到每次 | **每次调用合计** | 相对默认 | 每 100 次调用压缩几次 |
+**Some counterintuitive findings**
+- Compaction doesn't necessarily lower scores. With compaction, OpenHands went from 53% to 54% solved; JetBrains' "keep only the last 10 turns" beat no management at less than half the cost.
+- In research tasks, **what you do** with old context matters more than **when** you trigger. DeepSeek and Kimi both trigger at 80%, and simply discarding old search results scores much higher than summarizing them (67.6 vs 60.2).
+- **Timing** matters more than **ratio**. Self-Compacting LM Agents (arXiv 2606.23525) found that triggering at a fixed token count can throw away intermediate results in the middle of reasoning; letting the model pick its own moment did no worse than fixed intervals and cost 30–70% less per task.
+- The larger the window, the smaller the accuracy gain from context management (arXiv 2609.20804: the gap shrinks from 35.7 points to 2.7 points).
+
+**What's missing:** no paper has directly measured what happens when "Claude Code / Codex compacts at X%". The level recommendations below are therefore **inferred from indirect evidence**, not experimental findings.
+
+---
+
+## 6. The cost math (our own model)
+
+### Assumptions
+- Prices are for **Opus 5.5**, checked against Anthropic's official SDK material: input $4, output $20, cache read $0.20; a 1-hour cache write is 2 times the input price, i.e. $8. All prices are per million tokens.
+- **The cache stays warm**: calls are never more than 1 hour apart, so the 1-hour cache applies.
+- On each call, the whole previous context is billed as cache reads, and about 3K of new tokens are billed as 1-hour cache writes. Output from normal replies costs the same at every level and doesn't affect the comparison, so it's left out.
+- About 30K remains after a compaction, and each call adds 3K until the compaction point is reached.
+- Cost of one compaction = reading the current context once at the cache-read price + summary output (4% of the compaction point, clamped to 2K–20K) + rewriting the remaining 30K into the cache afterwards.
+- The compaction cost is spread evenly over every call in that cycle.
+
+### Results
+
+| Compaction point | Calls per cycle | Average context | Per call: reread context | Per call: write new content | Cost of one compaction | Amortized per call | **Total per call** | vs default | Compactions per 100 calls |
 |---|---|---|---|---|---|---|---|---|---|
-| **967K**（1M 默认） | 312 | 497K | $0.099 | $0.024 | $0.83 | $0.003 | **$0.126** | 100% | 0.3 |
+| **967K** (1M default) | 312 | 497K | $0.099 | $0.024 | $0.83 | $0.003 | **$0.126** | 100% | 0.3 |
 | **500K** | 157 | 264K | $0.053 | $0.024 | $0.74 | $0.005 | **$0.081** | 65% | 0.6 |
 | **300K** | 90 | 164K | $0.033 | $0.024 | $0.54 | $0.006 | **$0.063** | 50% | 1.1 |
 | **200K** | 57 | 114K | $0.023 | $0.024 | $0.44 | $0.008 | **$0.055** | 43% | 1.8 |
 
-举个例子：一个 600 次调用的会话（大约几小时的写代码），967K 约 **$75.6**、压缩 2 次；500K 约 $48.9、压缩 4 次；300K 约 $37.6、压缩 7 次；200K 约 **$32.7**、压缩 11 次。
+For example, a 600-call session (a few hours of coding) costs about **$75.6** with 2 compactions at 967K; about $48.9 with 4 compactions at 500K; about $37.6 with 7 compactions at 300K; and about **$32.7** with 11 compactions at 200K.
 
-### 表里能看出什么
-1. **钱主要花在“每次重读整个上下文”上，压缩本身不贵。** 一次压缩最多约 $0.83，平摊到每次调用不到 1 美分。
-2. **越往低调越不划算。** 每次调用都有约 $0.024 的固定写入费，压缩点低于约 200K 后几乎不再省钱（100K 时每次约 $0.051），压缩次数却成倍增加。
-3. **200K 窗口的模型调低基本不省钱。** 默认本来就在约 167K 压缩，调到约 127K，每次只省约 3%。
-4. **离开超过 1 小时，缓存就冷了**，回来第一次调用要把整个上下文按 $8/M 重新写入：平均上下文 497K 时约 $3.98，114K 时约 $0.91。经常中途离开的人，低阈值更省。
-5. **加上返工成本也不改变结论。** 假设每次压缩后要多跑 5 次调用、重新读回 20K 的文件（约 $0.32/次），200K 档每次调用是 $0.060，仍然只有默认的一半左右。但到 100K 档，费用开始反弹（$0.065）。
-6. 这个量级和 langwatch 用真实账单算出的“逼近 1M 时约为最优点的 2.3 倍”一致（我们算的 967K 对 200K 也是 2.3 倍）。
-7. **Codex** 默认窗口只有 272K，把 90% 调到 80% 或 70%，粗算只省约 7–14%。Codex 真正要避开的是上下文超过 272K 后的长上下文加价，见第 7 节。
+### What the table tells us
+1. **The money goes mostly to rereading the whole context on every call; compaction itself is cheap.** One compaction costs at most about $0.83, which is less than 1 cent per call once amortized.
+2. **Going lower pays off less and less.** Every call carries a fixed write cost of about $0.024, so below about 200K there is almost no further saving (about $0.051 per call at 100K), while the number of compactions keeps multiplying.
+3. **Lowering the threshold on a 200K-window model saves almost nothing.** The default already compacts at about 167K; moving it to about 127K saves only about 3% per call.
+4. **Step away for more than 1 hour and the cache goes cold.** The first call after you return rewrites the whole context at $8/M: about $3.98 at an average context of 497K, about $0.91 at 114K. If you often leave in the middle of a session, a low threshold saves more.
+5. **Adding rework cost doesn't change the conclusion.** Suppose each compaction is followed by 5 extra calls and 20K of files read back in (about $0.32 per compaction): the 200K level then comes to $0.060 per call, still about half of the default. At the 100K level, though, the cost starts to climb again ($0.065).
+6. This order of magnitude matches langwatch's figure from real bills, "about 2.3 times the optimum when close to 1M" (our 967K vs 200K is also 2.3 times).
+7. **Codex** has a default window of only 272K, so lowering 90% to 80% or 70% saves only about 7–14% by a rough estimate. What Codex really needs to avoid is the long-context surcharge above 272K; see section 7.
 
-### 官方那句 “Overriding auto may result in high token usage, especially when resuming long sessions” 可能指什么
+### What the official line "Overriding auto may result in high token usage, especially when resuming long sessions" might refer to
 
-**官方没有解释这句话，以下都是推测。** 按上面的稳态模型，调低阈值每次调用是更便宜的，所以这句话更可能指下面几种情况：
-- **恢复一个比阈值大的旧会话。** 比如一个在默认设置下聊到 600K 的会话，你把压缩窗口改成 300K，隔天再恢复。缓存早就过期了，一恢复就超过阈值、立刻压缩：600K 按未缓存输入价 $4/M 算是 $2.40，再加摘要和重写，一次约 $3。官方 prompt-caching 文档确实写了 “This is why /compact costs the most when you resume an old session”（https://code.claude.com/docs/en/prompt-caching ）。但单看这一步不一定比 auto 更贵：不压缩的话，恢复 600K 也要重新写缓存（1 小时写入约 $4.8）。如果 Claude Code 的做法是先正常发一次请求、再发现超阈值去压缩，那两笔都得付（约 $5.6）。具体实现我们没查到。
-- **反复压缩**：阈值设得离启动上下文太近，就会出现 issue #61351 那种几乎每轮都压缩的情况。
-- **压缩后返工**：摘要丢了细节，模型只好重新读文件、重做。
-- **“token usage”可能指 token 数量**，比如订阅用户的用量额度，而不是美元。额度按什么规则折算，我们查不到。
+**The docs don't explain this line; everything below is speculation.** Under the steady-state model above, a lower threshold makes each call cheaper, so the line more likely refers to one of these cases:
+- **Resuming an old session that is larger than the threshold.** Say a session grew to 600K under the default settings, you then set the compaction window to 300K, and you resume the session the next day. The cache expired long ago, and the moment you resume, the session is over the threshold and compacts right away: 600K at the uncached input price of $4/M is $2.40, and with the summary and the rewrite it comes to about $3. The official prompt-caching docs do say "This is why /compact costs the most when you resume an old session" (https://code.claude.com/docs/en/prompt-caching ). But this step on its own isn't necessarily more expensive than auto: without compaction, resuming 600K also means rewriting the cache (about $4.8 for a 1-hour write). If Claude Code first sends a normal request and only then notices it is over the threshold and compacts, you pay both (about $5.6). We couldn't find out how it is actually implemented.
+- **Repeated compaction**: a threshold set too close to the startup context leads to what issue #61351 describes, with compaction on almost every turn.
+- **Rework after compaction**: the summary dropped details, so the model has to reread files and redo work.
+- **"Token usage" may mean token counts**, such as a subscriber's usage allowance, rather than dollars. We couldn't find how the allowance is calculated.
 
 ---
 
-## 7. 怎么选
+## 7. How to choose
 
-| 档位 | 1M 窗口的模型（设多少 → 约在哪压缩） | 200K 窗口的模型 | Codex（默认 272K 窗口） | 适合谁 | 代价（成本按第 6 节模型） | 依据强弱 |
+| Level | 1M-window model (set to → compacts at about) | 200K-window model | Codex (default 272K window) | Who it suits | Trade-off (cost from the section 6 model) | Strength of evidence |
 |---|---|---|---|---|---|---|
-| **保持默认（auto）** | 不设（约 967K） | 不设（200K 边界） | 不设（90%，约 245K） | 不想操心的人；经常恢复很久以前的长会话；启动上下文很大 | 1M 模型每次调用最贵（约 $0.126）；上下文后段模型可能变迟钝 | **强**：厂商默认，官方强烈推荐 |
-| **写代码（均衡）** | 400K → 约 367K | 200K（同默认） | 0.9（同默认） | 日常写代码、读代码、改 bug | 每次约 $0.069，比默认省约 45%；压缩次数约为默认的 2.8 倍 | **中**：langwatch 数据（构建/理解代码 300–450K）加从业者经验（1M 用到 300–400K），没有对照实验 |
-| **调研/检索** | 250K → 约 217K | 160K → 约 127K | 0.8 → 约 218K | 大量搜索、读网页和文档，读完只留结论 | 每次约 $0.056，省约 56%；压缩次数约为默认的 5 倍；更容易丢掉最初的问题，建议把问题写进文件 | **中**：Anthropic 自家搜索评测在 200K 触发；DeepSeek 和 Kimi 在窗口 80% 触发；langwatch 研究类 250–300K（超出其数据覆盖范围） |
-| **长时间自主运行** | 600K → 约 567K | 200K（同默认） | 0.9（同默认） | 无人值守、一跑几个小时的任务 | 每次约 $0.088，省约 30%；压缩次数只有默认的约 1.8 倍 | **弱**：折中推理，没有直接证据。真正起作用的是把目标和约束写进文件 |
-| **省钱优先** | 200K → 约 167K | 200K（同默认，调低也不省钱） | 0.8 → 约 218K | 预算敏感，任务短、彼此独立 | 每次约 $0.052，省约 59%，再往下基本不省；压缩次数约为默认的 7 倍，信息损失最多 | **中**：成本模型加 langwatch 的成本最优点（约 220K） |
+| **Keep the default (auto)** | Not set (about 967K) | Not set (200K boundary) | Not set (90%, about 245K) | People who don't want to think about it; people who often resume long sessions from long ago; setups with a large startup context | Most expensive per call on 1M models (about $0.126); the model may get sluggish late in the context | **Strong**: vendor default, officially strongly recommended |
+| **Coding (balanced)** | 400K → about 367K | 200K (same as default) | 0.9 (same as default) | Everyday coding, reading code, fixing bugs | About $0.069 per call, about 45% less than the default; about 2.8 times as many compactions as the default | **Medium**: langwatch data (building/understanding code 300–450K) plus practitioner experience (going up to 300–400K on 1M); no controlled experiment |
+| **Research / retrieval** | 250K → about 217K | 160K → about 127K | 0.8 → about 218K | Heavy searching and reading of web pages and docs, keeping only the conclusions | About $0.056 per call, about 56% less; about 5 times as many compactions as the default; the original question is more easily lost, so write it into a file | **Medium**: Anthropic's own search benchmarks trigger at 200K; DeepSeek and Kimi trigger at 80% of the window; langwatch's research band is 250–300K (beyond what its data cover) |
+| **Long autonomous runs** | 600K → about 567K | 200K (same as default) | 0.9 (same as default) | Unattended tasks that run for hours | About $0.088 per call, about 30% less; only about 1.8 times as many compactions as the default | **Weak**: a reasoned compromise with no direct evidence. What really makes the difference is writing goals and constraints into files |
+| **Budget first** | 200K → about 167K | 200K (same as default; lowering it saves nothing) | 0.8 → about 218K | Budget-conscious users with short, independent tasks | About $0.052 per call, about 59% less, with almost no further saving below this; about 7 times as many compactions as the default and the most information loss | **Medium**: the cost model plus langwatch's cost optimum (about 220K) |
 
-**拿不准怎么选：** 主要写代码的选“写代码（均衡）”；主要查资料的选“调研/检索”；经常隔天恢复长会话、或者 CLAUDE.md 和 MCP 工具很多的，保持默认。
+**If you're not sure which to pick:** if you mostly write code, choose "Coding (balanced)"; if you mostly look things up, choose "Research / retrieval"; if you often resume long sessions the next day, or have a large CLAUDE.md and many MCP tools, keep the default.
 
-### 设置前要知道的几件事
-1. **你设的是“压缩窗口”，实际压缩会早一点。** 官方 changelog 写明 1M 窗口约在 967K 压缩，两者差约 33K（拆成摘要预留 20K 加缓冲 13K，这个说法是二手旁证）。官方没写自定义值是不是也提前 33K，所以上表的“约在哪压缩”是推算出来的。
-2. **状态栏的 used_percentage 始终以整个模型窗口为分母。** 设了压缩窗口之后，这个百分比就不再代表离压缩还有多远（env-vars 文档原文）。
-3. **别设得离启动上下文太近。** 如果一开局 CLAUDE.md、MCP 工具说明、记忆文件就占了几万 token，压缩后很快又会满，陷入反复压缩。我们自己的经验规则（不是官方说法）：压缩点至少是“压缩后剩余大小”的 3 倍。
-4. **比调数字更管用的两件事：** 在任务间隙手动 `/compact`，别让自动压缩在任务中途触发（官方 prompt-caching 页也这么建议）；把目标、约束、进度写进文件（计划文件、CLAUDE.md），压缩丢了还能读回来（Anthropic 的记笔记做法、Huntley 和 Manus 的思路都是这样）。
-5. **Codex：** 默认窗口 272K。如果你手动开了更大的窗口（最大 872K），比例要按新窗口重算。另外有报道称 GPT-5.6 的输入超过 272K 后，输入按 2 倍、输出按 1.5 倍计价（AI Weekly，2026-07-19，https://aiweekly.co/alerts/openai-codex-cuts-gpt-56-context-window-from-372k-to-272k ），所以开了大窗口的话，压缩点放在 272K 以下更省钱。
-6. **订阅用户（Pro/Max）：** 上面的美元账是按 API 按量计费算的。订阅额度怎么按 token 折算我们查不到，只能说大方向应该一致。
+### Things to know before you change it
+1. **What you set is the "compaction window"; the actual compaction happens a little earlier.** The official changelog states that a 1M window compacts at about 967K, a gap of about 33K (said to be 20K reserved for the summary plus a 13K buffer, but that breakdown is second-hand). The docs don't say whether custom values also compact 33K early, so the "compacts at about" figures in the table above are estimates.
+2. **The status line's used_percentage always uses the whole model window as its denominator.** Once you set a compaction window, that percentage no longer tells you how close you are to compaction (per the env-vars docs).
+3. **Don't set it too close to your startup context.** If CLAUDE.md, MCP tool descriptions and memory files take up tens of thousands of tokens from the start, the context fills up again soon after each compaction and you end up compacting over and over. Our own rule of thumb (not an official one): the compaction point should be at least 3 times the "size left after compaction".
+4. **Two things that help more than tuning the number:** run `/compact` yourself between tasks so auto-compaction doesn't fire in the middle of one (the official prompt-caching page recommends this too); and write goals, constraints and progress into files (a plan file, CLAUDE.md) so they can be read back if compaction drops them (this is Anthropic's note-taking approach, and the same idea as Huntley's and Manus's).
+5. **Codex:** the default window is 272K. If you have manually enabled a larger window (up to 872K), recompute the ratio against the new window. There are also reports that once input exceeds 272K, GPT-5.6 bills input at 2 times and output at 1.5 times the normal price (AI Weekly, 2026-07-19, https://aiweekly.co/alerts/openai-codex-cuts-gpt-56-context-window-from-372k-to-272k ), so with a large window it's cheaper to keep the compaction point below 272K.
+6. **Subscribers (Pro/Max):** the dollar figures above assume pay-as-you-go API pricing. We couldn't find how subscription allowances map to tokens; all we can say is that the general direction should be the same.

@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "See all your Claude Code and Codex chats next to the terminal: which agents are working, which need you, and how full each context is. Compact with a cheaper model, get a reminder before the cache expires, and resume after a usage limit. Reads only the local session logs; the extension itself makes no network requests. Unofficial; not affiliated with Anthropic or OpenAI. Free for personal and noncommercial use; commercial use needs a license.",
-  "capabilities.untrusted": "In Restricted Mode, the settings that point to other folders or programs (Claude Code CLI path, Claude projects folder, Codex home) are only read from your user settings.",
+  "description": "See all your Claude Code and Codex chats next to the terminal: which agents are working, which need you, and how full each context is. Compact with a cheaper model, get a reminder before the cache expires, and resume after a usage limit. Reads only the local session logs; the extension makes no network requests unless you turn on optional push notifications or send a test message. Unofficial; not affiliated with Anthropic or OpenAI. Free for personal and noncommercial use; commercial use needs a license.",
+  "capabilities.untrusted": "In Restricted Mode, the settings that point to other folders or programs (Claude Code CLI path, Claude projects folder, Codex home) are only read from your user settings. Push notification settings are always read only from your user settings.",
 
   "container.title": "Agent Monitor",
   "view.overview": "Overview",
@@ -33,6 +33,7 @@
   "cmd.handoff": "Write Handoff Note and Start Fresh…",
   "cmd.setAutoCompact": "Set Auto-Compact Threshold…",
   "cmd.storage": "Storage Locations and Usage",
+  "cmd.pushSetup": "Push Notifications…",
   "submenu.scope.all": "Scope: All Sessions",
   "submenu.scope.workspace": "Scope: This Workspace",
 
@@ -56,6 +57,7 @@
   "config.sessionListPosition.auto": "Same side as the terminal's tab list (right by default).",
   "config.sessionListPosition.left": "On the left, with the agents on the right.",
   "config.sessionListPosition.right": "On the right, with the agents on the left.",
+  "config.notifyNeedsYou": "Notify you when a chat or agent starts waiting for your reply or approval: a message in the focused VS Code window (except for the chat you are looking at), or a system notification when no VS Code window has focus (macOS and Linux). On Windows and in remote windows, the message appears in the next VS Code window you switch to instead. Each wait is reported by one window only.",
   "config.refreshSeconds": "How often to re-read the session logs, in seconds.",
   "config.activeWindowMinutes": "Show sessions that were active within this many minutes. Open sessions and the selected session are always shown.",
   "config.staleMinutes": "Mark an agent as having no activity after this many minutes without new log lines.",
@@ -64,6 +66,8 @@
   "config.approvalGuess.allTools": "For every tool, after the no-activity time (staleMinutes).",
   "config.approvalGuess.off": "Never guess.",
   "config.approvalGuessSeconds": "In quick-tools mode, how many seconds a quick tool call can go without a result before it counts as possibly waiting for approval.",
+  "config.backgroundRefreshSeconds": "How often, in seconds, to re-read the session logs while no VS Code window has focus. It applies only when it is longer than `#agentMonitor.refreshSeconds#`. Lower values make \"needs you\" notifications arrive sooner.",
+  "config.shareScanAcrossWindows": "Let all VS Code windows share one reading of the session logs: one window reads them and the others show its results, which saves CPU and memory. Turn off to have each window read them on its own.",
   "config.claude.enabled": "Read Claude Code session logs.",
   "config.claude.projectsDir": "Folder with the Claude Code session logs. Leave empty to use `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`.",
   "config.claude.cliPath": "Path to the Claude Code command-line program, used only when you compact a closed session in the background. Leave empty to look for `claude` on your PATH, then in the installed Claude Code extension.",
@@ -79,6 +83,15 @@
   "config.cacheReminderShortTtl": "Also remind about sessions that use the 5-minute cache.",
   "config.closeReminder": "When you close a large Claude Code session while its cache is still warm, offer to compact it or write a handoff note.",
   "config.postCompactHint": "After a session is compacted, remind you to check that its key rules and constraints are still there.",
+  "config.push.enabled": "Send a short push message to your phone or team chat when an agent needs you, stops with an error, or reaches or leaves a usage limit. Off by default; choose where it goes with [Push Notifications…](command:agentMonitor.push.setup). Only the project folder name and the state are sent (chat titles and subagent names only with `#agentMonitor.push.includeTitle#`). This is the only feature that uses the network.",
+  "config.push.events": "Which events send a push while push is on.",
+  "config.push.events.needsYou": "An agent is waiting for your reply or approval (pushed only if it still waits after the delay).",
+  "config.push.events.error": "An agent stopped with an API error.",
+  "config.push.events.limitHit": "A Claude Code or Codex usage limit is reached.",
+  "config.push.events.limitReset": "That usage limit has reset.",
+  "config.push.delaySeconds": "How many seconds an agent must keep waiting for you before it is pushed. The desktop notification comes first; if you answer within this time, nothing is pushed. `0` pushes right away.",
+  "config.push.includeTitle": "Also send the chat title (and the subagent's name). Only a real title is sent (one you set, or one the agent or app wrote); a title made from your first prompt never is.",
+  "config.push.channels": "Where pushes go (only the parts that are not secret). Add, test, edit or remove channels with [Push Notifications…](command:agentMonitor.push.setup) rather than editing this list: tokens, keys and webhook URLs are kept in VS Code's secure storage, not here.",
   "config.onlyWorkspace": "Only show sessions from the current workspace.",
   "config.onlyWorkspace.deprecated": "Replaced by the scope setting (agentMonitor.scope). An existing value is migrated automatically."
 }

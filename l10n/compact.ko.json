@@ -143,7 +143,7 @@
   "autocompact.custom.detail": "100K–1M 사이 값을 입력하세요. 예: 300k, 300000, 300(= 300K)",
   "autocompact.custom.detail.codex": "토큰 수를 입력하세요. 예: 200k 또는 200000. Codex는 창의 90%로 상한을 둡니다",
   "autocompact.guide": "참고 가이드 보기",
-  "autocompact.guide.detail": "GitHub에서 가이드를 엽니다(중국어): 다른 도구들의 기본값, 공급업체 벤치마크, 실무 조언과 이 수치들의 근거가 된 비용 모델",
+  "autocompact.guide.detail": "GitHub에서 가이드를 엽니다(영어): 다른 도구들의 기본값, 공급업체 벤치마크, 실무 조언과 이 수치들의 근거가 된 비용 모델",
   "autocompact.input.title": "사용자 지정 자동 압축 창 · \"{title}\"",
   "autocompact.input.prompt": "100K에서 1M 사이의 토큰 수: 300k, 300000 또는 300(= 300K). 기본값으로 되돌리려면 auto를 입력하세요. 이 모델의 창은 {window}이며, 더 큰 값은 여기서 제한됩니다.",
   "autocompact.input.prompt.codex": "100K에서 1M 사이의 토큰 수: 200k, 200000 또는 200(= 200K). 기본값으로 되돌리려면 auto를 입력하세요. Codex는 {window} 창의 90%로 제한합니다.",

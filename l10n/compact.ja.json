@@ -143,7 +143,7 @@
   "autocompact.custom.detail": "100K〜1Mの値を入力してください。例: 300k、300000、300（= 300K）",
   "autocompact.custom.detail.codex": "トークン数を入力してください。例: 200kまたは200000。Codexはウィンドウの90%を上限とします",
   "autocompact.guide": "参考ガイドを見る",
-  "autocompact.guide.detail": "GitHubでガイドを開きます（中国語）: 他ツールのデフォルト値、ベンダーのベンチマーク、実務者のアドバイス、これらの数値の根拠となるコストモデル",
+  "autocompact.guide.detail": "GitHubでガイドを開きます（英語）: 他ツールのデフォルト値、ベンダーのベンチマーク、実務者のアドバイス、これらの数値の根拠となるコストモデル",
   "autocompact.input.title": "カスタム自動圧縮ウィンドウ · 「{title}」",
   "autocompact.input.prompt": "100K〜1Mのトークン数: 300k、300000、300（= 300K）。デフォルトに戻すにはautoと入力してください。このモデルのウィンドウは{window}で、これより大きい値はここで上限になります。",
   "autocompact.input.prompt.codex": "100K〜1Mのトークン数: 200k、200000、200（= 200K）。デフォルトに戻すにはautoと入力してください。Codexは{window}ウィンドウの90%を上限とします。",

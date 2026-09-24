@@ -86,7 +86,8 @@ function append(file, rows, mtimeMs) {
 
 function writeRegistry(home, entries) {
   const dir = path.join(home, 'sessions');
-  fs.rmSync(dir, { recursive: true, force: true });
+  // maxRetries: on Windows a handle the monitor still holds can make the removal fail briefly (EBUSY / EPERM)
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   fs.mkdirSync(dir, { recursive: true });
   let n = 0;
   for (const e of entries) {
@@ -614,7 +615,7 @@ test('tool argument summaries use only original text, no hard-coded Chinese; loc
   assert.ok(_internal.LOCAL_CMD_RE.test('<command-name>/model</command-name>'));
   assert.ok(!_internal.LOCAL_CMD_RE.test('<task-notification>x</task-notification>'), 'a background task notification starts a new turn');
   assert.ok(_internal.INTERRUPT_RE.test('[Request interrupted by user for tool use]'));
-  const src = fs.readFileSync(path.join(ROOT, 'lib', 'providers', 'claude.js'), 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l) && !/\/\/.*$/.test(l.replace(/'[^']*'/g, '')));
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'providers', 'claude.js'), 'utf8').split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l) && !/\/\/.*$/.test(l.replace(/'[^']*'/g, '')));
   for (const l of src) assert.ok(!/'[^']*[一-鿿][^']*'/.test(l), 'strings in code contain no Chinese: ' + l.trim().slice(0, 40));
 });
 
@@ -931,7 +932,8 @@ test('normalizeConfig: fills in defaults; also accepts the legacy { root } form'
   assert.strictEqual(e.codex.home, '/cx');
   // configDir (where the registry and user settings live), its source, the observed compaction table
   assert.deepStrictEqual([c.claude.configDir, c.claude.home, c.observedCompact], ['/x', '/x', {}]);
-  assert.deepStrictEqual([e.claude.configDir, e.claude.configDirSource, e.codex.homeSource], ['/cfg', 'env', 'env']);
+  // configDir is the parent of <CLAUDE_CONFIG_DIR>/projects, so it comes back in the host's separators (\cfg on Windows)
+  assert.deepStrictEqual([e.claude.configDir, e.claude.configDirSource, e.codex.homeSource], [path.normalize('/cfg'), 'env', 'env']);
   const d = normalizeConfig({ claude: { projectsDir: '/data/projects', configDir: '/cfg dir/配置' }, observedCompact: { 'm|1': 5, bad: 'x', neg: -1 } }, {});
   assert.deepStrictEqual([d.claude.home, d.claude.settingsPath, d.claude.configDirSource], ['/cfg dir/配置', path.join('/cfg dir/配置', 'settings.json'), 'setting']);
   assert.deepStrictEqual(d.observedCompact, { 'm|1': 5 });
@@ -1272,7 +1274,7 @@ test('real-data smoke test (read-only ~/.claude, ~/.codex)', () => {
       console.log(`  FAIL  ${t.name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  fs.rmSync(TMP, { recursive: true, force: true });
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5 }); } catch { /* ignore */ }
   console.log(`\n${ok}/${ok + fail} passed`);
   process.exitCode = fail ? 1 : 0;
 })();

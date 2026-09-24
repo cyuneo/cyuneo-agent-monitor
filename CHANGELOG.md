@@ -4,6 +4,27 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-24
+
+### Added
+
+- **"Needs you" notifications.** When a chat or one of its agents starts waiting for your approval, an answer or a dialog, you are told right away: a message in the focused VS Code window, with a **Show** button that selects the chat in the panel, or a system notification (macOS and Linux) when no VS Code window has focus. On Windows and in remote windows, the message appears in the next VS Code window you switch to instead, for now. There is no message for the chat you are already looking at, and a prompt you answer within a few seconds is not reported. Each wait is reported once, by one window, even across editors that have the extension installed. Chats that were already waiting when the window opened, or that only appear after you change a setting, are not reported. Turn it off with `agentMonitor.notifyNeedsYou`.
+- **Windows share one reading of the records.** With several VS Code windows open, one window reads the session records and the others show its results, instead of every window reading them again. If that window closes, another takes over right away; if the shared folder can't be written, each window reads on its own. Turn it off with `agentMonitor.shareScanAcrossWindows`.
+- **Slower reading in the background.** While no VS Code window has focus, the records are read every 5 seconds instead of every 2 (`agentMonitor.backgroundRefreshSeconds`), and at full speed again as soon as a window has focus.
+- **Push notifications to your phone or team chat (optional, off by default).** When an agent is still waiting for you after a delay (30 seconds by default), stops with an API error, or hits or clears a Claude Code or Codex usage limit, Agent Monitor can send a short message through ntfy, Bark, ServerChan, Feishu / Lark, DingTalk, WeCom, Telegram, Discord or Slack. Only the project folder name and the state are sent, plus the chat title and subagent name if you allow them (`agentMonitor.push.includeTitle`); prompts, code and costs never are. Set it up with **Agent Monitor: Push Notifications…** in the Command Palette or the panel's **…** menu: add a channel, send a test message, choose the events. Tokens and webhook URLs are kept in VS Code's secure storage, and the push settings are read only from your user settings. Messages are grouped, limited per channel (one every 10 seconds, 20 an hour, plus an optional daily limit) and sent by one window only. After three failures in a row you get one warning. With push off, the extension makes no network requests, except a test message you send yourself.
+
+### Changed
+
+- **The count badge shows on the Agent Monitor panel tab from the start**, before you have opened the panel.
+- **The reference guides are now in English too.** **View the reference guide** opens the English guide, or the Chinese one when VS Code's display language is Chinese.
+- **The README shows a short demo GIF.**
+- For contributors: code comments, test names and test output are in English, and the tests run on Linux, macOS and Windows for every push and pull request.
+
+### Fixed
+
+- **Windows: changing a chat's auto-compact threshold no longer fails when Claude Code's `settings.json` is briefly locked** by another program (for example an antivirus scan); the write is retried for a moment.
+- **Windows: `~` in `agentMonitor.claude.cliPath` now means your user folder** (`USERPROFILE`), as it does on macOS and Linux.
+
 ## [0.3.1] - 2026-09-24
 
 ### Changed

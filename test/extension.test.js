@@ -2,6 +2,10 @@
 // Tests for the extension entry point (extension.js) and package.json. Run with plain Node: node test/extension.test.js
 // - Built-in vscode stub (including l10n, window.tabGroups, TabInputWebview, TabInputCustom, globalState, QuickPick) and a fake worker.
 // - lib/agents-view.js and lib/compact.js are the real modules, wrapped only to record calls; no real dialogs are shown and the claude CLI is never called.
+// - lib/notify.js and lib/shared-scan.js are the real modules with injected timers / commands: no system notification is ever shown,
+//   and other VS Code windows are simulated with extra shared-scan instances in a temp dir.
+// - Remote push: lib/push-runtime.js is the real module with short delays and a movable clock; SecretStorage is an in-memory fake
+//   and globalThis.fetch is a fake that only records requests, so nothing ever goes out on the network.
 // - All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
 
 const assert = require('assert');
@@ -25,11 +29,14 @@ const log = {
   contexts: {}, executed: [], opened: [], updates: [], output: [], workers: [], progress: [],
   info: [], warn: [], error: [], clipboard: [], quickPicks: [], agentInputs: [], compactSnapshots: [],
   compactDeps: null, reveals: [], treeViews: {}, webviews: {}, statusItem: null,
-  handoffs: [], autoDeps: null, storageOpens: [],
+  handoffs: [], autoDeps: null, storageOpens: [], inputs: [],
 };
 const config = {}; // setting name -> { globalValue, workspaceValue }
 const listeners = { config: [], folders: [], tabs: [], tabGroups: [], windowState: [] };
 let quickPickAnswer = null; // (items) => item
+let infoAnswer = null;      // (message, items) => item: the button picked on an information message
+let warnAnswer = null;      // (message, items) => item: the button picked on a warning message
+let inputAnswer = null;     // (options) => string|undefined: what the user types into an input box
 
 class EventEmitter {
   constructor() {
@@ -160,11 +167,11 @@ const vscode = {
     registerWebviewViewProvider: (id, provider, opts) => { log.webviews[id] = { provider, opts }; return { dispose() {} }; },
     showTextDocument: async (u) => { log.opened.push(u.fsPath); },
     withProgress: async (o, fn) => { log.progress.push(o); return fn({ report() {} }, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }); },
-    showInformationMessage: async (m) => { log.info.push(m); return undefined; },
-    showWarningMessage: async (m) => { log.warn.push(m); return undefined; },
+    showInformationMessage: async (m, ...items) => { log.info.push(m); return infoAnswer ? infoAnswer(m, items) : undefined; },
+    showWarningMessage: async (m, ...items) => { log.warn.push(m); return warnAnswer ? warnAnswer(m, items) : undefined; },
     showErrorMessage: async (m) => { log.error.push(m); return undefined; },
     showQuickPick: async (items, o) => { log.quickPicks.push({ items, o }); return quickPickAnswer ? quickPickAnswer(items) : undefined; },
-    showInputBox: async () => undefined,
+    showInputBox: async (o) => { log.inputs.push(o); return inputAnswer ? inputAnswer(o) : undefined; },
     createQuickPick: () => {
       const accept = new EventEmitter();
       const hide = new EventEmitter();
@@ -203,6 +210,15 @@ class FakeWorker extends NodeEmitter {
   }
   postMessage(m) { this.messages.push(JSON.parse(JSON.stringify(m))); }
   terminate() { this.terminated = true; setImmediate(() => this.emit('exit', 1)); return Promise.resolve(1); }
+  // Like the real worker, a snapshot carries the config generation of the last config message (or of workerData)
+  cfgGen() {
+    const c = this.messages.filter((m) => m.type === 'config' && Number.isFinite(m.gen));
+    return c.length ? last(c).gen : (this.opts.workerData.cfgGen || 0);
+  }
+  emit(ev, m, ...rest) {
+    if (ev === 'message' && m && m.type === 'snapshot' && !('cfgGen' in m)) m = { ...m, cfgGen: this.cfgGen() };
+    return super.emit(ev, m, ...rest);
+  }
 }
 
 // agents view and compaction: real modules wrapped to record calls
@@ -241,6 +257,91 @@ const storageWrap = {
   openStorageView(context, deps) { log.storageOpens.push(deps); return { reveal() {} }; },
 };
 
+// "needs you" notifications: the real module with a short claim delay; system notifications go to a fake execFile that only
+// records them; the claim folder every window shares is under TMP instead of the system temp dir
+const realNotify = require(path.join(ROOT, 'lib', 'notify'));
+const sysNotify = { platform: 'darwin', fail: false, calls: [] };
+const notifyWrap = {
+  ...realNotify,
+  CLAIM_DELAY_MS: 20,
+  sharedClaimDir: () => realNotify.sharedClaimDir({ base: TMP }),
+  hasSystemNotifier: () => realNotify.hasSystemNotifier(sysNotify.platform),
+  sendSystemNotification: (msg, o) => realNotify.sendSystemNotification(msg, {
+    ...o,
+    platform: sysNotify.platform,
+    execFile: (cmd, args, opts, cb) => {
+      sysNotify.calls.push({ cmd, args });
+      setImmediate(() => cb(sysNotify.fail ? new Error('synthetic failure') : null));
+      return { on() {} };
+    },
+  }),
+};
+// shared scan: the real module, without fs.watch or a settle delay; heartbeats run only when a test calls beat()
+const realShared = require(path.join(ROOT, 'lib', 'shared-scan'));
+const sharedLog = []; // { o, inst, beat() } per createSharedScan call from the extension
+const sharedClock = { offset: 0 }; // moves the shared scan's clock ahead of Date.now (e.g. past a grace period)
+function sharedOpts(rec) {
+  return {
+    watch: false, settleMs: 0, now: () => Date.now() + sharedClock.offset,
+    setInterval: (fn) => { const h = { fn, unref() {} }; rec.beats.push(h); return h; },
+    clearInterval: (h) => { const i = rec.beats.indexOf(h); if (i >= 0) rec.beats.splice(i, 1); },
+  };
+}
+const sharedWrap = {
+  ...realShared,
+  createSharedScan(o) {
+    const rec = { o, beats: [], beat: () => rec.beats.slice().forEach((h) => h.fn()) };
+    rec.inst = realShared.createSharedScan({ ...o, ...sharedOpts(rec) });
+    sharedLog.push(rec);
+    return rec.inst;
+  },
+};
+// another VS Code window in the same shared dir (a shared-scan instance driven by hand)
+function peerWindow(dir, cfgKey, extra = {}) {
+  const rec = { beats: [], snaps: [], roles: [], unions: [], refreshes: 0 };
+  rec.inst = realShared.createSharedScan({
+    dir, cfgKey, windowId: 'peer', ...sharedOpts(rec),
+    onRole: (r) => rec.roles.push(r),
+    onSnapshot: (snap) => rec.snaps.push(snap),
+    onFocusUnion: (keys) => rec.unions.push(keys),
+    onRefreshRequest: () => { rec.refreshes++; },
+    ...extra,
+  });
+  rec.beat = () => rec.beats.slice().forEach((h) => h.fn());
+  return rec;
+}
+
+// Remote push: the real runtime with short delays (needsYou waits 60 ms, the rescan 40 ms before that, the batch 10 ms) and a
+// clock tests can move ahead (a usage limit's reset time is rounded up to the minute)
+const realPushRt = require(path.join(ROOT, 'lib', 'push-runtime'));
+const realPush = require(path.join(ROOT, 'lib', 'push'));
+const pushClock = { offset: 0 };
+const PUSH_TIMING = Object.freeze({ wait: () => 60, rescanLeadMs: 40, freshWaitMs: 1000, limiter: { coalesceMs: 10, perChannelMinMs: 0, perHourMax: 1000 } });
+const pushNow = () => Date.now() + pushClock.offset;
+const pushRtWrap = {
+  ...realPushRt,
+  createPushRuntime: (deps) => realPushRt.createPushRuntime({ ...deps, clock: pushNow, timing: PUSH_TIMING }),
+};
+// Network: every request lands here and is only recorded (a real request would be a test bug); tests set the answer
+const net = { calls: [], answer: null };
+globalThis.fetch = async (url, init) => {
+  net.calls.push({ url: String(url), init });
+  const a = net.answer ? await net.answer(String(url), init) : { status: 200, text: '' };
+  if (a instanceof Error) throw a;
+  return { status: a.status, text: async () => a.text || '' };
+};
+// SecretStorage: in memory
+function fakeSecrets() {
+  const data = new Map();
+  return {
+    data,
+    get: async (k) => data.get(k),
+    store: async (k, v) => { data.set(k, String(v)); },
+    delete: async (k) => { data.delete(k); },
+    onDidChange: () => ({ dispose() {} }),
+  };
+}
+
 const origLoad = Module._load;
 Module._load = function (request, parent) {
   if (request === 'vscode') return vscode;
@@ -251,6 +352,9 @@ Module._load = function (request, parent) {
   if (fromExt && request === './lib/autocompact' && modOverride.autocompact) return modOverride.autocompact;
   if (fromExt && request === './lib/autocompact' && autoWrap) return autoWrap;
   if (fromExt && request === './lib/storage-view') return modOverride.storage || storageWrap;
+  if (fromExt && request === './lib/notify') return notifyWrap;
+  if (fromExt && request === './lib/shared-scan') return sharedWrap;
+  if (fromExt && request === './lib/push-runtime') return pushRtWrap;
   return origLoad.apply(this, arguments);
 };
 
@@ -259,6 +363,7 @@ const fmt = require(path.join(ROOT, 'lib', 'format'));
 const { createI18n } = require(path.join(ROOT, 'lib', 'i18n'));
 const { emptyQuotaSnapshot } = require(path.join(ROOT, 'lib', 'core', 'quota'));
 const { emptyDailyTotals } = require(path.join(ROOT, 'lib', 'core', 'daily'));
+const lampLib = require(path.join(ROOT, 'lib', 'lamp'));
 const i18n = createI18n('en');
 
 // ---------------------------------------------------------------------------
@@ -277,6 +382,7 @@ async function test(name, fn) {
   }
 }
 const tick = () => new Promise((r) => setImmediate(r));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const last = (a) => a[a.length - 1];
 
@@ -418,13 +524,20 @@ async function extensionTests() {
   const page = openPanel();
 
   await test('activation: the bottom panel has a single webview (no native session tree) + the sidebar overview tree; the worker starts with the v2 config; context keys before loading', () => {
-    assert.deepStrictEqual(Object.keys(log.treeViews), ['agentMonitor.tree'], 'bottom panel no longer registers a native tree');
+    assert.deepStrictEqual(Object.keys(log.treeViews), ['agentMonitor.tree', 'agentMonitor.panelOverview'], 'only the sidebar tree and the hidden panel badge carrier (no native session tree)');
     assert.strictEqual(tv.opts.showCollapseAll, true);
     assert.ok(log.webviews['agentMonitor.agents'], 'webview not registered');
     assert.ok(log.webviews['agentMonitor.agents'].provider instanceof RecordingAgentsView);
     assert.strictEqual(w0.file, path.join(ROOT, 'lib', 'worker.js'));
     const cfg = w0.opts.workerData;
-    assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'claude', 'codex', 'intervalMs', 'observedCompact', 'staleMinutes']);
+    assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'cfgGen', 'claude', 'codex', 'intervalMs', 'observedCompact', 'paused', 'staleMinutes']);
+    // windows share one scan by default: the worker starts paused and resumes once this window leads (the only window here)
+    assert.strictEqual(cfg.paused, true);
+    assert.strictEqual(sharedLog.length, 1);
+    assert.strictEqual(sharedLog[0].o.dir, path.join(TMP, 'shared-scan'));
+    assert.strictEqual(sharedLog[0].inst.role, 'leader');
+    assert.ok(w0.messages.some((m) => m.type === 'resume'), 'leader did not resume its worker');
+    assert.ok(!w0.messages.some((m) => m.type === 'interval'), 'a focused window must not slow down, not even briefly at start');
     assert.deepStrictEqual(Object.keys(cfg.claude).sort(), ['configDir', 'configDirSource', 'enabled', 'home', 'projectsDir', 'settingsPath']);
     assert.deepStrictEqual(Object.keys(cfg.codex).sort(), ['enabled', 'home', 'homeSource']);
     assert.strictEqual(cfg.claude.home, path.dirname(cfg.claude.projectsDir));
@@ -637,15 +750,18 @@ async function extensionTests() {
     assert.strictEqual(log.statusItem.shown, true);
   });
 
-  await test('"seen" changes and badge: the badge sits on the bottom-panel webview view; markSeen({ sessionKey }) → lamp turns dim green, badge clears, status bar follows', async () => {
+  await test('"seen" changes and badge: the panel badge sits on the hidden panel tree (so the tab shows it before the panel is opened); markSeen({ sessionKey }) → lamp turns dim green, badge clears, status bar follows', async () => {
     const s = fixtures()[1];
     s.doneAtMs = Date.now() + 1000; // later than the click just now: there is a new result
     s.main.status = st('done', s.doneAtMs);
     send([s]);
     await tick();
     assert.strictEqual(page.row(BETA).lamp, 'doneUnseen');
-    assert.deepStrictEqual(page.view.badge && page.view.badge.value, 1);
-    assert.ok(page.view.badge.tooltip.includes(i18n.t('badge.doneUnseen', { n: 1 })));
+    const ptv = log.treeViews['agentMonitor.panelOverview'];
+    assert.deepStrictEqual(ptv.badge && ptv.badge.value, 1);
+    assert.ok(ptv.badge.tooltip.includes(i18n.t('badge.doneUnseen', { n: 1 })));
+    assert.strictEqual(ptv.opts.treeDataProvider, tv.opts.treeDataProvider, 'panel tree shares the overview provider');
+    assert.strictEqual(page.view.badge, undefined, 'no second badge on the webview view');
     assert.strictEqual(tv.badge.value, 1);
     // argument shape passed by the webview context menu
     await registered.get('agentMonitor.markSeen')({ webviewSection: 'session', sessionKey: BETA, compactable: false, resumable: true, webview: 'agentMonitor.agents' });
@@ -653,7 +769,7 @@ async function extensionTests() {
     globalState.update('agentMonitor.seen.v1', { [BETA]: Date.now() + 5000 });
     await registered.get('agentMonitor.markSeen')(BETA);
     assert.strictEqual(page.row(BETA).lamp, 'doneSeen');
-    assert.strictEqual(page.view.badge, undefined);
+    assert.strictEqual(ptv.badge, undefined);
     assert.strictEqual(tv.badge, undefined);
     assert.strictEqual(log.statusItem.color.id, 'agentMonitor.lampDoneSeen');
   });
@@ -1143,12 +1259,15 @@ async function extensionTests() {
     await tick();
     assert.strictEqual(log.workers.length, count);
     ext.deactivate();
+    // the shared scan was left before the worker stopped: leader.json is gone, so another window takes over at once
+    assert.ok(!fs.existsSync(path.join(TMP, 'shared-scan', 'leader.json')), 'leader.json left behind');
+    assert.strictEqual(ctl.replayTimer, null);
     // only two kinds of info lines are allowed: worker restarts and "recorded an observed compaction point"
     const bad = log.output.filter((l) => !/Background reader stopped|Measured auto-compact point/.test(l));
     assert.deepStrictEqual(bad, [], bad.join('\n'));
   });
 
-  await test('reactivation: the bottom panel is not focused again; the legacy onlyWorkspace=true setting migrates to scope=workspace; observed compaction points go from globalState to the worker; placeholder commands when modules are missing', () => {
+  await test('reactivation: the bottom panel is not focused again; the legacy onlyWorkspace=true setting migrates to scope=workspace; observed compaction points go from globalState to the worker; placeholder commands when modules are missing; no global storage → scans alone', () => {
     for (const k of Object.keys(config)) delete config[k];
     config.onlyWorkspace = { globalValue: true };
     registered.clear();
@@ -1171,14 +1290,1268 @@ async function extensionTests() {
     assert.ok(log.updates.some(([k, v, t]) => k === 'scope' && v === 'workspace' && t === ConfigurationTarget.Global));
     assert.deepStrictEqual(last(log.workers).opts.workerData.observedCompact, globalState.get('agentMonitor.observedCompact'));
     assert.ok(Object.keys(last(log.workers).opts.workerData.observedCompact).length >= 1);
+    // no globalStorageUri: nowhere to share a scan, so the worker is not paused and no shared scan is created
+    assert.strictEqual(ext._controller().shared, null);
+    assert.strictEqual(last(log.workers).opts.workerData.paused, undefined);
     for (const d of context2.subscriptions) d.dispose();
     ext.deactivate();
   });
 }
 
 // ---------------------------------------------------------------------------
+// "Needs you" notifications, shared scan across windows, background slowdown
+// ---------------------------------------------------------------------------
+
+/**
+ * A fresh activation, as another VS Code window would do it: settings reset to the given ones, its own globalStorageUri
+ * under TMP/<name> (the shared-scan and notify dirs go there), the bottom-panel intro already done.
+ */
+function activateWindow(name, settings = {}, extra = {}) {
+  const ext = require(EXT_FILE);
+  for (const k of Object.keys(config)) delete config[k];
+  for (const [k, v] of Object.entries(settings)) config[k] = { globalValue: v };
+  registered.clear();
+  const gs = path.join(TMP, name);
+  fs.mkdirSync(gs, { recursive: true });
+  const context = {
+    subscriptions: [], extensionPath: ROOT, extensionUri: Uri.file(ROOT), globalStorageUri: Uri.file(gs),
+    globalState: memento({ 'agentMonitor.panelIntro.v1': 1 }), workspaceState: memento(),
+    secrets: extra.secrets || fakeSecrets(),
+  };
+  const workers = log.workers.length;
+  const shares = sharedLog.length;
+  ext.activate(context);
+  const win = {
+    ctl: ext._controller(), gs, sharedDir: path.join(gs, 'shared-scan'), notifyDir: ext._controller().notifyDir(),
+    context, secrets: context.secrets,
+    worker: log.workers[workers],
+    shared: sharedLog.length > shares ? sharedLog[shares] : null,
+    w: () => last(log.workers),
+    send: (sessions, extra) => last(log.workers).emit('message', snapshot(clone(sessions), extra)),
+    close: () => { for (const d of context.subscriptions) d.dispose(); ext.deactivate(); },
+  };
+  return win;
+}
+
+function setWindowFocused(v) {
+  windowState.focused = v;
+  for (const fn of [...listeners.windowState]) fn({ focused: v });
+}
+
+// The session starts waiting for an answer at sinceMs (not live, so the registry does not override the transcript)
+function waiting(s, sinceMs) {
+  return { ...s, live: false, liveStatus: null, main: { ...s.main, status: st('awaitingInput', sinceMs) } };
+}
+
+// A Claude Code chat editor tab with this title
+const chatTab = (label) => ({ label, input: new TabInputWebview('mainThreadWebview-claudeVSCodePanel') });
+
+async function notifyTests() {
+  const win = activateWindow('win-notify');
+  const toasts = () => log.info.filter((m) => m.startsWith(i18n.t('ext.notify.title')));
+  const text = (title, project) => realNotify.formatNeedsYou({ title, project }, i18n);
+  const settle = () => sleep(notifyWrap.CLAIM_DELAY_MS * 5); // well past the claim delay, even on a slow machine
+  let t = Date.now() - 60e3; // start of each new wait (unique, so every transition has its own id)
+
+  try {
+    await test('notifications: the first snapshot only seeds (a chat already waiting is not reported); a later transition gives exactly one toast in the focused window, and the same wait is never reported twice', async () => {
+      const n = toasts().length;
+      const f = fixtures();
+      f[3] = waiting(f[3], t += 1000); // Delta already waits when the window opens
+      win.send(f);
+      await tick();
+      assert.ok(win.ctl.needsLamps.get(DELTA).lamp === 'needsYou' && win.ctl.needsLamps.get(GAMMA).lamp === 'needsYou');
+      assert.deepStrictEqual(toasts().slice(n), [], 'seeding must not notify');
+      f[1] = waiting(f[1], t += 1000); // Beta starts waiting
+      win.send(f);
+      await tick();
+      assert.deepStrictEqual(toasts().slice(n), [text('Beta chat', 'other').toast]);
+      win.send(f);
+      win.send(f);
+      await tick();
+      assert.strictEqual(toasts().length, n + 1, 'the same wait was reported again');
+      // the claim marker is what keeps other windows from reporting it too
+      assert.strictEqual(fs.readdirSync(win.notifyDir).filter((x) => x.endsWith('.claim')).length, 1);
+      assert.strictEqual(sysNotify.calls.length, 0, 'a focused window shows no system notification');
+    });
+
+    await test('notifications: no window focused → after the claim delay, on a fresh scan, a system notification (osascript, text as separate argv items); none when the wait ended, another window claimed it, or the setting is off', async () => {
+      win.send(fixtures()); // the waits end (a new one is reported only after the session stopped waiting)
+      setWindowFocused(false);
+      const n = toasts().length;
+      const refreshes = () => win.w().messages.filter((m) => m.type === 'refresh').length;
+      const r0 = refreshes();
+      const f = fixtures();
+      f[3] = waiting(f[3], t += 1000);
+      win.send(f);
+      await tick();
+      assert.strictEqual(sysNotify.calls.length, 0, 'unfocused windows wait for a focused one to claim first');
+      await settle();
+      assert.strictEqual(refreshes(), r0 + 1, 'no rescan before the check');
+      assert.strictEqual(sysNotify.calls.length, 0, 'decided on the snapshot that showed the wait, not on a newer one');
+      win.send(f); // the rescan: still waiting
+      await settle();
+      assert.strictEqual(sysNotify.calls.length, 1);
+      const msg = text('Delta chat', 'workspace');
+      assert.strictEqual(sysNotify.calls[0].cmd, 'osascript');
+      assert.deepStrictEqual(sysNotify.calls[0].args.slice(-3), ['--', msg.title, msg.body]);
+      assert.strictEqual(toasts().length, n, 'no toast when the system notification worked');
+
+      // The wait ends before the check: with the background interval no snapshot arrives within the delay, so the check
+      // waits for the rescan, which shows it answered
+      const g = fixtures();
+      g[0] = waiting(g[0], t += 1000);
+      win.send(g);
+      await settle();
+      win.send(fixtures());
+      await settle();
+      // another window already reported this wait
+      const h = fixtures();
+      h[0] = waiting(h[0], t += 1000);
+      realNotify.claimOnce(win.notifyDir, `${ALPHA}|main|${t}`);
+      win.send(h);
+      win.send(h);
+      await settle();
+      // notifications turned off while waiting (and while focused): nothing; turning them on later does not report that wait
+      const k = fixtures();
+      k[1] = waiting(k[1], t += 1000);
+      win.send(k);
+      setConfig('notifyNeedsYou', false);
+      win.send(k);
+      await settle();
+      setWindowFocused(true);
+      const m = fixtures();
+      m[3] = waiting(m[3], t += 1000);
+      win.send(m);
+      setConfig('notifyNeedsYou', true);
+      win.send(m);
+      await tick();
+      assert.strictEqual(sysNotify.calls.length, 1, 'notified although nothing should have been');
+      assert.strictEqual(toasts().length, n);
+    });
+
+    await test('notifications: the chat is answered and asks again within the delay → the new wait is reported (once), not the old one; two waits in a row for one session report only the newer', async () => {
+      win.send(fixtures());
+      setWindowFocused(false);
+      try {
+        const calls = sysNotify.calls.length;
+        const first = t += 1000;
+        const f = fixtures();
+        f[1] = waiting(f[1], first);
+        win.send(f);
+        const second = t += 1000;
+        const g = fixtures();
+        g[1] = waiting(g[1], second); // answered and asked again: same lamp, a new wait
+        win.send(g);
+        await settle();
+        win.send(g);
+        await settle();
+        assert.strictEqual(sysNotify.calls.length, calls + 1);
+        assert.ok(fs.existsSync(path.join(win.notifyDir, realNotify.markerName(`${BETA}|main|${second}`))), 'the current wait was claimed');
+        assert.ok(!fs.existsSync(path.join(win.notifyDir, realNotify.markerName(`${BETA}|main|${first}`))), 'the old wait was claimed');
+        // two transitions for one key within the delay: only the newer one is notified
+        win.send(fixtures());
+        const h = fixtures();
+        h[1] = waiting(h[1], t += 1000);
+        win.send(h);
+        win.send(fixtures());
+        const k = fixtures();
+        k[1] = waiting(k[1], t += 1000);
+        win.send(k);
+        await settle();
+        win.send(k);
+        await settle();
+        assert.strictEqual(sysNotify.calls.length, calls + 2);
+        assert.ok(fs.existsSync(path.join(win.notifyDir, realNotify.markerName(`${BETA}|main|${t}`))));
+        assert.ok(!fs.existsSync(path.join(win.notifyDir, realNotify.markerName(`${BETA}|main|${t - 1000}`))));
+      } finally {
+        setWindowFocused(true);
+      }
+    });
+
+    await test('notifications: a window that gets focus during the delay shows a toast instead of a system notification', async () => {
+      win.send(fixtures());
+      setWindowFocused(false);
+      const n = toasts().length;
+      const calls = sysNotify.calls.length;
+      const f = fixtures();
+      f[3] = waiting(f[3], t += 1000);
+      win.send(f);
+      setWindowFocused(true);
+      win.send(f);
+      await settle();
+      assert.strictEqual(sysNotify.calls.length, calls);
+      assert.deepStrictEqual(toasts().slice(n), [text('Delta chat', 'workspace').toast]);
+    });
+
+    await test('notifications: Windows and remote windows have no system notification here → the wait is kept, unclaimed, and shown as a toast in the window that gets focus first (if it still waits); a failed command (Linux without notify-send) gets a toast at once', async () => {
+      win.send(fixtures());
+      const n = toasts().length;
+      const calls = sysNotify.calls.length;
+      setWindowFocused(false);
+      sysNotify.platform = 'win32';
+      try {
+        const w = fixtures();
+        w[1] = waiting(w[1], t += 1000);
+        win.send(w);
+        win.send(w);
+        await settle();
+        assert.deepStrictEqual(toasts().slice(n), [], 'a toast in a window without focus is easily missed');
+        assert.ok(!fs.existsSync(path.join(win.notifyDir, realNotify.markerName(`${BETA}|main|${t}`))), 'claimed without being shown');
+        setWindowFocused(true);
+        assert.deepStrictEqual(toasts().slice(n), [text('Beta chat', 'other').toast]);
+        // a kept wait that ended before any window got focus is dropped
+        win.send(fixtures());
+        setWindowFocused(false);
+        const x = fixtures();
+        x[3] = waiting(x[3], t += 1000);
+        win.send(x);
+        win.send(x);
+        await settle();
+        win.send(fixtures());
+        setWindowFocused(true);
+        assert.strictEqual(toasts().length, n + 1);
+        // remote window (the extension host runs on another machine): the same, whatever the platform
+        sysNotify.platform = 'darwin';
+        vscode.env.remoteName = 'ssh-remote';
+        setWindowFocused(false);
+        const r = fixtures();
+        r[1] = waiting(r[1], t += 1000);
+        win.send(r);
+        win.send(r);
+        await settle();
+        assert.strictEqual(sysNotify.calls.length, calls, 'osascript would run on the remote machine');
+        setWindowFocused(true);
+        assert.deepStrictEqual(toasts().slice(n), [text('Beta chat', 'other').toast, text('Beta chat', 'other').toast]);
+        delete vscode.env.remoteName;
+        // Linux without a working notify-send: the toast is shown instead
+        win.send(fixtures());
+        setWindowFocused(false);
+        sysNotify.platform = 'linux';
+        sysNotify.fail = true;
+        const y = fixtures();
+        y[3] = waiting(y[3], t += 1000);
+        win.send(y);
+        win.send(y);
+        await settle();
+        assert.strictEqual(sysNotify.calls.length, calls + 1);
+        assert.strictEqual(last(sysNotify.calls).cmd, 'notify-send');
+        assert.deepStrictEqual(toasts().slice(n + 2), [text('Delta chat', 'workspace').toast]);
+      } finally {
+        delete vscode.env.remoteName;
+        sysNotify.platform = 'darwin';
+        sysNotify.fail = false;
+        setWindowFocused(true);
+      }
+    });
+
+    await test('notifications: no toast for the chat the user is looking at (its tab is active in the focused window), but it is still claimed so no other window reports it', async () => {
+      win.send(fixtures());
+      const n = toasts().length;
+      const before = tabState.active;
+      try {
+        tabState.active = chatTab('Beta chat');
+        const f = fixtures();
+        f[1] = waiting(f[1], t += 1000);
+        win.send(f);
+        await tick();
+        assert.deepStrictEqual(toasts().slice(n), []);
+        assert.ok(fs.existsSync(path.join(win.notifyDir, realNotify.markerName(`${BETA}|main|${t}`))), 'not claimed');
+        // another chat starts waiting meanwhile: that one is shown
+        f[3] = waiting(f[3], t += 1000);
+        win.send(f);
+        await tick();
+        assert.deepStrictEqual(toasts().slice(n), [text('Delta chat', 'workspace').toast]);
+      } finally {
+        tabState.active = before;
+      }
+    });
+
+    await test('notifications: sessions outside this window\'s scope are reported too, and switching scope never reports an old wait; "Show" adds the session to this window\'s list without writing a setting, selects it and reveals the panel', async () => {
+      win.send(fixtures());
+      setConfig('scope', 'workspace');
+      assert.ok(!win.ctl.scoped.some((s) => s.key === BETA), 'Beta (another folder) is outside the workspace scope');
+      const n = toasts().length;
+      const executed = log.executed.length;
+      const updates = log.updates.length;
+      infoAnswer = (msg, items) => items[0];
+      const f = fixtures();
+      f[1] = waiting(f[1], t += 1000);
+      win.send(f);
+      for (let i = 0; i < 5; i++) await tick();
+      infoAnswer = null;
+      assert.deepStrictEqual(toasts().slice(n), [text('Beta chat', 'other').toast]);
+      assert.strictEqual(effective('scope'), 'workspace', 'the scope setting (shared by every window) is left alone');
+      assert.deepStrictEqual(log.updates.slice(updates), [], 'a setting was written');
+      assert.ok(win.ctl.scoped.some((s) => s.key === BETA), 'Beta is not in the list');
+      assert.strictEqual(win.ctl.selectedKey, BETA);
+      assert.strictEqual(win.ctl.shownKey, BETA);
+      assert.ok(log.executed.slice(executed).some((x) => x[0] === 'agentMonitor.agents.focus'), 'panel not revealed');
+      win.send(f);
+      await tick();
+      assert.strictEqual(toasts().length, n + 1, 'switching scope reported the wait again');
+      assert.ok(win.ctl.scoped.some((s) => s.key === BETA), 'kept while it stays selected');
+      // selecting another row puts the list back to the scope alone
+      win.ctl.userSelect(DELTA);
+      assert.ok(!win.ctl.scoped.some((s) => s.key === BETA));
+      // so does changing the scope
+      win.ctl.revealSession(BETA);
+      assert.ok(win.ctl.scoped.some((s) => s.key === BETA));
+      setConfig('scope', 'all');
+      setConfig('scope', 'workspace');
+      assert.ok(!win.ctl.scoped.some((s) => s.key === BETA));
+    });
+    await test('notifications: chats that only show up because a scan setting changed (e.g. a provider turned on) are not reported, however long they have waited; later waits are', async () => {
+      win.send(fixtures());
+      const n = toasts().length;
+      const epsilon = waiting(session({ id: '44444444-4444-4444-8444-444444444444', title: 'Epsilon chat' }), t += 1000);
+      setConfig('codex.enabled', false);
+      // a scan from before the change arrives late: no new chat in it
+      win.send(fixtures(), { cfgGen: win.w().cfgGen() - 1 });
+      // the first scan with the new settings shows a chat that has been waiting all along
+      win.send([...fixtures(), epsilon]);
+      await tick();
+      assert.deepStrictEqual(toasts().slice(n), []);
+      const g = [...fixtures(), epsilon];
+      g[1] = waiting(g[1], t += 1000);
+      win.send(g);
+      await tick();
+      assert.deepStrictEqual(toasts().slice(n), [text('Beta chat', 'other').toast]);
+      setConfig('codex.enabled', true);
+    });
+  } finally {
+    infoAnswer = null;
+    setWindowFocused(true);
+    win.close();
+  }
+}
+
+async function sharedScanTests() {
+  let cfgKey = null;
+  const paths = (dir) => ({ leader: path.join(dir, 'leader.json'), snapshot: path.join(dir, 'snapshot.json') });
+
+  await test('shared scan: the first window leads, publishes each worker snapshot (not when only now changed) and scans for the union of every window\'s focus; a follower\'s refresh reaches its worker; leaving hands over at once', async () => {
+    const A = activateWindow('win-lead');
+    const peer = peerWindow(A.sharedDir, A.shared.o.cfgKey);
+    try {
+      cfgKey = A.ctl.cfgKey();
+      assert.strictEqual(A.shared.o.cfgKey, cfgKey);
+      const parsed = JSON.parse(cfgKey);
+      assert.ok(!('intervalMs' in parsed) && !('observedCompact' in parsed), 'refresh speed and learned compaction points do not split windows');
+      assert.strictEqual(A.shared.inst.role, 'leader');
+      const w = A.worker;
+      assert.strictEqual(w.opts.workerData.paused, true);
+      assert.ok(w.messages.some((m) => m.type === 'resume'));
+      peer.inst.start();
+      assert.strictEqual(peer.inst.role, 'follower');
+      A.send(fixtures());
+      await tick();
+      assert.ok(fs.existsSync(paths(A.sharedDir).snapshot));
+      peer.beat();
+      assert.strictEqual(peer.snaps.length, 1);
+      assert.deepStrictEqual(peer.snaps[0].sessions.map((s) => s.key), KEYS);
+      // same content, later now: not written again
+      A.send(fixtures(), { now: Date.now() + 5000 });
+      peer.beat();
+      assert.strictEqual(peer.snaps.length, 1);
+      // the other window's focus reaches the leader's worker
+      peer.inst.setFocus([DELTA]);
+      A.shared.beat();
+      assert.ok(last(w.messages.filter((m) => m.type === 'focus')).keys.includes(DELTA));
+      assert.ok(last(w.messages.filter((m) => m.type === 'focus')).keys.includes(A.ctl.shownKey));
+      // a refresh requested by the other window
+      const sent = w.messages.length;
+      peer.inst.requestRefresh();
+      A.shared.beat();
+      assert.deepStrictEqual(w.messages.slice(sent).filter((m) => m.type === 'refresh'), [{ type: 'refresh' }]);
+      A.close();
+      assert.strictEqual(w.terminated, true);
+      assert.ok(!fs.existsSync(paths(A.sharedDir).leader), 'leader.json left behind');
+      peer.beat();
+      assert.strictEqual(peer.inst.role, 'leader', 'the other window did not take over');
+    } finally {
+      peer.inst.stop();
+    }
+  });
+
+  const dir = path.join(TMP, 'win-follow', 'shared-scan');
+  let leader = null;
+  let B = null;
+  try {
+    await test('shared scan: a window that finds a leader follows: its worker stays paused, its own snapshots are ignored, the leader\'s are rendered, its selection reaches the leader and refresh asks the leader', async () => {
+      fs.mkdirSync(dir, { recursive: true });
+      leader = peerWindow(dir, cfgKey);
+      leader.inst.start();
+      assert.strictEqual(leader.inst.role, 'leader');
+      assert.ok(leader.inst.publish(snapshot(clone(fixtures()))));
+      // a different refresh speed still follows (intervalMs is not part of cfgKey)
+      B = activateWindow('win-follow', { refreshSeconds: 1 });
+      assert.strictEqual(B.shared.inst.role, 'follower');
+      const w = B.worker;
+      assert.strictEqual(w.opts.workerData.paused, true);
+      assert.ok(w.messages.some((m) => m.type === 'pause') && !w.messages.some((m) => m.type === 'resume'));
+      assert.deepStrictEqual([...B.ctl.byKey.keys()], KEYS, 'the leader\'s snapshot was not rendered');
+      assert.strictEqual(log.contexts['agentMonitor.loaded'], true);
+      B.send([]);
+      assert.strictEqual(B.ctl.byKey.size, 4, 'a paused worker\'s late snapshot must not replace the leader\'s');
+      const f = fixtures().slice(0, 2);
+      assert.ok(leader.inst.publish(snapshot(clone(f), { now: Date.now() - HOUR }))); // written an hour ago, unchanged since
+      B.shared.beat();
+      assert.deepStrictEqual([...B.ctl.byKey.keys()], [ALPHA, BETA]);
+      assert.ok(Date.now() - B.ctl.last.now < 1000, 'the follower renders with its own clock');
+      leader.beat();
+      assert.ok(last(leader.unions).includes(B.ctl.shownKey), 'the follower\'s selection is not in the leader\'s focus');
+      // refresh: the follower asks the leader, whose next publish (even if unchanged) ends the progress
+      const done = registered.get('agentMonitor.refresh')();
+      let finished = false;
+      done.then(() => { finished = true; });
+      assert.ok(!w.messages.some((m) => m.type === 'refresh'));
+      leader.beat();
+      assert.strictEqual(leader.refreshes, 1);
+      assert.ok(leader.inst.publish(snapshot(clone(f))), 'the answer to a refresh is published even if unchanged');
+      B.shared.beat();
+      await tick();
+      assert.strictEqual(finished, true);
+    });
+
+    await test('shared scan: while the leader has nothing new to publish, the follower re-runs the last snapshot with its own clock at the scan interval (times, reminders); when the leader leaves it takes over', async () => {
+      assert.ok(B && B.shared && B.shared.inst.role === 'follower', 'needs the follower from the previous test');
+      const n = log.compactSnapshots.length;
+      const before = B.ctl.last.now;
+      await sleep(1400); // refreshSeconds is 1 in this window
+      assert.ok(log.compactSnapshots.length > n, 'no snapshot re-run while the leader was idle');
+      const re = last(log.compactSnapshots);
+      assert.ok(re.now >= before + 900, 'the re-run carries the current time');
+      assert.strictEqual(re.replay, true, 'a re-run must be marked, so it never confirms a closed window');
+      assert.deepStrictEqual(re.sessions.map((s) => s.key), [ALPHA, BETA]);
+      // the leader goes away: the follower claims, resumes its worker with the union focus and stops re-running
+      const w = B.worker;
+      leader.inst.stop();
+      B.shared.beat();
+      assert.strictEqual(B.shared.inst.role, 'leader');
+      assert.strictEqual(last(w.messages.filter((m) => m.type === 'pause' || m.type === 'resume')).type, 'resume');
+      assert.strictEqual(B.ctl.replayTimer, null);
+      B.send(fixtures());
+      assert.strictEqual(B.ctl.byKey.size, 4, 'the new leader renders its own worker\'s snapshots');
+      assert.ok(fs.readFileSync(paths(dir).snapshot, 'utf8').includes(DELTA), 'and publishes them');
+    });
+  } finally {
+    if (B) B.close();
+    if (leader) leader.inst.stop();
+  }
+
+  await test('shared scan off: the window scans alone as before; turning it on joins at once, turning it off leaves and resumes the worker', async () => {
+    const C = activateWindow('win-solo', { shareScanAcrossWindows: false });
+    try {
+      assert.strictEqual(C.shared, null);
+      assert.strictEqual(C.ctl.shared, null);
+      const w = C.worker;
+      assert.strictEqual(w.opts.workerData.paused, undefined);
+      C.send(fixtures());
+      await tick();
+      assert.ok(!w.messages.some((m) => m.type === 'pause' || m.type === 'resume'));
+      assert.deepStrictEqual(last(w.messages.filter((m) => m.type === 'focus')).keys, [C.ctl.shownKey], 'focus goes straight to the worker');
+      assert.ok(!fs.existsSync(C.sharedDir));
+      setConfig('shareScanAcrossWindows', true);
+      assert.ok(C.ctl.shared, 'did not join');
+      assert.strictEqual(C.ctl.shared.role, 'leader');
+      assert.ok(fs.existsSync(paths(C.sharedDir).leader));
+      setConfig('shareScanAcrossWindows', false);
+      assert.strictEqual(C.ctl.shared, null);
+      assert.ok(!fs.existsSync(paths(C.sharedDir).leader), 'leader.json left behind');
+      assert.strictEqual(last(w.messages).type, 'resume');
+      const n = w.messages.length;
+      registered.get('agentMonitor.refresh')();
+      assert.deepStrictEqual(w.messages.slice(n), [{ type: 'refresh' }]);
+    } finally {
+      C.close();
+    }
+  });
+}
+
+async function sharedScanRobustnessTests() {
+  const exists = (dir, name) => fs.existsSync(path.join(dir, name));
+
+  await test('shared scan: a leader with other settings (another cfgKey) → this window scans alone (solo): its worker resumes and renders its own snapshots, which are not published', async () => {
+    const dir = path.join(TMP, 'win-solo2', 'shared-scan');
+    fs.mkdirSync(dir, { recursive: true });
+    const leader = peerWindow(dir, 'another-config');
+    leader.inst.start();
+    const W = activateWindow('win-solo2');
+    try {
+      assert.strictEqual(W.shared.inst.role, 'solo');
+      assert.ok(W.worker.messages.some((m) => m.type === 'resume'), 'the worker stayed paused');
+      W.send(fixtures());
+      assert.deepStrictEqual([...W.ctl.byKey.keys()], KEYS);
+      assert.ok(!exists(dir, 'snapshot.json'), 'solo does not publish');
+    } finally {
+      W.close();
+      leader.inst.stop();
+    }
+  });
+
+  await test('shared scan: a follower whose scan settings change (staleMinutes) updates its cfgKey at once and scans alone after the grace period, unless the leader follows', async () => {
+    const dir = path.join(TMP, 'win-grace', 'shared-scan');
+    fs.mkdirSync(dir, { recursive: true });
+    const leader = peerWindow(dir, 'placeholder');
+    leader.inst.start();
+    const B = activateWindow('win-grace');
+    try {
+      leader.inst.setCfgKey(B.ctl.cfgKey());
+      B.shared.beat();
+      assert.strictEqual(B.shared.inst.role, 'follower');
+      const w = B.worker;
+      const before = B.ctl.cfgKey();
+      setConfig('staleMinutes', 6);
+      const after = B.ctl.cfgKey();
+      assert.notStrictEqual(after, before);
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, `win-${B.shared.inst.id}.json`), 'utf8')).cfgKey, after, 'the new key was not announced');
+      leader.beat();
+      B.shared.beat();
+      assert.strictEqual(B.shared.inst.role, 'follower', 'within the grace period');
+      sharedClock.offset += 3500; // past soloGraceMs (3 s)
+      leader.beat();
+      B.shared.beat();
+      assert.strictEqual(B.shared.inst.role, 'solo');
+      assert.strictEqual(last(w.messages.filter((m) => m.type === 'pause' || m.type === 'resume')).type, 'resume');
+      // the leader's settings change the same way: follow again
+      leader.inst.setCfgKey(after);
+      B.shared.beat();
+      assert.strictEqual(B.shared.inst.role, 'follower');
+    } finally {
+      sharedClock.offset = 0;
+      B.close();
+      leader.inst.stop();
+    }
+  });
+
+  await test('shared scan: the shared folder cannot be written (a file is in its way) → the window scans alone instead of loading forever', async () => {
+    const gs = path.join(TMP, 'win-ro');
+    fs.mkdirSync(gs, { recursive: true });
+    fs.writeFileSync(path.join(gs, 'shared-scan'), 'not a folder');
+    const W = activateWindow('win-ro');
+    try {
+      assert.strictEqual(W.shared.inst.role, 'solo');
+      assert.ok(W.worker.messages.some((m) => m.type === 'resume'), 'the worker stayed paused');
+      W.send(fixtures());
+      assert.strictEqual(log.contexts['agentMonitor.loaded'], true);
+      assert.strictEqual(W.ctl.byKey.size, 4);
+    } finally {
+      W.close();
+    }
+  });
+
+  await test('shared scan: a leader whose worker keeps crashing hands the scan to another window and follows it; Refresh starts a worker and lets it lead again', async () => {
+    const A = activateWindow('win-crash');
+    const peer = peerWindow(A.sharedDir, A.shared.o.cfgKey);
+    try {
+      assert.strictEqual(A.shared.inst.role, 'leader');
+      peer.inst.start();
+      assert.strictEqual(peer.inst.role, 'follower');
+      const workers = log.workers.length;
+      for (let i = 0; i < 4; i++) A.w().emit('exit', 1);
+      assert.strictEqual(log.workers.length, workers + 3, 'restarted 3 times');
+      assert.strictEqual(A.ctl.worker, null);
+      assert.strictEqual(A.shared.inst.role, null, 'still leading without a worker');
+      assert.ok(!exists(A.sharedDir, 'leader.json'));
+      peer.beat();
+      assert.strictEqual(peer.inst.role, 'leader');
+      A.shared.beat();
+      assert.strictEqual(A.shared.inst.role, 'follower');
+      assert.ok(peer.inst.publish(snapshot(clone(fixtures().slice(0, 1)))));
+      A.shared.beat();
+      assert.deepStrictEqual([...A.ctl.byKey.keys()], [ALPHA], 'the new leader\'s snapshot was not rendered');
+      // Refresh: a new (paused) worker, and this window may lead again when the other leaves
+      registered.get('agentMonitor.refresh')();
+      const w = A.w();
+      assert.strictEqual(w.opts.workerData.paused, true);
+      peer.inst.stop();
+      A.shared.beat();
+      assert.strictEqual(A.shared.inst.role, 'leader');
+      assert.strictEqual(last(w.messages.filter((m) => m.type === 'pause' || m.type === 'resume')).type, 'resume');
+    } finally {
+      peer.inst.stop();
+      A.close();
+    }
+  });
+
+  await test('worker restarts: only crashes in a row count; a worker that has run for a while gets its retry budget back', async () => {
+    const D = activateWindow('win-retry', { shareScanAcrossWindows: false });
+    try {
+      const workers = log.workers.length;
+      for (let i = 0; i < 3; i++) D.w().emit('exit', 1);
+      assert.strictEqual(log.workers.length, workers + 3);
+      D.ctl.workerStartedAt -= 11 * MIN; // this one has been scanning for 11 minutes
+      D.send(fixtures());
+      for (let i = 0; i < 3; i++) D.w().emit('exit', 1);
+      assert.strictEqual(log.workers.length, workers + 6, 'three crashes days apart used up the budget');
+      D.w().emit('exit', 1);
+      assert.strictEqual(D.ctl.worker, null, 'crashes in a row are still capped');
+    } finally {
+      D.close();
+    }
+  });
+
+  await test('shared scan: after a publish that changed which Claude chats are live, the leader publishes the next snapshot even if unchanged (followers confirm a closed window only with two real snapshots; their replays are marked and do not count)', async () => {
+    const A = activateWindow('win-echo');
+    const peer = peerWindow(A.sharedDir, A.shared.o.cfgKey);
+    try {
+      peer.inst.start();
+      const got = () => { peer.beat(); return peer.snaps.length; };
+      A.send(fixtures());
+      assert.strictEqual(got(), 1);
+      A.send(fixtures());
+      assert.strictEqual(got(), 1, 'unchanged: not published');
+      const f = fixtures();
+      f[0] = { ...f[0], live: false, liveStatus: null }; // Alpha's window closed, or one registry read failed
+      A.send(f);
+      assert.strictEqual(got(), 2);
+      A.send(f);
+      assert.strictEqual(got(), 3, 'the second look was not published');
+      A.send(f);
+      assert.strictEqual(got(), 3, 'only once');
+      // a snapshot scanned with the old settings, arriving after a change, is not published under the new key
+      setConfig('activeWindowMinutes', 45);
+      A.send(fixtures(), { cfgGen: A.w().cfgGen() - 1 });
+      const file = JSON.parse(fs.readFileSync(path.join(A.sharedDir, 'snapshot.json'), 'utf8'));
+      assert.strictEqual(file.snap.sessions.find((x) => x.key === ALPHA).live, false, 'published');
+      assert.notStrictEqual(file.cfgKey, A.ctl.cfgKey());
+    } finally {
+      peer.inst.stop();
+      A.close();
+    }
+  });
+}
+
+async function backgroundTests() {
+  const intervals = (w) => w.messages.filter((m) => m.type === 'interval');
+
+  await test('background slowdown: with no VS Code window focused the worker scans every backgroundRefreshSeconds (5 s by default, 2–60, never faster than refreshSeconds); focus clears it; a restarted worker gets it again', async () => {
+    const D = activateWindow('win-bg', { shareScanAcrossWindows: false });
+    try {
+      const w = D.worker;
+      assert.deepStrictEqual(intervals(w), [], 'focused: no override');
+      setWindowFocused(false);
+      assert.deepStrictEqual(intervals(w), [{ type: 'interval', ms: 5000 }]);
+      setConfig('backgroundRefreshSeconds', 30);
+      assert.deepStrictEqual(last(intervals(w)), { type: 'interval', ms: 30000 });
+      setConfig('backgroundRefreshSeconds', 600);
+      assert.deepStrictEqual(last(intervals(w)), { type: 'interval', ms: 60000 });
+      setConfig('backgroundRefreshSeconds', 1); // raised to 2 s, which is not slower than refreshSeconds (2 s)
+      assert.deepStrictEqual(last(intervals(w)), { type: 'interval', ms: null });
+      setConfig('backgroundRefreshSeconds', 5);
+      setConfig('refreshSeconds', 10);
+      assert.deepStrictEqual(last(intervals(w)), { type: 'interval', ms: null }, 'refreshSeconds is already slower');
+      setConfig('refreshSeconds', 2);
+      assert.deepStrictEqual(last(intervals(w)), { type: 'interval', ms: 5000 });
+      const count = intervals(w).length;
+      w.emit('exit', 1);
+      const w2 = D.w();
+      assert.notStrictEqual(w2, w);
+      assert.deepStrictEqual(intervals(w2), [{ type: 'interval', ms: 5000 }], 'a new worker did not get the override');
+      setWindowFocused(true);
+      assert.deepStrictEqual(intervals(w2), [{ type: 'interval', ms: 5000 }, { type: 'interval', ms: null }]);
+      assert.strictEqual(intervals(w).length, count);
+    } finally {
+      setWindowFocused(true);
+      D.close();
+    }
+  });
+
+  await test('background slowdown with a shared scan: the leader keeps full speed while any window is focused, and slows once none is', async () => {
+    const E = activateWindow('win-bg-shared');
+    const peer = peerWindow(E.sharedDir, E.shared.o.cfgKey);
+    try {
+      assert.strictEqual(E.shared.inst.role, 'leader');
+      const w = E.worker;
+      peer.inst.setWindowFocused(true);
+      peer.inst.start();
+      E.shared.beat();
+      setWindowFocused(false);
+      assert.deepStrictEqual(intervals(w), [], 'another window has focus');
+      peer.inst.setWindowFocused(false);
+      E.shared.beat();
+      assert.deepStrictEqual(intervals(w), [{ type: 'interval', ms: 5000 }]);
+      // the windows also check on each other at that pace (announced in leader.json), and follow its setting
+      assert.strictEqual(E.shared.o.idleHeartbeatMs, 5000);
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(E.sharedDir, 'leader.json'), 'utf8')).hb, 5000);
+      setConfig('backgroundRefreshSeconds', 30);
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(E.sharedDir, 'leader.json'), 'utf8')).hb, 30000);
+      setWindowFocused(true);
+      assert.deepStrictEqual(last(intervals(w)), { type: 'interval', ms: null });
+      E.shared.beat();
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(E.sharedDir, 'leader.json'), 'utf8')).hb, 2000);
+    } finally {
+      setWindowFocused(true);
+      peer.inst.stop();
+      E.close();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // package.json / package.nls.json
 // ---------------------------------------------------------------------------
+
+// The overview tree's menus apply to the side bar tree and its (hidden) copy in the bottom panel
+const TREE_VIEWS = 'view =~ /^agentMonitor\\.(tree|panelOverview)$/';
+
+// ---------------------------------------------------------------------------
+// Remote push
+// ---------------------------------------------------------------------------
+
+const NTFY_TOPIC = 'am-synthetic0topic01';
+const NTFY_TOKEN = 'tk_synthetic0push0token000';
+const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+const ntfyConfig = (o = {}) => ({ channel: 'ntfy', key: 'ntfy', server: 'https://ntfy.sh', topic: NTFY_TOPIC, token: NTFY_TOKEN, dailyMax: 0, ...o });
+
+/** Stores a channel the way the setup command does: secrets in SecretStorage; returns the settings half */
+async function storeChannel(secrets, cfg) {
+  const { settings, secrets: sec } = realPush.splitConfig(cfg);
+  await secrets.store(realPushRt.secretKeyOf(cfg.key), JSON.stringify(sec));
+  return settings;
+}
+// The session stops with an API error at sinceMs
+function errored(s, sinceMs) {
+  return { ...s, live: false, liveStatus: null, main: { ...s.main, status: st('apiError', sinceMs, { error: { kind: 'server_error', http: 500, message: 'synthetic' } }) } };
+}
+const claudeHit = (ms, resetsAtMs) => ({
+  ...emptyQuotaSnapshot(),
+  claude: { lastHit: { kind: 'session', model: null, resetsAtMs, resetsText: null, source: 'text', autoContinue: false, ms, sessionKey: null } },
+});
+// ntfy sends the title in X-Title, as RFC 2047 encoded words when it is not plain ASCII
+function titleOf(call) {
+  const h = String(call.init.headers['X-Title'] || '');
+  if (!/=\?UTF-8\?B\?/.test(h)) return h;
+  return h.split(' ').map((w) => Buffer.from(/^=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=$/.exec(w)[1], 'base64').toString('utf8')).join('');
+}
+const pushSettle = () => sleep(80); // well past the 10 ms batch delay
+const pushMarker = (dir, transitionId) => path.join(dir, realNotify.markerName(realPush.CLAIM_PREFIX + transitionId));
+const outputHas = (text) => log.output.some((l) => l.endsWith(text));
+
+async function pushTests() {
+  let t = Date.now() - 60e3; // start of each new wait or error (unique, so every transition has its own id)
+  const since = () => (t += 1000);
+  let cfgKey = null;
+
+  await test('push: off by default, and with no usable channel: needsYou, error and usage-limit events make no request, start no timer and claim nothing', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-off', { 'push.channels': [entry] }, { secrets }); // a channel, but push never turned on
+    cfgKey = win.ctl.cfgKey();
+    const n = net.calls.length;
+    try {
+      const round = async () => {
+        win.send(fixtures(), { quota: emptyQuotaSnapshot() });
+        const f = fixtures();
+        const waitAt = since();
+        const errAt = since();
+        f[1] = waiting(f[1], waitAt);
+        f[0] = errored(f[0], errAt);
+        win.send(f, { quota: claudeHit(pushNow(), pushNow() + HOUR) });
+        await sleep(150); // past the needsYou delay
+        win.send(f, { quota: claudeHit(pushNow(), pushNow() + HOUR) });
+        await pushSettle();
+        assert.strictEqual(net.calls.length, n, 'a request went out');
+        assert.deepStrictEqual([win.ctl.push._state().waits, win.ctl.push._state().flushTimer], [0, false], 'a push timer is running');
+        assert.ok(!fs.existsSync(pushMarker(win.notifyDir, `error|${ALPHA}|main|${errAt}`)), 'the error was claimed');
+        assert.ok(!fs.existsSync(pushMarker(win.notifyDir, `${BETA}|main|${waitAt}`)), 'the wait was claimed');
+      };
+      assert.strictEqual(pkg.contributes.configuration.properties['agentMonitor.push.enabled'].default, false);
+      await round();
+      // on, but no channel at all
+      setConfig('push.channels', []);
+      setConfig('push.enabled', true);
+      await round();
+      // on, with a channel whose secrets are not on this computer (e.g. settings synced from another machine)
+      setConfig('push.channels', [{ ...entry, key: 'ntfy-elsewhere' }]);
+      await round();
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('push setup: add ntfy from the QuickPick (privacy notice once, random topic, each field checked, the token before the topic); the secrets go to SecretStorage, never to settings; Copy topic, Send test, a failed test, turning off and choosing events', async () => {
+    const win = activateWindow('win-push-setup');
+    const run = () => registered.get('agentMonitor.push.setup')();
+    const picks = [];
+    const byAction = (a) => (items) => items.find((i) => i.action === a);
+    const byChannel = (key) => (items) => items.find((i) => i.channel && i.channel.key === key);
+    const privacy = [];
+    const saved = [];
+    const boxes = {};
+    quickPickAnswer = (items) => { const f = picks.shift(); return f ? f(items) : undefined; };
+    infoAnswer = (m, items) => {
+      if (m === i18n.t('push.ui.privacy', { channel: 'ntfy' })) { privacy.push(items); return i18n.t('push.ui.turnOn'); }
+      if (m === i18n.t('push.ui.savedNtfy', { channel: 'ntfy' })) {
+        saved.push(items);
+        return saved.length === 1 ? i18n.t('push.ui.copyTopic') : i18n.t('push.ui.testChannel');
+      }
+      return undefined;
+    };
+    inputAnswer = (o) => {
+      const field = o.title.replace(/^ntfy: /, '');
+      boxes[field] = o;
+      if (field === i18n.t('push.field.topic')) return boxes.second ? o.value : NTFY_TOPIC;
+      if (field === i18n.t('push.field.token')) return boxes.second ? '' : NTFY_TOKEN;
+      if (field === i18n.t('push.field.dailyMax')) return boxes.second ? '3' : o.value;
+      return o.value;
+    };
+    const n = net.calls.length;
+    const qp = log.quickPicks.length;
+    const inputs = log.inputs.length;
+    try {
+      picks.push(byAction('add'), (items) => items.find((i) => i.id === 'ntfy'));
+      await run();
+      assert.strictEqual(log.quickPicks[qp].o.title, 'Push notifications · Off · Channels in use: 0');
+      assert.deepStrictEqual(log.inputs.slice(inputs).map((o) => o.title.replace(/^ntfy: /, '')),
+        ['server', 'token', 'topic', 'dailyMax'].map((k) => i18n.t(`push.field.${k}`)), 'the token is asked before the topic');
+      assert.strictEqual(privacy.length, 1, 'privacy notice');
+      assert.strictEqual(privacy[0][0].modal, true, 'the privacy notice is modal');
+      // the fields: server prefilled; the topic prefilled with a random one and shown (it goes into the ntfy app too); the token masked
+      const server = boxes[i18n.t('push.field.server')];
+      const topic = boxes[i18n.t('push.field.topic')];
+      const token = boxes[i18n.t('push.field.token')];
+      assert.strictEqual(server.value, 'https://ntfy.sh');
+      assert.strictEqual(server.validateInput('http://example.com'), `${i18n.t('push.field.server')}: ${i18n.t('push.err.httpPublic')}`);
+      assert.strictEqual(server.validateInput('https://ntfy.example.com'), null);
+      assert.ok(/^am-[A-Za-z0-9_-]{16}$/.test(topic.value) && topic.password === false, topic.value);
+      assert.strictEqual(topic.validateInput('alerts'), null, 'with an access token a short topic is fine');
+      assert.strictEqual(topic.validateInput(''), i18n.t('push.err.required'));
+      assert.strictEqual(token.password, true);
+      assert.strictEqual(token.validateInput(''), null, 'the token is optional');
+      // saved: settings hold only the non-secret half; SecretStorage the rest; the notice turned push on
+      const settings = config['push.channels'].globalValue;
+      const key1 = settings[0].key;
+      assert.ok(/^ntfy-[A-Za-z0-9_-]{8}$/.test(key1), `a fresh random key: ${key1}`);
+      assert.deepStrictEqual(settings, [{ channel: 'ntfy', key: key1, server: 'https://ntfy.sh', dailyMax: 0 }]);
+      assert.ok(!JSON.stringify(config).includes(NTFY_TOPIC) && !JSON.stringify(config).includes(NTFY_TOKEN), 'a secret reached settings');
+      assert.deepStrictEqual(JSON.parse(win.secrets.data.get(`agentMonitor.push.${key1}`)), { channel: 'ntfy', server: 'https://ntfy.sh', token: NTFY_TOKEN, topic: NTFY_TOPIC });
+      assert.strictEqual(config['push.enabled'].globalValue, true);
+      assert.deepStrictEqual(win.context.globalState.get('agentMonitor.push.privacyAck'), ['ntfy']);
+      // the saved message says to subscribe and offers "Copy topic" (then comes back), then "Send a test message"
+      assert.deepStrictEqual(saved, [[i18n.t('push.ui.copyTopic'), i18n.t('push.ui.testChannel')], [i18n.t('push.ui.testChannel')]]);
+      assert.strictEqual(last(log.clipboard), NTFY_TOPIC);
+      assert.strictEqual(net.calls.length, n + 1);
+      assert.strictEqual(last(net.calls).url, NTFY_URL);
+      assert.strictEqual(last(net.calls).init.headers.Authorization, `Bearer ${NTFY_TOKEN}`);
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.test.title'));
+      assert.strictEqual(last(log.info), i18n.t('push.ui.testOkNtfy', { channel: 'ntfy' }));
+      assert.ok(/subscribed/.test(last(log.info)), 'a test that ntfy accepts says to check the subscription');
+
+      // a second ntfy channel: no notice this time; numbered; then removed with its secrets
+      boxes.second = true;
+      picks.push(byAction('add'), (items) => items.find((i) => i.id === 'ntfy'));
+      await run();
+      assert.ok(/12/.test(boxes[i18n.t('push.field.topic')].validateInput('alerts')), 'without a token a short topic is refused');
+      assert.strictEqual(privacy.length, 1, 'the privacy notice came again');
+      assert.strictEqual(log.quickPicks[log.quickPicks.length - 2].o.title, 'Push notifications · On · Channels in use: 1');
+      const key2 = config['push.channels'].globalValue[1].key;
+      assert.ok(/^ntfy-[A-Za-z0-9_-]{8}$/.test(key2) && key2 !== key1, key2);
+      assert.deepStrictEqual(config['push.channels'].globalValue.map((e) => [e.key, e.dailyMax]), [[key1, 0], [key2, 3]]);
+      assert.ok(win.secrets.data.has(`agentMonitor.push.${key2}`));
+      warnAnswer = (m, items) => (m === i18n.t('push.ui.removeConfirm', { channel: 'ntfy 2' }) ? items[1] : undefined);
+      picks.push(byChannel(key2), byAction('remove'));
+      await run();
+      assert.deepStrictEqual(config['push.channels'].globalValue.map((e) => e.key), [key1]);
+      assert.ok(!win.secrets.data.has(`agentMonitor.push.${key2}`), 'its secrets were left behind');
+      assert.strictEqual(last(log.info), i18n.t('push.ui.removed', { channel: 'ntfy 2' }));
+
+      // a failed test: the described error, redacted
+      net.answer = () => ({ status: 403, text: JSON.stringify({ error: `forbidden for ${NTFY_TOKEN}` }) });
+      picks.push(byChannel(key1), byAction('test'));
+      const errors = log.error.length;
+      await run();
+      assert.strictEqual(log.error.length, errors + 1);
+      assert.ok(last(log.error).startsWith(i18n.t('push.ui.testFailed', { error: 'the server answered HTTP 403: forbidden for ' })), last(log.error));
+      assert.ok(!last(log.error).includes(NTFY_TOKEN), 'the token was shown');
+      net.answer = null;
+
+      // turn push off (the menu comes back with the new state), then choose events
+      picks.push(byAction('off'), byAction('events'), (items) => {
+        assert.ok(items.every((i) => i.picked), 'all four events are on by default');
+        return items.filter((i) => i.type !== 'limitReset');
+      });
+      const before = log.quickPicks.length;
+      await run();
+      assert.strictEqual(config['push.enabled'].globalValue, false);
+      assert.strictEqual(log.quickPicks[before + 1].o.title, 'Push notifications · Off · Channels in use: 1');
+      assert.strictEqual(log.quickPicks[before + 2].o.canPickMany, true);
+      assert.deepStrictEqual(config['push.events'].globalValue, { needsYou: true, error: true, limitHit: true, limitReset: false });
+    } finally {
+      quickPickAnswer = null;
+      infoAnswer = null;
+      inputAnswer = null;
+      warnAnswer = null;
+      net.answer = null;
+      win.close();
+    }
+  });
+
+  await test('push setup: edit keeps a secret left empty and removes an optional one given "-"; test all skips channels turned off; unknown entries survive every write; "Turn on push" with no channel in use; cancelling goes back to the menu; a failed settings write is shown and the secret put back', async () => {
+    const secrets = fakeSecrets();
+    const TOPIC_B = 'am-synthetic0topic02';
+    const a = await storeChannel(secrets, ntfyConfig({ key: 'ntfy-aaaaaaaa' }));
+    const b = { ...(await storeChannel(secrets, ntfyConfig({ key: 'ntfy-bbbbbbbb', topic: TOPIC_B }))), enabled: false };
+    const future = { channel: 'future-chat', key: 'future-1', room: 'synthetic' }; // a newer version's channel, synced here
+    const win = activateWindow('win-push-setup-edit', { 'push.channels': [a, future, b] }, { secrets });
+    const run = () => registered.get('agentMonitor.push.setup')();
+    const picks = [];
+    const byAction = (x) => (items) => items.find((i) => i.action === x);
+    const byChannel = (key) => (items) => items.find((i) => i.channel && i.channel.key === key);
+    const answers = {};
+    const boxes = {};
+    quickPickAnswer = (items) => { const f = picks.shift(); return f ? f(items) : undefined; };
+    inputAnswer = (o) => {
+      const field = realPush.CHANNELS.ntfy.fields.map((f) => f.key).find((k) => o.title === `ntfy: ${i18n.t(`push.field.${k}`)}`);
+      boxes[field] = o;
+      return field in answers ? answers[field] : o.value;
+    };
+    const secretOf = (key) => JSON.parse(win.secrets.data.get(`agentMonitor.push.${key}`));
+    const channels = () => config['push.channels'].globalValue;
+    const getConfiguration = vscode.workspace.getConfiguration;
+    try {
+      // test all: only the channel in use; the one turned off is left alone
+      let n = net.calls.length;
+      picks.push(byAction('testAll'));
+      await run();
+      assert.deepStrictEqual(net.calls.slice(n).map((c) => c.url), [NTFY_URL]);
+      assert.strictEqual(last(log.info), i18n.t('push.ui.testOkNtfy', { channel: 'ntfy 1' }));
+
+      // edit, token left empty: kept
+      picks.push(byChannel('ntfy-aaaaaaaa'), byAction('edit'));
+      answers.token = '';
+      await run();
+      assert.strictEqual(boxes.token.placeHolder, i18n.t('push.ui.keepOrClearSecret', { clear: '-' }));
+      assert.strictEqual(boxes.token.validateInput('-'), null);
+      assert.strictEqual(boxes.topic.value, NTFY_TOPIC, 'the topic is shown, to be typed into the app');
+      assert.strictEqual(secretOf('ntfy-aaaaaaaa').token, NTFY_TOKEN);
+      // edit, token "-": removed; the topic is then checked without it
+      picks.push(byChannel('ntfy-aaaaaaaa'), byAction('edit'));
+      answers.token = '-';
+      await run();
+      assert.deepStrictEqual(secretOf('ntfy-aaaaaaaa'), { channel: 'ntfy', server: 'https://ntfy.sh', topic: NTFY_TOPIC });
+      assert.ok(/12/.test(boxes.topic.validateInput('alerts')), 'a short topic without a token');
+      assert.deepStrictEqual(channels(), [a, future, b], 'every write keeps the other entries, unknown ones included, in place');
+
+      // the settings can't be written: the error is shown, and the secret is put back as it was
+      const before = win.secrets.data.get('agentMonitor.push.ntfy-aaaaaaaa');
+      vscode.workspace.getConfiguration = (section) => {
+        const c = getConfiguration(section);
+        return { ...c, update: async (k, v, t) => { if (k === 'push.channels') throw new Error('Unable to write into user settings (synthetic)'); return c.update(k, v, t); } };
+      };
+      picks.push(byChannel('ntfy-aaaaaaaa'), byAction('edit'));
+      answers.token = 'tk_synthetic0other0token00';
+      const errors = log.error.length;
+      await run();
+      vscode.workspace.getConfiguration = getConfiguration;
+      assert.deepStrictEqual(log.error.slice(errors), [i18n.t('push.ui.setupFailed', { error: 'Unable to write into user settings (synthetic)' })]);
+      assert.strictEqual(win.secrets.data.get('agentMonitor.push.ntfy-aaaaaaaa'), before);
+      delete answers.token;
+
+      // turn the other channel on: test all now lists both, joined the way the UI language lists things
+      picks.push(byChannel('ntfy-bbbbbbbb'), byAction('resume'), byAction('testAll'));
+      n = net.calls.length;
+      await run();
+      assert.strictEqual(net.calls.length, n + 2);
+      assert.strictEqual(last(log.info), i18n.t('push.ui.testOkNtfy', { channel: 'ntfy 1 and ntfy 2' }));
+      assert.deepStrictEqual(channels(), [a, future, { ...b, enabled: undefined }].map((e) => JSON.parse(JSON.stringify(e))));
+
+      // both turned off, push off: "Turn on push" turns it on and says no channel is in use (no Add picker); the menu comes back
+      picks.push(byChannel('ntfy-aaaaaaaa'), byAction('pause'), byChannel('ntfy-bbbbbbbb'), byAction('pause'), (items) => {
+        const on = items.find((i) => i.action === 'on');
+        assert.strictEqual(on.description, i18n.t('push.ui.noChannelInUse'));
+        assert.ok(!items.some((i) => i.action === 'testAll'), 'test all with no channel in use');
+        return on;
+      }, (items) => { assert.ok(items.some((i) => i.action === 'off'), 'the menu came back, push on'); return undefined; });
+      await run();
+      assert.strictEqual(config['push.enabled'].globalValue, true);
+      assert.ok(log.info.includes(i18n.t('push.ui.onNoChannel')));
+      assert.deepStrictEqual(channels().map((e) => [e.key, e.enabled]), [['ntfy-aaaaaaaa', false], ['future-1', undefined], ['ntfy-bbbbbbbb', false]]);
+      assert.strictEqual(picks.length, 0);
+
+      // Add, then Escape at the service picker: back to the menu; needsYou with no delay reads "right away"
+      setConfig('push.delaySeconds', 0);
+      const qp = log.quickPicks.length;
+      picks.push(byAction('add'), () => undefined, byAction('events'), (items) => {
+        assert.strictEqual(items.find((i) => i.type === 'needsYou').description, i18n.t('push.ui.noDelay'));
+        return undefined;
+      });
+      await run();
+      assert.strictEqual(log.quickPicks.length - qp, 5, 'menu, service picker, menu again, events, menu again');
+      assert.strictEqual(picks.length, 0);
+    } finally {
+      vscode.workspace.getConfiguration = getConfiguration;
+      quickPickAnswer = null;
+      inputAnswer = null;
+      infoAnswer = null;
+      win.close();
+    }
+  });
+
+  await test('push: settings are read from user settings only: a workspace value can neither turn push on nor point a channel elsewhere', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-ws', { 'push.channels': [entry] }, { secrets });
+    const n = net.calls.length;
+    try {
+      setConfig('push.enabled', true, ConfigurationTarget.Workspace);
+      win.send(fixtures());
+      const f = fixtures();
+      f[0] = errored(f[0], since());
+      win.send(f);
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n, 'a workspace turned push on');
+      // on in user settings; the workspace, and even a hand-edited user entry, name another server: the stored one is used
+      setConfig('push.enabled', true);
+      setConfig('push.channels', [{ ...entry, server: 'https://attacker.example' }], ConfigurationTarget.Workspace);
+      config['push.channels'].globalValue = [{ ...entry, server: 'https://edited.example' }];
+      win.send(fixtures());
+      const g = fixtures();
+      g[0] = errored(g[0], since());
+      win.send(g);
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1);
+      assert.strictEqual(last(net.calls).url, NTFY_URL);
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('push: needsYou waits for the delay, asks for a rescan shortly before it and decides on the fresh data; a chat answered in time is not pushed', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-wait', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const refreshes = () => win.w().messages.filter((m) => m.type === 'refresh').length;
+    try {
+      win.send(fixtures());
+      const n = net.calls.length;
+      const r0 = refreshes();
+      const f = fixtures();
+      f[1] = waiting(f[1], since());
+      win.send(f);
+      await tick();
+      assert.strictEqual(net.calls.length, n, 'pushed before the delay');
+      assert.strictEqual(win.ctl.push._state().waits, 1);
+      await sleep(100); // past the delay; nothing scanned since the rescan request
+      assert.ok(refreshes() > r0, 'no rescan before the check');
+      assert.strictEqual(net.calls.length, n, 'decided on the snapshot that showed the wait');
+      win.send(f); // the rescan: still waiting
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1);
+      const call = last(net.calls);
+      assert.strictEqual(titleOf(call), i18n.t('push.msg.needsYou.titleProject', { project: 'other' }));
+      assert.strictEqual(call.init.body, i18n.t('push.msg.needsYou.body'));
+      assert.ok(!JSON.stringify(call).includes('Beta chat'), 'the chat title went out without includeTitle');
+      // answered before the delay is up: nothing
+      win.send(fixtures());
+      const g = fixtures();
+      g[3] = waiting(g[3], since());
+      win.send(g);
+      await sleep(45); // the rescan has been asked for
+      win.send(fixtures()); // and shows the chat answered
+      await sleep(100);
+      assert.strictEqual(net.calls.length, n + 1, 'an answered chat was pushed');
+      assert.strictEqual(win.ctl.push._state().waits, 0);
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('push: an API error goes out right away (no delay), with the project and the state only; the chat title only with includeTitle', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-error', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    try {
+      win.send(fixtures());
+      const n = net.calls.length;
+      const f = fixtures();
+      f[0] = errored(f[0], since());
+      win.send(f);
+      assert.strictEqual(win.ctl.push._state().waits, 0, 'an error does not wait');
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1);
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.error.titleProject', { project: 'workspace' }));
+      assert.strictEqual(last(net.calls).init.headers['X-Priority'], 'high');
+      assert.ok(!JSON.stringify(last(net.calls)).includes('Alpha chat'));
+      setConfig('push.includeTitle', true);
+      win.send(fixtures());
+      const g = fixtures();
+      g[1] = errored(g[1], since());
+      win.send(g);
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 2);
+      assert.strictEqual(last(net.calls).init.body, i18n.t('push.msg.error.bodyTitle', { title: 'Beta chat' }));
+      assert.ok(outputHas(i18n.t('push.log.sent', { channel: 'ntfy', n: 1 })), 'sends are logged');
+    } finally {
+      win.close();
+    }
+  });
+
+  await test('push: a follower window (showing the leader\'s snapshots) pushes too, and its needsYou rescan is asked of the leader', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const dir = path.join(TMP, 'win-push-follow', 'shared-scan');
+    fs.mkdirSync(dir, { recursive: true });
+    const leader = peerWindow(dir, cfgKey);
+    let B = null;
+    try {
+      leader.inst.start();
+      assert.ok(leader.inst.publish(snapshot(clone(fixtures()))));
+      B = activateWindow('win-push-follow', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+      assert.strictEqual(B.shared.inst.role, 'follower');
+      const n = net.calls.length;
+      const f = fixtures();
+      f[0] = errored(f[0], since());
+      assert.ok(leader.inst.publish(snapshot(clone(f))));
+      B.shared.beat();
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1, 'the follower did not push');
+      const r0 = leader.refreshes;
+      const g = fixtures();
+      g[1] = waiting(g[1], since());
+      assert.ok(leader.inst.publish(snapshot(clone(g))));
+      B.shared.beat();
+      await sleep(100);
+      leader.beat();
+      assert.ok(leader.refreshes > r0, 'the rescan did not reach the leader');
+      assert.strictEqual(net.calls.length, n + 1);
+      assert.ok(leader.inst.publish(snapshot(clone(g)), { force: true })); // the leader's rescan: still waiting
+      B.shared.beat();
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 2);
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.needsYou.titleProject', { project: 'other' }));
+    } finally {
+      if (B) B.close();
+      leader.inst.stop();
+    }
+  });
+
+  await test('push: two windows see the same error; the claim in the shared dir lets exactly one of them send it', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-a', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    const peerCalls = [];
+    // the other window: its own runtime, the same user settings, SecretStorage and shared claim dir
+    const peer = realPushRt.createPushRuntime({
+      read: () => win.ctl.pushSettings(), secret: (k) => secrets.get(k), claimDir: () => win.notifyDir, i18n,
+      clock: pushNow, timing: PUSH_TIMING,
+      fetch: async (url, init) => { peerCalls.push({ url, init }); return { status: 200, text: async () => '' }; },
+    });
+    let seq = 0;
+    const feedPeer = (sessions) => peer.update({ sessions, lamps: lampLib.computeLamps(sessions), quota: emptyQuotaSnapshot(), seq: ++seq });
+    try {
+      win.send(fixtures());
+      feedPeer(fixtures());
+      const n = net.calls.length;
+      for (const who of ['peer first', 'window first']) {
+        const f = fixtures();
+        f[0] = errored(f[0], since());
+        if (who === 'peer first') { feedPeer(clone(f)); win.send(f); } else { win.send(f); feedPeer(clone(f)); }
+        await pushSettle();
+        win.send(fixtures());
+        feedPeer(fixtures());
+      }
+      assert.strictEqual(net.calls.length - n + peerCalls.length, 2, `window ${net.calls.length - n}, peer ${peerCalls.length}`);
+    } finally {
+      peer.dispose();
+      win.close();
+    }
+  });
+
+  await test('push: a channel\'s daily limit drops what is over it (logged) and says so once; a failing channel gets one warning after 3 failures in a row, not repeated until a send works', async () => {
+    const secrets = fakeSecrets();
+    const capped = await storeChannel(secrets, ntfyConfig({ key: 'ntfy-cap', topic: 'am-synthetic0capped01', dailyMax: 1 }));
+    const win = activateWindow('win-push-limits', { 'push.enabled': true, 'push.channels': [capped] }, { secrets });
+    const error = async () => {
+      const f = fixtures();
+      f[0] = errored(f[0], since());
+      win.send(f);
+      await pushSettle();
+      win.send(fixtures());
+    };
+    try {
+      win.send(fixtures());
+      const n = net.calls.length;
+      const notices = () => log.info.filter((m) => m === i18n.t('push.ui.capped', { channel: 'ntfy' })).length;
+      for (let i = 0; i < 3; i++) await error();
+      assert.strictEqual(net.calls.length, n + 1, 'the daily limit did not hold');
+      assert.strictEqual(notices(), 1);
+      assert.ok(outputHas(i18n.t('push.log.dropped', { channel: 'ntfy', n: 1, reason: i18n.t('push.log.reason.daily') })));
+
+      // failures: an HTTP error, a network error (its URL holds the topic), another HTTP error → one warning
+      setConfig('push.channels', [await storeChannel(secrets, ntfyConfig())]);
+      const warns = () => log.warn.filter((m) => m.startsWith('Push to ntfy failed: ')).length;
+      let answers = [{ status: 500, text: 'synthetic outage' }, new Error(`connect ECONNREFUSED ${NTFY_URL}`), { status: 502, text: '' }];
+      net.answer = () => answers.shift() || { status: 500, text: 'synthetic outage' };
+      warnAnswer = (m, items) => items[0];
+      const executed = log.executed.length;
+      for (let i = 0; i < 4; i++) await error();
+      assert.strictEqual(warns(), 1, 'warned once after three failures, not again after the fourth');
+      assert.strictEqual(last(log.warn), i18n.t('push.ui.sendFailed', { channel: 'ntfy', error: i18n.t('push.err.http', { status: 502 }) }));
+      await tick();
+      assert.ok(log.executed.slice(executed).some((x) => x[0] === 'agentMonitor.push.setup'), '"Open push setup" did not open it');
+      assert.ok(!log.output.some((l) => l.includes(NTFY_TOPIC) || l.includes(NTFY_TOKEN)), 'a secret reached the output');
+      // a good send clears it; three new failures warn again
+      net.answer = null;
+      await error();
+      answers = [];
+      net.answer = () => ({ status: 500, text: 'synthetic outage' });
+      for (let i = 0; i < 3; i++) await error();
+      assert.strictEqual(warns(), 2);
+    } finally {
+      net.answer = null;
+      warnAnswer = null;
+      win.close();
+    }
+  });
+
+  await test('push: closing the window drops a pending needsYou; nothing is sent afterwards', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-close', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    win.send(fixtures());
+    const n = net.calls.length;
+    const f = fixtures();
+    f[1] = waiting(f[1], since());
+    win.send(f);
+    const rt = win.ctl.push;
+    assert.strictEqual(rt._state().waits, 1);
+    win.close();
+    assert.deepStrictEqual([rt._state().waits, rt._state().flushTimer], [0, false]);
+    await sleep(150);
+    assert.strictEqual(net.calls.length, n);
+  });
+
+  // last: moves the push clock ahead
+  await test('push: usage limits: limitHit when a new hit shows up, limitReset once its reset time has passed', async () => {
+    const secrets = fakeSecrets();
+    const entry = await storeChannel(secrets, ntfyConfig());
+    const win = activateWindow('win-push-limit', { 'push.enabled': true, 'push.channels': [entry] }, { secrets });
+    try {
+      win.send(fixtures(), { quota: emptyQuotaSnapshot() }); // seeds
+      const n = net.calls.length;
+      const hitAt = pushNow();
+      const resetAt = hitAt + 5 * MIN;
+      win.send(fixtures(), { quota: claudeHit(hitAt, resetAt) });
+      await pushSettle();
+      win.send(fixtures(), { quota: claudeHit(hitAt, resetAt) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 1);
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.limitHit.title', { provider: 'Claude Code' }));
+      assert.ok(last(net.calls).init.body.startsWith('Resets '), last(net.calls).init.body);
+      pushClock.offset += 10 * MIN;
+      win.send(fixtures(), { quota: claudeHit(hitAt, resetAt) });
+      await pushSettle();
+      win.send(fixtures(), { quota: claudeHit(hitAt, resetAt) });
+      await pushSettle();
+      assert.strictEqual(net.calls.length, n + 2);
+      assert.strictEqual(titleOf(last(net.calls)), i18n.t('push.msg.limitReset.title', { provider: 'Claude Code' }));
+    } finally {
+      win.close();
+    }
+  });
+}
 
 async function manifestTests() {
   const c = pkg.contributes;
@@ -1199,7 +2572,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.3.1');
+    assert.strictEqual(pkg.version, '0.4.0');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');
@@ -1254,9 +2627,11 @@ async function manifestTests() {
     }
   });
 
-  await test('views and containers: the bottom panel has a single webview view (title merged into the panel tab, like the terminal), plus the sidebar overview tree', () => {
+  await test('views and containers: the bottom panel shows a single webview view (title merged into the panel tab, like the terminal) plus a hidden badge-carrying tree; the sidebar has the overview tree', () => {
     for (const v of views.values()) assert.ok(containers.has(v.container), `container ${v.container} not declared`);
-    assert.deepStrictEqual(c.views.agentMonitor.map((v) => v.id), ['agentMonitor.agents'], 'bottom panel keeps a single view');
+    assert.deepStrictEqual(c.views.agentMonitor.map((v) => v.id), ['agentMonitor.agents', 'agentMonitor.panelOverview']);
+    assert.deepStrictEqual(c.views.agentMonitor.filter((v) => v.visibility !== 'hidden').map((v) => v.id), ['agentMonitor.agents'], 'bottom panel shows a single view by default');
+    assert.strictEqual(views.get('agentMonitor.panelOverview').type, undefined, 'the badge carrier must be a tree view (created at activation)');
     assert.ok(!views.has('agentMonitor.sessions'), 'native session tree must be removed');
     assert.strictEqual(views.get('agentMonitor.agents').container, 'agentMonitor');
     assert.strictEqual(views.get('agentMonitor.agents').type, 'webview');
@@ -1278,6 +2653,7 @@ async function manifestTests() {
       hideCompleted: '$(eye)', showCompleted: '$(eye-closed)', openTranscript: '$(go-to-file)',
       revealTranscript: '$(folder-opened)', copyTranscriptPath: '$(copy)', copyResume: '$(copy)',
       compact: '$(screen-normal)', handoff: '$(export)', setAutoCompact: '$(settings)', storage: '$(database)',
+      'push.setup': '$(bell)',
     };
     assert.deepStrictEqual([...commands].sort(), Object.keys(want).map((x) => 'agentMonitor.' + x).sort());
     for (const [id, icon] of Object.entries(want)) assert.strictEqual(c.commands.find((x) => x.command === 'agentMonitor.' + id).icon, icon, id);
@@ -1293,7 +2669,7 @@ async function manifestTests() {
     for (const id of ['revealTranscript', 'copyTranscriptPath', 'handoff', 'setAutoCompact']) {
       const m = sessionMenu('agentMonitor.' + id);
       assert.ok(m, id + ' is not in the context menu');
-      assert.ok(m.when.includes('view == agentMonitor.tree') && m.when.includes('viewItem =~ /\\bsession\\b/'), id + ': ' + m.when);
+      assert.ok(m.when.includes(TREE_VIEWS) && m.when.includes('viewItem =~ /\\bsession\\b/'), id + ': ' + m.when);
       const re = /viewItem =~ \/(.+?)\//.exec(m.when);
       const rx = new RegExp(re[1].replace(/\\\\/g, '\\'));
       assert.ok(rx.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), 'session node matches');
@@ -1312,7 +2688,7 @@ async function manifestTests() {
     assert.ok(!JSON.stringify(c.menus).includes('agentMonitor.sessions'), 'menus no longer reference the native session tree');
   });
 
-  await test('bottom panel title bar: scope switch, hide completed, mark all seen and refresh are buttons; storage and settings are in the … overflow menu', () => {
+  await test('bottom panel title bar: scope switch, hide completed, mark all seen and refresh are buttons; storage, push notifications and settings are in the … overflow menu', () => {
     const items = c.menus['view/title'].filter((m) => /view == agentMonitor\.agents\b/.test(m.when));
     const nav = items.filter((m) => m.group.startsWith('navigation')).map((m) => `${m.group} ${m.command || m.submenu}`);
     assert.deepStrictEqual(nav, [
@@ -1321,7 +2697,7 @@ async function manifestTests() {
       'navigation@3 agentMonitor.markAllSeen', 'navigation@4 agentMonitor.refresh',
     ]);
     const overflow = items.filter((m) => !m.group.startsWith('navigation')).map((m) => m.command);
-    assert.deepStrictEqual(overflow, ['agentMonitor.storage', 'agentMonitor.openSettings']);
+    assert.deepStrictEqual(overflow, ['agentMonitor.storage', 'agentMonitor.push.setup', 'agentMonitor.openSettings']);
     // the two scope submenus are mutually exclusive; the icon reflects the current scope
     const scope = items.filter((m) => m.submenu);
     assert.ok(scope[0].when.includes("config.agentMonitor.scope != 'workspace'") && scope[1].when.includes("config.agentMonitor.scope == 'workspace'"));
@@ -1357,7 +2733,7 @@ async function manifestTests() {
 
   await test('menus: compact is in the overview tree context menu (viewItem =~ /\\bcompactable\\b/) and the webview context menu (compactable); only declared commands, views and settings are referenced', () => {
     const tree = c.menus['view/item/context'].filter((m) => m.command === 'agentMonitor.compact');
-    assert.ok(tree.some((m) => !m.group.startsWith('inline') && /view == agentMonitor\.tree/.test(m.when) && m.when.includes('viewItem =~ /\\bcompactable\\b/')));
+    assert.ok(tree.some((m) => !m.group.startsWith('inline') && m.when.includes(TREE_VIEWS) && m.when.includes('viewItem =~ /\\bcompactable\\b/')));
     assert.ok(c.menus['webview/context'].some((m) => m.command === 'agentMonitor.compact' && / && compactable$/.test(m.when)));
     const contextValues = ['session', 'provider-claude', 'lamp-doneUnseen', 'resumable', 'compactable', 'agent', 'mainAgent', 'workflow'];
     for (const [menu, items] of Object.entries(c.menus)) {
@@ -1367,6 +2743,10 @@ async function manifestTests() {
         if (it.submenu) assert.ok(submenus.has(it.submenu), `undeclared submenu ${it.submenu}`);
         const when = it.when || '';
         for (const m of when.matchAll(/\bview == ([\w.]+)/g)) assert.ok(views.has(m[1]), `unknown view ${m[1]}`);
+        for (const m of when.matchAll(/\bview =~ \/(.+?)\/(?:\s|$)/g)) {
+          const re = new RegExp(m[1]);
+          assert.ok([...views.keys()].some((v) => re.test(v)) && !re.test('agentMonitor.agents'), `view regex matches no tree view: ${m[1]}`);
+        }
         for (const m of when.matchAll(/\bwebviewId == '([\w.]+)'/g)) assert.ok(views.has(m[1]) && views.get(m[1]).type === 'webview', `unknown webview ${m[1]}`);
         for (const m of when.matchAll(/\bconfig\.([\w.]+)/g)) assert.ok(settings.has(m[1]), `unknown setting ${m[1]}`);
         for (const m of when.matchAll(/viewItem =~ \/(.+?)\/(?:\s|$)/g)) {
@@ -1382,10 +2762,10 @@ async function manifestTests() {
     assert.ok(!re.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), '12K context should not get a compact button');
   });
 
-  await test('Command Palette: commands that need a node argument are hidden; compact / handoff / setAutoCompact / storage are available', () => {
+  await test('Command Palette: commands that need a node argument are hidden; compact / handoff / setAutoCompact / storage / push setup are available', () => {
     const hidden = c.menus.commandPalette.filter((x) => x.when === 'false').map((x) => x.command);
     assert.deepStrictEqual(hidden.sort(), ['openTranscript', 'revealTranscript', 'copyTranscriptPath', 'markSeen', 'copyResume'].map((x) => 'agentMonitor.' + x).sort());
-    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage']) {
+    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'push.setup']) {
       assert.ok(!c.menus.commandPalette.some((x) => x.command === 'agentMonitor.' + id), id + ' should be visible in the Command Palette');
     }
   });
@@ -1410,6 +2790,9 @@ async function manifestTests() {
       cacheReminder: ['boolean', true], cacheReminderMinutes: ['number', 8], cacheReminderMinContext: ['number', 150000],
       cacheReminderShortTtl: ['boolean', false], closeReminder: ['boolean', true], postCompactHint: ['boolean', true],
       onlyWorkspace: ['boolean', false],
+      notifyNeedsYou: ['boolean', true], backgroundRefreshSeconds: ['number', 5], shareScanAcrossWindows: ['boolean', true],
+      'push.enabled': ['boolean', false], 'push.events': ['object', { needsYou: true, error: true, limitHit: true, limitReset: true }],
+      'push.delaySeconds': ['number', 30], 'push.includeTitle': ['boolean', false], 'push.channels': ['array', []],
     };
     const props = c.configuration.properties;
     assert.deepStrictEqual(Object.keys(props).map((k) => k.replace(/^agentMonitor\./, '')).sort(), Object.keys(want).sort());
@@ -1427,6 +2810,28 @@ async function manifestTests() {
     assert.ok(props['agentMonitor.onlyWorkspace'].deprecationMessage);
     // settings that point to programs / directories can only be set in user settings (machine scope), so workspace settings cannot swap the program that gets executed
     for (const k of ['claude.cliPath', 'claude.projectsDir', 'codex.home']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
+    // the shared scan and the background interval concern every window on this machine, so they are user settings too
+    for (const k of ['backgroundRefreshSeconds', 'shareScanAcrossWindows']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
+    // notifications keep the default (window) scope: a window with them off simply never claims, and a machine setting would
+    // neither sync nor apply from user settings in remote windows
+    assert.strictEqual(props['agentMonitor.notifyNeedsYou'].scope, undefined);
+    assert.deepStrictEqual([props['agentMonitor.backgroundRefreshSeconds'].minimum, props['agentMonitor.backgroundRefreshSeconds'].maximum], [2, 60]);
+    assert.ok(nls['config.backgroundRefreshSeconds'].includes('#agentMonitor.refreshSeconds#'), 'description links to refreshSeconds');
+    // push: application scope (a workspace can never turn it on or redirect it) and restricted in untrusted workspaces;
+    // the events render as checkboxes; the delay matches lib/push.js' default and stays within 0–600 s
+    const restricted = pkg.capabilities.untrustedWorkspaces.restrictedConfigurations;
+    for (const k of Object.keys(want).filter((x) => x.startsWith('push.'))) {
+      assert.strictEqual(props['agentMonitor.' + k].scope, 'application', k);
+      assert.ok(restricted.includes('agentMonitor.' + k), `${k} is not restricted`);
+    }
+    const ev = props['agentMonitor.push.events'];
+    assert.deepStrictEqual(Object.keys(ev.properties), realPush.EVENT_TYPES.slice());
+    assert.ok(Object.values(ev.properties).every((p) => p.type === 'boolean' && p.default === true) && ev.additionalProperties === false);
+    assert.deepStrictEqual([props['agentMonitor.push.delaySeconds'].minimum, props['agentMonitor.push.delaySeconds'].maximum], [0, 600]);
+    assert.strictEqual(props['agentMonitor.push.delaySeconds'].default, realPush.DEFAULT_DELAY_SECONDS);
+    assert.ok(nls['config.push.channels'].includes('(command:agentMonitor.push.setup)'), 'the channel list points to the setup command');
+    const orders = Object.values(props).map((p) => p.order);
+    assert.strictEqual(new Set(orders).size, orders.length, 'every setting has its own order');
     // defaults in compact.js match these
     for (const [k, v] of Object.entries(realCompact.DEFAULTS)) assert.deepStrictEqual(props['agentMonitor.' + k].default, v, `compact default mismatch: ${k}`);
   });
@@ -1453,11 +2858,11 @@ async function manifestTests() {
   });
 
   await test('no hard-coded CJK text in UI code (comments excluded)', () => {
-    for (const f of ['extension.js', 'lib/agents-view.js', 'lib/tree.js']) {
+    for (const f of ['extension.js', 'lib/agents-view.js', 'lib/tree.js', 'lib/push-runtime.js', 'lib/push-setup.js']) {
       const src = fs.readFileSync(path.join(ROOT, f), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '')
-        .split('\n').map((l) => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
-      const hit = src.split('\n').find((l) => /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(l));
+        .split(/\r?\n/).map((l) => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+      const hit = src.split(/\r?\n/).find((l) => /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(l));
       assert.ok(!hit, `${f} contains CJK text: ${hit}`);
     }
   });
@@ -1475,6 +2880,32 @@ async function manifestTests() {
     assert.ok(used.size >= 10);
   });
 
+  await test('push setup and runtime: every push.* / ext.* string they use exists in all five languages, with the same placeholders', () => {
+    const settingKeys = new Set(['push.enabled', 'push.events', 'push.delaySeconds', 'push.includeTitle', 'push.channels']);
+    const used = new Set(['push.log.reason.hourly', 'push.log.reason.daily', 'push.log.reason.stale']); // built from the drop reason
+    for (const e of realPush.EVENT_TYPES) used.add(`push.event.${e}`);
+    for (const f of ['lib/push-setup.js', 'lib/push-runtime.js']) {
+      const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+      for (const m of src.matchAll(/'((?:push|ext)\.[a-zA-Z][\w.]*\w)'/g)) if (!settingKeys.has(m[1])) used.add(m[1]);
+    }
+    const ext = fs.readFileSync(path.join(ROOT, 'extension.js'), 'utf8');
+    for (const m of ext.matchAll(/\bt\('((?:push|ext)\.[\w.]*\w)'/g)) used.add(m[1]);
+    assert.ok(used.size >= 50, `only ${used.size} keys found`);
+    const dict = (loc) => ({
+      ...JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', `views.${loc}.json`), 'utf8')),
+      ...JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', `push.${loc}.json`), 'utf8')),
+    });
+    const en = dict('en');
+    const ph = (x) => [...String(x).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
+    for (const loc of ['en', 'zh-cn', 'zh-tw', 'ko', 'ja']) {
+      const d = dict(loc);
+      for (const k of used) {
+        assert.ok(typeof d[k] === 'string' && d[k].trim(), `${loc}: missing ${k}`);
+        assert.strictEqual(ph(d[k]), ph(en[k]), `${loc}: placeholders of ${k}`);
+      }
+    }
+  });
+
   await test('.vscodeignore excludes test/ from the package', () => {
     const ignore = fs.readFileSync(path.join(ROOT, '.vscodeignore'), 'utf8').split(/\r?\n/);
     assert.ok(ignore.includes('test/**'));
@@ -1488,6 +2919,15 @@ async function manifestTests() {
   } catch (err) {
     results.push(false);
     console.log('  FAIL  (extension tests aborted)', err && err.stack);
+  }
+  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Background slowdown', backgroundTests], ['Remote push', pushTests]]) {
+    console.log(`\n${title}`);
+    try {
+      await fn();
+    } catch (err) {
+      results.push(false);
+      console.log(`  FAIL  (${title} aborted)`, err && err.stack);
+    }
   }
   console.log('\npackage.json');
   await manifestTests();

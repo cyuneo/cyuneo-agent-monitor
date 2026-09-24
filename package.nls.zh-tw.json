@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "在終端機旁邊看到你所有的 Claude Code 和 Codex 聊天：哪些智慧體在工作、哪些在等你、每個上下文用了多少。可以用便宜的模型壓縮，快取過期前提醒你，碰到額度上限後幫你接著做。只讀取本機的工作階段記錄，擴充功能本身不連網。非官方專案，與 Anthropic 或 OpenAI 沒有關聯。個人和非商業用途免費；商業用途需另行授權。",
-  "capabilities.untrusted": "在受限模式下，指向其他資料夾或程式的設定（Claude Code 命令列路徑、Claude 專案資料夾、Codex 主目錄）只會從你的使用者設定裡讀取。",
+  "description": "在終端機旁邊看到你所有的 Claude Code 和 Codex 聊天：哪些智慧體在工作、哪些在等你、每個上下文用了多少。可以用便宜的模型壓縮，快取過期前提醒你，碰到額度上限後幫你接著做。只讀取本機的工作階段記錄；除非你開啟選用的推播通知或傳送測試訊息，擴充功能本身不連網。非官方專案，與 Anthropic 或 OpenAI 沒有關聯。個人和非商業用途免費；商業用途需另行授權。",
+  "capabilities.untrusted": "在受限模式下，指向其他資料夾或程式的設定（Claude Code 命令列路徑、Claude 專案資料夾、Codex 主目錄）只會從你的使用者設定裡讀取。推播通知的設定則一律只從你的使用者設定裡讀取。",
 
   "container.title": "智慧體監視器",
   "view.overview": "總覽",
@@ -33,6 +33,7 @@
   "cmd.handoff": "寫交接筆記並開新工作階段…",
   "cmd.setAutoCompact": "設定自動壓縮閾值…",
   "cmd.storage": "儲存位置與占用",
+  "cmd.pushSetup": "推播通知…",
   "submenu.scope.all": "範圍：所有工作階段",
   "submenu.scope.workspace": "範圍：目前工作區",
 
@@ -56,6 +57,7 @@
   "config.sessionListPosition.auto": "跟終端機的分頁清單同一側（預設右側）。",
   "config.sessionListPosition.left": "在左側，智慧體在右側。",
   "config.sessionListPosition.right": "在右側，智慧體在左側。",
+  "config.notifyNeedsYou": "工作階段或智慧體開始等你回覆或核准時通知你：在有焦點的 VS Code 視窗裡顯示訊息（你正在看的工作階段除外）；所有 VS Code 視窗都不在前景時發送系統通知（macOS 和 Linux）。在 Windows 和遠端視窗中，訊息會改在你接下來切換到的 VS Code 視窗裡顯示。每次等待只由一個視窗通知。",
   "config.refreshSeconds": "重新讀取工作階段記錄的間隔（秒）。",
   "config.activeWindowMinutes": "顯示這麼多分鐘內活躍過的工作階段。開啟中的工作階段和目前選取的工作階段始終顯示。",
   "config.staleMinutes": "超過這麼多分鐘沒有新的記錄行，就標記智慧體為無活動。",
@@ -64,6 +66,8 @@
   "config.approvalGuess.allTools": "對所有工具生效，在無活動時間（staleMinutes）之後。",
   "config.approvalGuess.off": "從不推測。",
   "config.approvalGuessSeconds": "在快速工具模式下，快速工具呼叫超過多少秒沒有結果，就算作可能在等核准。",
+  "config.backgroundRefreshSeconds": "所有 VS Code 視窗都不在前景時，改為每隔這麼多秒重新讀取工作階段記錄，而不是依 `#agentMonitor.refreshSeconds#`（取兩者中較長者）。數值越小，「需要你處理」的通知來得越快。",
+  "config.shareScanAcrossWindows": "讓所有 VS Code 視窗共用一次工作階段記錄讀取：由一個視窗讀取，其他視窗直接顯示它的結果，更省 CPU 和記憶體。關閉後每個視窗各自讀取。",
   "config.claude.enabled": "讀取 Claude Code 的工作階段記錄。",
   "config.claude.projectsDir": "存放 Claude Code 工作階段記錄的資料夾。留空則使用 `$CLAUDE_CONFIG_DIR/projects` 或 `~/.claude/projects`。",
   "config.claude.cliPath": "Claude Code 命令列程式的路徑，僅在背景壓縮已關閉的工作階段時使用。留空則先在 PATH 裡找 `claude`，再到已安裝的 Claude Code 擴充功能裡找。",
@@ -79,6 +83,15 @@
   "config.cacheReminderShortTtl": "也提醒使用 5 分鐘快取的工作階段。",
   "config.closeReminder": "當你關閉一個快取仍然有效的大型 Claude Code 工作階段時，提示你壓縮它或寫一份交接筆記。",
   "config.postCompactHint": "工作階段壓縮後，提醒你檢查關鍵規則和約束是否還在。",
+  "config.push.enabled": "智慧體需要你、因錯誤停止、碰到或解除使用額度時，向你的手機或團隊聊天傳送一則簡短推播。預設關閉；用 [推播通知…](command:agentMonitor.push.setup) 選擇推播到哪裡。只傳送專案資料夾名稱和狀態（開啟 `#agentMonitor.push.includeTitle#` 才會附上對話標題和子智慧體名稱）。這是擴充功能裡唯一會連網的功能。",
+  "config.push.events": "推播開啟時，哪些事件會傳送推播。",
+  "config.push.events.needsYou": "智慧體在等你回覆或核准（過了延遲時間仍在等才推播）。",
+  "config.push.events.error": "智慧體因 API 錯誤停止。",
+  "config.push.events.limitHit": "Claude Code 或 Codex 的使用額度用完。",
+  "config.push.events.limitReset": "使用額度已重置。",
+  "config.push.delaySeconds": "智慧體等你多少秒後仍未處理才推播。會先顯示桌面通知；在這段時間內處理了就不推播。設為 `0` 則立即推播。",
+  "config.push.includeTitle": "同時傳送對話標題（以及子智慧體名稱）。只傳送真正的標題（你設定的，或智慧體、應用程式產生的）；從你第一則提示詞擷取的標題永遠不會傳送。",
+  "config.push.channels": "推播傳送到哪裡（只含不涉及機密的部分）。請用 [推播通知…](command:agentMonitor.push.setup) 新增、測試、編輯或移除管道，不要手動編輯這個清單：權杖、金鑰和 Webhook 網址保存在 VS Code 的安全儲存空間裡，不在這裡。",
   "config.onlyWorkspace": "只顯示目前工作區的工作階段。",
   "config.onlyWorkspace.deprecated": "已被範圍設定（agentMonitor.scope）取代。已有的值會自動遷移。"
 }

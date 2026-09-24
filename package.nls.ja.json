@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "すべてのClaude CodeとCodexのチャットをターミナルの隣で確認できます。どのエージェントが動いているか、どれが対応待ちか、各コンテキストがどれくらい埋まっているかがわかります。安いモデルでの圧縮、キャッシュが切れる前の通知、使用量の上限後の再開に対応しています。ローカルのセッション記録を読むだけで、拡張機能自体はネットワークに接続しません。非公式であり、AnthropicまたはOpenAIとは提携していません。個人および非商用目的は無料です。商用目的には別途ライセンスが必要です。",
-  "capabilities.untrusted": "制限モードでは、他のフォルダーやプログラムを指す設定（Claude Code CLIのパス、Claudeプロジェクトフォルダー、Codexホーム）はユーザー設定からのみ読み込まれます。",
+  "description": "すべてのClaude CodeとCodexのチャットをターミナルの隣で確認できます。どのエージェントが動いているか、どれが対応待ちか、各コンテキストがどれくらい埋まっているかがわかります。安いモデルでの圧縮、キャッシュが切れる前の通知、使用量の上限後の再開に対応しています。ローカルのセッション記録を読むだけで、オプションのプッシュ通知をオンにするかテストメッセージを送らない限り、拡張機能自体はネットワークに接続しません。非公式であり、AnthropicまたはOpenAIとは提携していません。個人および非商用目的は無料です。商用目的には別途ライセンスが必要です。",
+  "capabilities.untrusted": "制限モードでは、他のフォルダーやプログラムを指す設定（Claude Code CLIのパス、Claudeプロジェクトフォルダー、Codexホーム）はユーザー設定からのみ読み込まれます。プッシュ通知の設定は常にユーザー設定からのみ読み込まれます。",
 
   "container.title": "エージェントモニター",
   "view.overview": "概要",
@@ -33,6 +33,7 @@
   "cmd.handoff": "引き継ぎメモを書いて新しく始める…",
   "cmd.setAutoCompact": "自動圧縮のしきい値を設定…",
   "cmd.storage": "保存場所と使用量",
+  "cmd.pushSetup": "プッシュ通知…",
   "submenu.scope.all": "範囲: すべてのセッション",
   "submenu.scope.workspace": "範囲: このワークスペース",
 
@@ -56,6 +57,7 @@
   "config.sessionListPosition.auto": "ターミナルのタブ一覧と同じ側です（既定は右側）。",
   "config.sessionListPosition.left": "左側に表示し、エージェントは右側になります。",
   "config.sessionListPosition.right": "右側に表示し、エージェントは左側になります。",
+  "config.notifyNeedsYou": "チャットやエージェントが返信や承認を待ち始めたときに通知します。フォーカスのある VS Code ウィンドウではメッセージを（表示中のチャットは除く）、どの VS Code ウィンドウにもフォーカスがないときはシステム通知を表示します（macOS と Linux）。Windows とリモート ウィンドウでは、代わりに次に切り替えた VS Code ウィンドウにメッセージが表示されます。1 回の待機につき通知するのは 1 つのウィンドウだけです。",
   "config.refreshSeconds": "セッション記録を再読み込みする間隔（秒）です。",
   "config.activeWindowMinutes": "この分数以内にアクティブだったセッションを表示します。開いているセッションと選択中のセッションは常に表示されます。",
   "config.staleMinutes": "新しい記録行がこの分数ない場合、エージェントを活動なしとしてマークします。",
@@ -64,6 +66,8 @@
   "config.approvalGuess.allTools": "すべてのツールに対して、無活動時間（staleMinutes）経過後に適用されます。",
   "config.approvalGuess.off": "推測しません。",
   "config.approvalGuessSeconds": "クイックツールモードでは、クイックツール呼び出しが何秒結果を返さないと承認待ちの可能性ありと判定するかを指定します。",
+  "config.backgroundRefreshSeconds": "どの VS Code ウィンドウにもフォーカスがない間は、`#agentMonitor.refreshSeconds#` の代わりにこの秒数ごとにセッション記録を再読み込みします（長いほうを使用）。値を小さくすると「対応が必要」の通知が早く届きます。",
+  "config.shareScanAcrossWindows": "すべての VS Code ウィンドウでセッション記録の読み込みを共有します。1 つのウィンドウが読み込み、ほかのウィンドウはその結果を表示するため、CPU とメモリを節約できます。オフにすると各ウィンドウが個別に読み込みます。",
   "config.claude.enabled": "Claude Codeのセッション記録を読み込みます。",
   "config.claude.projectsDir": "Claude Codeのセッション記録があるフォルダーです。空欄の場合は`$CLAUDE_CONFIG_DIR/projects`または`~/.claude/projects`を使用します。",
   "config.claude.cliPath": "Claude Codeのコマンドラインプログラムへのパスです。閉じたセッションをバックグラウンドで圧縮するときにのみ使用されます。空欄の場合はPATH上の`claude`を探し、次にインストール済みのClaude Code拡張機能内を探します。",
@@ -79,6 +83,15 @@
   "config.cacheReminderShortTtl": "5分キャッシュを使用しているセッションについても通知します。",
   "config.closeReminder": "キャッシュがまだ有効な大きなClaude Codeセッションを閉じたとき、圧縮するか引き継ぎメモを書くよう提案します。",
   "config.postCompactHint": "セッションが圧縮された後、重要なルールと制約がまだ残っているか確認するよう通知します。",
+  "config.push.enabled": "エージェントが対応を待っているとき、エラーで停止したとき、使用上限に達したときや上限が解除されたときに、スマートフォンやチームのチャットへ短いプッシュメッセージを送ります。既定はオフです。送信先は [プッシュ通知…](command:agentMonitor.push.setup) で選びます。送るのはプロジェクトフォルダー名と状態だけです（チャットのタイトルとサブエージェント名は `#agentMonitor.push.includeTitle#` をオンにした場合のみ）。ネットワークを使うのはこの機能だけです。",
+  "config.push.events": "プッシュがオンのとき、どのイベントでプッシュを送るかを選びます。",
+  "config.push.events.needsYou": "エージェントが返信や承認を待っている（待ち時間を過ぎてもまだ待っている場合のみ）。",
+  "config.push.events.error": "エージェントが API エラーで停止した。",
+  "config.push.events.limitHit": "Claude Code または Codex の使用上限に達した。",
+  "config.push.events.limitReset": "使用上限がリセットされた。",
+  "config.push.delaySeconds": "エージェントが何秒待ち続けたらプッシュするかを指定します。先にデスクトップ通知が出て、その間に対応すればプッシュは送りません。`0` にするとすぐに送ります。",
+  "config.push.includeTitle": "チャットのタイトル（とサブエージェント名）も送ります。送るのは本当のタイトル（自分で付けたもの、またはエージェントやアプリが付けたもの）だけで、最初のプロンプトから作ったタイトルは送りません。",
+  "config.push.channels": "プッシュの送信先です（秘密ではない部分のみ）。このリストを直接編集せず、[プッシュ通知…](command:agentMonitor.push.setup) でチャネルを追加・テスト・編集・削除してください。トークン、キー、Webhook URL はここではなく VS Code の安全なストレージに保管されます。",
   "config.onlyWorkspace": "現在のワークスペースのセッションのみを表示します。",
   "config.onlyWorkspace.deprecated": "スコープ設定（agentMonitor.scope）に置き換えられました。既存の値は自動的に移行されます。"
 }

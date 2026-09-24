@@ -34,6 +34,46 @@
 
 对于能上报实时状态的 Claude Code 版本（见 [它读什么](#它读什么)），"需要你处理"是确定的。对于更早的版本和 Codex，扩展只能推测。当一个快工具（读、写或编辑文件、搜索、打补丁）连续 60 秒没有结果时，聊天窗口会显示 **可能在等你批准**。Shell 命令等长命令永远不会被推测。你可以用 `agentMonitor.approvalGuess` 修改或关闭这个推测。
 
+### "需要你处理"通知
+
+- 当一个聊天窗口或其中的智能体开始等你（批准、回答或对话框，也包括推测出的 **可能在等你批准**）时，智能体监视器会通知你。如果有 VS Code 窗口在前台，它会在那个窗口里弹出一条消息，带一个 **查看** 按钮：点它会在面板里选中这个聊天窗口。如果当前范围里看不到它，它会暂时加到这个窗口的列表里，直到你选中别的聊天窗口或切换范围；范围设置本身不会改。你正在看的聊天窗口（它的标签页在最前面，或面板正在显示它）不会弹消息。
+- 如果所有 VS Code 窗口都不在前台，则改为发系统通知（macOS 和 Linux）。在 Windows 和远程窗口（SSH、WSL、容器）中，消息会在你接下来切换到的 VS Code 窗口里显示，前提是这个聊天窗口还在等。
+- 不管开了几个窗口，每次等待只通知一次，由一个窗口负责；装了这个扩展的不同编辑器（VS Code、VS Code Insiders、Cursor 等）之间也是如此。窗口打开时就已经在等的聊天窗口不会通知，只是因为你改了设置才出现的聊天窗口（比如打开了 Codex）也不会通知；不在这个窗口范围里的聊天窗口也会通知。
+- 用 `agentMonitor.notifyNeedsYou` 可以关闭通知。所有 VS Code 窗口都不在前台时，记录改为每 5 秒读一次，而不是每 2 秒（`agentMonitor.backgroundRefreshSeconds`）。发系统通知之前还会再读一次记录，这样你已经回答过的提示就不会再通知。所以通知可能要过几秒才到。
+- 如果你没及时处理时还想在手机上收到消息，见[推送到手机或团队聊天](#推送到手机或团队聊天)。
+
+### 推送到手机或团队聊天
+
+可选功能，**默认关闭**。开启后，遇到下面这些情况，智能体监视器可以向你的手机或团队聊天发一条简短消息：
+
+- **智能体需要你**，并且过了 `agentMonitor.push.delaySeconds`（默认 30 秒）还在等。会先弹出桌面通知；你及时处理了就不推送。如果等待期间电脑进入睡眠，醒来后不会再推送这次等待。
+- **智能体因 API 错误停止**（立即推送）。
+- **Claude Code 或 Codex 的使用额度用完**，以及**额度重置**时。
+
+这四种默认都开启。可以在设置菜单的 **选择推送事件…** 里或用 `agentMonitor.push.events` 选择。
+
+**发送什么：** 项目文件夹名和状态，比如"智能体需要你 · my-app"；额度相关的消息则是产品名和重置时间。开启 `agentMonitor.push.includeTitle` 后会加上对话标题（以及子智能体名称），但只限真正的标题：你自己设置的，或智能体、应用生成的。由你第一条提示词截取的标题永远不会发送。扩展不会附加提示词、代码、文件路径、token 数或费用；标题和子智能体名称按原样发送，里面可能带有文件名。
+
+**设置方法：** 从命令面板或面板标题栏的 **…** 菜单运行 **智能体监视器：推送通知…**，选择 **添加推送渠道**。选一个服务，阅读隐私说明（每个服务只显示一次），填写各项，再发一条测试消息。令牌、密钥和 Webhook 地址保存在 VS Code 的安全存储里，绝不会写进 `settings.json`。编辑渠道时，密钥类字段留空就会保留已保存的值；可选的密钥（ntfy 访问令牌、飞书或钉钉的签名密钥）输入 `-` 即可删除。密钥不会在电脑之间同步：开启设置同步后，在另一台电脑上添加的渠道会显示 **这台电脑上还没设置**，需要在这台电脑上再设置一次；删除渠道时，只会删掉当前这台电脑上的密钥（留在其他电脑上的那份不会再被使用）。自建的 ntfy 或 Bark 服务器只有本机和内网地址才能用 `http://`。它不加密，而且换到别的网络（咖啡馆、酒店）时，同一个地址可能是别人的设备，所以只在你自己管理的网络里使用。同一个菜单会显示推送是否开启、有几个渠道在用，还能发送测试消息、编辑、关闭或删除渠道、开关推送以及选择事件。
+
+| 服务 | 需要准备什么 |
+| --- | --- |
+| **ntfy** | 安装 ntfy 应用，订阅设置时建议的主题。主题是随机生成的，因为在 ntfy.sh 上任何知道主题的人都能读到它。也可以用自己的服务器和访问令牌。 |
+| **Bark**（iPhone） | Bark 应用里的设备密钥：示例网址里紧跟在服务器地址后面的那一段。 |
+| **Server酱**（微信） | 在 sct.ftqq.com 获取的 SendKey（`SCT…`，Server酱³ 是 `sctp…`）。免费版每天只能发 5 条，所以这个渠道的每日上限默认是 5。 |
+| **飞书 / Lark** | 在群里添加自定义机器人，复制它的 Webhook 地址。开启了签名校验就填上密钥；设置了自定义关键词就填其中一个。 |
+| **钉钉** | 在群里添加自定义机器人，复制它的 Webhook 地址。安全设置用"加签"时填上密钥（以 `SEC` 开头），用"自定义关键词"时填其中一个。 |
+| **企业微信** | 添加群机器人，复制它的 Webhook 地址。 |
+| **Telegram** | 用 @BotFather 创建机器人，粘贴它的令牌和你的 Chat ID。先给机器人发一条消息，因为机器人不能主动发起聊天。 |
+| **Discord** | 在频道设置的"整合 > Webhook"里新建一个 Webhook，复制它的网址。 |
+| **Slack** | 为频道创建一个传入 Webhook，复制它的网址。 |
+
+**上限：** 几秒内接连发生的动态会合并成一条消息。每个渠道最多每 10 秒一条、每小时 20 条；设置了 **每日上限**（0 表示不限）的话也会遵守。超出每小时或每日上限的消息直接跳过，不会稍后补发，智能体监视器的输出面板里会记下来。上限在所有窗口之间共同计算，每个事件只由一个窗口发送。某个渠道连续失败三次时，会弹出一条带 **打开推送设置** 按钮的警告；在发往这个渠道的消息再次成功之前不会重复提醒。
+
+**远程窗口：** 推送从运行扩展的那台机器发出。在远程窗口（SSH、WSL、容器）里就是远程机器，它需要能访问对应的服务。渠道的密钥也会在那台机器上使用（VS Code 会把它们交给那里的扩展），所以推送开启时，只在你信任的机器上打开远程窗口，或者先关闭推送。
+
+**代理：** 推送经由 VS Code 发出，所以只要 VS Code 把代理设置交给扩展使用（`http.fetchAdditionalSupport`，新版本默认开启），你在 VS Code 里设置的代理（`http.proxy`）就会生效。在代理环境下推送失败时，请检查这些设置。
+
 ### 顺序不会跳动
 
 - 聊天窗口按开始时间排序，最新的在最上面。智能体按开始时间排序，最早的在最上面。
@@ -92,7 +132,7 @@ Claude Code 会在上下文到达某个容量时自动压缩，这发生在你�
 - **Claude Code 自己的建议：**"The auto setting picks a window tuned for your model and is strongly recommended for the best cost and performance. Overriding auto may result in high token usage, especially when resuming long sessions."（auto 设置会为你的模型选一个调好的容量，为了最好的成本和性能，强烈推荐使用它；覆盖 auto 可能导致 token 用量偏高，尤其是续接长会话时。）它没有说明原因。可能的原因：续接一个已经比新阈值还大的旧聊天窗口时会立刻压缩，而且缓存是冷的；阈值离聊天窗口一开始的大小太近，会反复压缩；摘要里丢的细节可能导致额外调用去重新读文件。
 - 如果给 Claude Code 设置了 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，它会覆盖以上所有设置。
 
-完整的参考说明，附带出处（其它工具的默认值、厂商评测、博客建议和成本模型），见 [docs/compaction-threshold-guide.md](compaction-threshold-guide.md)（中文）。
+完整的参考说明，附带出处（其它工具的默认值、厂商评测、博客建议和成本模型），见 [docs/compaction-threshold-guide.zh-CN.md](compaction-threshold-guide.zh-CN.md)（中文）。
 
 ### 详情
 
@@ -211,14 +251,18 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 
 扩展在 VS Code 自己的存储里保留一些很小的东西：哪些聊天窗口你已经看过、哪些提醒你关掉了、每个模型实测的自动压缩点，以及它改过的设置文件的备份。只有在你点击复制或压缩相关操作时，它才会写入剪贴板。
 
+只要 `agentMonitor.shareScanAcrossWindows` 是打开的（默认如此），即使只开了一个窗口，各窗口也会在扩展的全局存储里共用一个文件夹（`shared-scan`）。里面记着由哪个窗口读取记录，这个窗口还会把最新结果存到 `shared-scan/snapshot.json` 给其他窗口用：聊天标题、项目文件夹、步骤和费用。结果一变这个文件就会被覆盖，这个窗口正常关闭时会删除它。通知方面，每次等待会在系统临时目录下的一个私有文件夹里留一个小标记（只有哈希值，没有聊天内容），确保在所有编辑器里只有一个窗口显示这条通知。标记一天后删除。开启推送后，每个推送渠道的发送时间（不含消息内容）也记在同一个文件夹里（`push-sent.json`），这样上限能在各窗口之间共同生效。
+
 ## 隐私
 
-- **扩展不发起任何网络请求。** 它没有遥测、没有分析、没有远程内容，不会因为它而有任何东西离开你的电脑。
-- **唯一的例外是在后台压缩一个已关闭的聊天窗口**，并且只在你确认之后。这时扩展会运行你本机的 Claude Code（`claude -p --resume <session> --model <model> --output-format json "/compact …"`）。Claude Code 会像你自己使用它时一样连接到 Anthropic，用量会计入你的套餐或 API 账单。
+- **除非你开启推送或自己发送测试消息，扩展不发起任何网络请求。** 它没有遥测、没有分析、没有远程内容。
+- **推送通知是可选的，默认关闭。** 开启后，只有一条简短消息会发到你设置的服务：项目文件夹名和状态（你允许的话再加上对话标题和子智能体名称）。其他任何内容都不会离开你的电脑。和任何网络请求一样，服务商会看到这条消息和你的 IP 地址。令牌和 Webhook 地址保存在 VS Code 的安全存储里，在显示或记录的错误信息里都会被遮盖。
+- **在后台压缩一个已关闭的聊天窗口要通过 Claude Code**，并且只在你确认之后。这时扩展会运行你本机的 Claude Code（`claude -p --resume <session> --model <model> --output-format json "/compact …"`）。Claude Code 会像你自己使用它时一样连接到 Anthropic，用量会计入你的套餐或 API 账单。
 - **压缩一个打开中的聊天窗口，或者设置它的自动压缩阈值，都只是把文字放进它的输入框**（`/compact …` 或 `/autocompact …`）。在你按下回车之前，什么都不会发送。（聊天窗口没打开，或者只对这个项目生效时，阈值改为写进设置文件，见[它读什么](#它读什么)。）
 - **搬动数据由你自己决定。** 存储页面只生成命令，扩展绝不会自己执行；**在终端中打开** 也不会替你按回车。
 - **参考说明链接** 只有在你点击时，才会在浏览器里打开 GitHub 上的一个页面。
-- **你的对话内容保留在本机。** 聊天标题、步骤和结果只会显示在你自己的 VS Code 里。
+- **桌面通知只在本机显示。** 通知由 VS Code 或系统自带的通知命令显示（macOS 用 `osascript`，Linux 用 `notify-send`），内容是聊天窗口的标题和项目文件夹名。不会通过网络发送任何东西。
+- **你的对话内容保留在本机。** 聊天标题、步骤和结果只会显示在你自己的 VS Code 里（通知则显示在你自己电脑的通知区域）。
 - **这些数字是给你看的，不是给模型看的。** 上下文大小、缓存倒计时和费用永远不会传给模型。
 
 ## 命令
@@ -242,6 +286,7 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 | **写交接笔记并开新会话…** | 聊天窗口右键菜单、压缩菜单、命令面板 | 让模型写一份 `HANDOFF.md`，然后引导你 `/clear` 并继续 |
 | **设置自动压缩阈值…** | 聊天窗口详情里的"自动压缩"、聊天窗口右键菜单或 **…**、命令面板 | 见[自己设置自动压缩容量](#自己设置自动压缩容量) |
 | **存储位置与占用** | 面板标题栏的 **…** 菜单、命令面板 | 见[聊天窗口存在哪里](#聊天窗口存在哪里以及怎么搬走) |
+| **推送通知…** | 面板标题栏的 **…** 菜单、命令面板 | 见[推送到手机或团队聊天](#推送到手机或团队聊天) |
 
 ## 设置
 
@@ -254,11 +299,14 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 | `agentMonitor.statusBarBackground` | `true` | 有事情需要你处理时用警告背景，出错时用错误背景 |
 | `agentMonitor.showCost` | `true` | 显示等价 API 费用 |
 | `agentMonitor.sessionListPosition` | `auto` | 聊天窗口列表在面板的哪一侧：`auto`（跟终端标签列表同一侧）、`left` 或 `right` |
+| `agentMonitor.notifyNeedsYou` | `true` | 聊天窗口开始等你时通知你：在前台窗口里弹出消息；所有 VS Code 窗口都不在前台时发系统通知（macOS 和 Linux；其他情况下在你接下来切换到的窗口里弹出消息） |
 | `agentMonitor.refreshSeconds` | `2` | 多久重新读取一次会话记录 |
 | `agentMonitor.activeWindowMinutes` | `30` | 显示这么多分钟内活跃过的聊天窗口（打开中和选中的聊天窗口始终显示） |
 | `agentMonitor.staleMinutes` | `5` | 多少分钟没有新记录就算智能体无活动 |
 | `agentMonitor.approvalGuess` | `fastTools` | 当聊天窗口无法上报真实状态时，如何推测"可能在等你批准"：`fastTools`、`allTools` 或 `off` |
 | `agentMonitor.approvalGuessSeconds` | `60` | 快工具多少秒没有结果就开始推测 |
+| `agentMonitor.backgroundRefreshSeconds` | `5` | 所有 VS Code 窗口都不在前台时，改为按这个间隔（秒）读取记录（2–60；不会比 `refreshSeconds` 更快） |
+| `agentMonitor.shareScanAcrossWindows` | `true` | 让多个 VS Code 窗口共用一次记录读取（一个窗口读取，其他窗口显示它的结果） |
 | `agentMonitor.claude.enabled` | `true` | 读取 Claude Code 的记录 |
 | `agentMonitor.claude.projectsDir` | `""` | Claude Code 记录文件夹（留空则用 `$CLAUDE_CONFIG_DIR/projects` 或 `~/.claude/projects`） |
 | `agentMonitor.claude.cliPath` | `""` | Claude Code 命令行，仅用于后台压缩（留空则先在 PATH 里找 `claude`，再到 Claude Code 扩展里找） |
@@ -274,11 +322,18 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 | `agentMonitor.cacheReminderShortTtl` | `false` | 也提醒使用 5 分钟缓存的聊天窗口 |
 | `agentMonitor.closeReminder` | `true` | 当你关闭一个缓存仍然有效的大型聊天窗口时，提示你压缩它或写交接笔记 |
 | `agentMonitor.postCompactHint` | `true` | 聊天窗口压缩后，提醒你检查关键规则是否还在 |
+| `agentMonitor.push.enabled` | `false` | 推送到手机或团队聊天，见[推送到手机或团队聊天](#推送到手机或团队聊天) |
+| `agentMonitor.push.events` | 全部开启 | 哪些事件要推送：`needsYou`、`error`、`limitHit`、`limitReset` |
+| `agentMonitor.push.delaySeconds` | `30` | 聊天窗口等你多少秒仍未处理才推送（0–600） |
+| `agentMonitor.push.includeTitle` | `false` | 同时发送对话标题和子智能体名称（由你的提示词截取的标题除外） |
+| `agentMonitor.push.channels` | `[]` | 不含密钥的推送渠道列表；请用 **推送通知…** 修改 |
 | `agentMonitor.onlyWorkspace` | `false` | 已弃用：被 `agentMonitor.scope` 取代，会自动迁移 |
+
+推送相关的设置只从你的用户设置里读取，所以工作区设置既不能开启推送，也不能改变推送的去向。
 
 ## 上下文与压缩小贴士
 
-这些提示来自对公开研究和官方文档的梳理。完整笔记及出处见 [docs/research-context-compaction.md](research-context-compaction.md)（中文）。关于怎么选自动压缩容量，见 [docs/compaction-threshold-guide.md](compaction-threshold-guide.md)（中文）和[自己设置自动压缩容量](#自己设置自动压缩容量)。
+这些提示来自对公开研究和官方文档的梳理。完整笔记及出处见 [docs/research-context-compaction.zh-CN.md](research-context-compaction.zh-CN.md)（中文）。关于怎么选自动压缩容量，见 [docs/compaction-threshold-guide.zh-CN.md](compaction-threshold-guide.zh-CN.md)（中文）和[自己设置自动压缩容量](#自己设置自动压缩容量)。
 
 1. **不要为了保险就压缩。** 如果任务进行顺利，1M 上下文的模型还在 200K token 左右以下，就不用管它。低于约 50K 时几乎没什么可省的，压缩只会丢细节。
 2. **在节点处压缩，并说明要保留什么。** 好的时机是探索阶段结束，或者一个子功能做完了，而不是任务进行到一半。用 `/compact 请保留：目标、决定及原因、未解决的问题、文件路径，以及"不要推送"之类的约束`。超过约 500K 时，在下一个节点处理，不要等自动压缩在任务中途触发。
@@ -298,8 +353,11 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 - **标签页跟随有盲区。** 它靠标签标题匹配 Claude Code，靠对话 ID 匹配 Codex。侧边栏视图（而不是编辑器标签页）里显示的聊天窗口无法被检测到。
 - **可选模型的后台压缩只支持 Claude Code。** Codex 在自己内部压缩。一个聊天窗口打开时不能在后台压缩。
 - **Claude Code 的环境变量对扩展不可见。** `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 和 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 可能让 Claude Code 在跟界面显示不同的地方压缩。只有模型自动压缩过一次之后，才会出现实测值。
-- **每个 VS Code 窗口各自独立读取记录。**
+- **多个窗口共用一次记录读取。** 开着多个 VS Code 窗口时，由其中一个窗口读取记录，其他窗口显示它的结果，通常只晚一点点。这个窗口关闭时，另一个窗口会立刻接手；如果它失去响应，大约 10 秒内接手（所有 VS Code 窗口都不在前台时会更久，因为这时各窗口只按 `agentMonitor.backgroundRefreshSeconds` 的间隔互相确认）。读取设置不同（文件夹、活跃时间范围、推测方式）或扩展版本不同的窗口会各自读取；共用的文件夹写不进去时（比如磁盘满了），每个窗口也会各自读取。可以用 `agentMonitor.shareScanAcrossWindows` 关闭共用。
+- **系统通知比较简单。** 在 macOS 上通知通过 AppleScript 显示，所以会显示在 **脚本编辑器**（Script Editor）名下，允许或静音它们也要到"系统设置 > 通知"里找脚本编辑器。点击通知会打开脚本编辑器，而不是 VS Code：请自己切回 VS Code，在等你的聊天窗口亮着品红色的灯。在 Windows 和远程窗口中暂时没有系统通知，消息会改在你接下来切换到的 VS Code 窗口里显示。在 Linux 上如果没有安装 `notify-send`，会改为显示 VS Code 消息。
 - **Windows 的迁移命令还没有在 Windows 上实测过。** 存储位置页面生成的 `robocopy` 和 `mklink /J` 命令只核对过文字。运行前请先看一遍，确认一切正常之前不要删掉 `.bak` 备份文件夹。
+- **终端版不推送。** 推送通知只由 VS Code 扩展发送。
+- **钉钉加签还没有用真实机器人试过。** 签名按钉钉的文档实现，也只对照文档核对过。如果开启加签的机器人拒收消息，请把它的安全设置改用自定义关键词，并在 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 告诉我们。
 
 ---
 

@@ -949,25 +949,22 @@ test('provider list messages: select / more accept only keys in the list; resize
   assert.strictEqual(AV.SHOW_ALL_COMMAND, 'agentMonitor.scope.all');
 });
 
-test('provider badge and description: set on the webview view; remembered until the view exists, then applied', () => {
+test('provider description: set on the webview view; remembered until the view exists, then applied; no badge of its own', () => {
   const st = makeStub();
   const p = new AV.AgentsViewProvider(st.context, { vscode: st.vscode, i18n });
-  p.setBadge({ value: 2, tooltip: '2 need you' });
   p.setDescription('This workspace');
-  assert.strictEqual(st.view.badge, undefined);
   p.resolveWebviewView(st.view);
-  assert.deepStrictEqual(st.view.badge, { value: 2, tooltip: '2 need you' });
   assert.strictEqual(st.view.description, 'This workspace');
-  p.setBadge(undefined);
+  assert.strictEqual(st.view.badge, undefined, 'the panel tab\'s badge comes from the hidden overview tree');
+  assert.strictEqual(typeof p.setBadge, 'undefined');
   p.setDescription(undefined);
-  assert.strictEqual(st.view.badge, undefined);
   assert.strictEqual(st.view.description, undefined);
 });
 
 // ---------- Finish ----------
 
 Promise.all(pending).then(() => {
-  fs.rmSync(TMP, { recursive: true, force: true });
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5 }); } catch { /* ignore */ }
   const failed = results.filter((x) => !x).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
   process.exitCode = failed ? 1 : 0;

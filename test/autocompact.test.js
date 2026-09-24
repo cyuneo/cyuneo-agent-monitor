@@ -173,7 +173,7 @@ function scenario(name, o = {}) {
   const deps = {
     getSession: (k) => sessions.get(k) || null,
     getSessions: () => [...sessions.values()],
-    i18n,
+    i18n: o.i18n || i18n,
     claudeHome: home,
     codexHome,
     output: { appendLine: (l) => log.output.push(l) },
@@ -213,6 +213,15 @@ test('presets: five presets; values and evidence strength match the reference ta
   assert.strictEqual(P.SETTING_MIN, 100000);
   assert.strictEqual(P.SETTING_MAX, 1000000);
   assert.strictEqual(P.GUIDE_URL, 'https://github.com/cyuneo/cyuneo-agent-monitor/blob/main/docs/compaction-threshold-guide.md');
+  assert.strictEqual(P.GUIDE_URL_ZH, 'https://github.com/cyuneo/cyuneo-agent-monitor/blob/main/docs/compaction-threshold-guide.zh-CN.md');
+});
+
+test('guideUrl: zh-cn / zh-tw → Chinese guide (.zh-CN.md); en / ko / ja / unknown / empty → English guide', () => {
+  for (const loc of ['zh-cn', 'zh-tw', 'zh-CN', 'zh_TW', 'zh']) assert.strictEqual(P.guideUrl(loc), P.GUIDE_URL_ZH, loc);
+  for (const loc of ['en', 'ko', 'ja', 'fr', '', null, undefined]) assert.strictEqual(P.guideUrl(loc), P.GUIDE_URL, String(loc));
+  // Every normalized UI locale maps as expected
+  const expected = { en: P.GUIDE_URL, 'zh-cn': P.GUIDE_URL_ZH, 'zh-tw': P.GUIDE_URL_ZH, ko: P.GUIDE_URL, ja: P.GUIDE_URL };
+  for (const [loc, url] of Object.entries(expected)) assert.strictEqual(P.guideUrl(i18nLib.createI18n(loc).locale), url, loc);
 });
 
 test('cost model: Opus 5.5 with a 1M window reproduces the reference table "per call / vs default" columns', () => {
@@ -534,17 +543,63 @@ test('write file: settings.json is a symlink → writes the real target file and
   const real = path.join(dir, 'dotfiles', 'claude-settings.json');
   mkdirp(path.dirname(real));
   fs.writeFileSync(real, '{\n  "a": 1\n}\n');
-  const link = path.join(dir, 'settings.json');
-  fs.symlinkSync(real, link);
+  let link = path.join(dir, 'settings.json');
+  try {
+    fs.symlinkSync(real, link, 'file');
+  } catch (err) {
+    // A file symlink on Windows needs admin rights or Developer Mode (a junction only works for directories)
+    if (process.platform !== 'win32' || !err || err.code !== 'EPERM') throw err;
+    console.log(`  skip  file symlinks are not allowed on this Windows account (${err.code}); backups are still checked`);
+    link = null;
+  }
   const backups = path.join(dir, 'b');
-  const r = AC.writeAutoCompactSetting({ file: link, value: 300000, backupDir: backups });
-  assert.strictEqual(r.ok, true);
-  assert.ok(fs.lstatSync(link).isSymbolicLink());
-  assert.deepStrictEqual(JSON.parse(read(real)), { a: 1, autoCompactWindow: 300000 });
+  if (link) {
+    const r = AC.writeAutoCompactSetting({ file: link, value: 300000, backupDir: backups });
+    assert.strictEqual(r.ok, true);
+    assert.ok(fs.lstatSync(link).isSymbolicLink());
+    assert.deepStrictEqual(JSON.parse(read(real)), { a: 1, autoCompactWindow: 300000 });
+  }
   for (let i = 0; i < 35; i++) {
-    AC.writeAutoCompactSetting({ file: link, value: 200000 + i * 1000, backupDir: backups, now: Date.parse('2026-09-24T10:00:00Z') + i * 1000 });
+    AC.writeAutoCompactSetting({ file: link || real, value: 200000 + i * 1000, backupDir: backups, now: Date.parse('2026-09-24T10:00:00Z') + i * 1000 });
   }
   assert.strictEqual(fs.readdirSync(backups).length, AC.BACKUP_KEEP);
+});
+
+/** Run fn with fs.renameSync replaced by a stub that fails with the given codes first, then renames for real */
+function withFlakyRename(codes, fn) {
+  const orig = fs.renameSync;
+  const calls = [];
+  fs.renameSync = (from, to) => {
+    calls.push(to);
+    const code = codes[calls.length - 1];
+    if (code) throw Object.assign(new Error(`${code}: synthetic rename failure`), { code });
+    return orig(from, to);
+  };
+  try { return { result: fn(), calls }; } finally { fs.renameSync = orig; }
+}
+
+test('write file: the final rename is retried briefly on EPERM / EBUSY / EACCES (Windows: file open elsewhere); other errors fail at once', () => {
+  const dir = freshDir('rename');
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, '{\n  "a": 1\n}\n');
+  const backups = path.join(dir, 'b');
+  // Two transient failures, then success: same result as a plain write
+  const ok = withFlakyRename(['EPERM', 'EBUSY'], () => AC.writeAutoCompactSetting({ file, value: 300000, backupDir: backups }));
+  assert.strictEqual(ok.result.ok, true);
+  assert.strictEqual(ok.calls.length, 3);
+  assert.deepStrictEqual(JSON.parse(read(file)), { a: 1, autoCompactWindow: 300000 });
+  // Always busy: gives up after a short while, reports write, leaves the file as it was and no temp file behind
+  const started = Date.now();
+  const busy = withFlakyRename(Array(20).fill('EACCES'), () => AC.writeAutoCompactSetting({ file, value: 400000, backupDir: backups }));
+  assert.deepStrictEqual([busy.result.ok, busy.result.error], [false, 'write']);
+  assert.ok(busy.calls.length > 1 && busy.calls.length < 20, `attempts: ${busy.calls.length}`);
+  assert.ok(Date.now() - started < 2000, 'the retry is short');
+  assert.ok(/EACCES/.test(busy.result.message));
+  // Not a sharing error: no retry
+  const gone = withFlakyRename(['ENOENT'], () => AC.writeAutoCompactSetting({ file, value: 500000, backupDir: backups }));
+  assert.deepStrictEqual([gone.result.ok, gone.result.error, gone.calls.length], [false, 'write', 1]);
+  assert.deepStrictEqual(JSON.parse(read(file)), { a: 1, autoCompactWindow: 300000 });
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['b', 'settings.json']);
 });
 
 // ===========================================================================
@@ -739,10 +794,22 @@ test('flow: View the reference guide → openExternal opens the guide on GitHub,
   ui.onQuickPick = (qp) => qp.accept(qp.find((it) => it.action && it.action.type === 'guide'));
   try {
     await sc.handle.run(sc.session.key);
-    assert.deepStrictEqual(log.opened, [P.GUIDE_URL]);
+    assert.deepStrictEqual(log.opened, [P.GUIDE_URL], 'English UI opens the English guide');
     assert.strictEqual(log.quickPicks.length, 1);
     assert.ok(!fs.existsSync(path.join(sc.home, 'settings.json')));
   } finally { sc.handle.dispose(); }
+});
+
+test('flow: View the reference guide follows the UI locale (zh-cn / zh-tw → Chinese guide, ko / ja → English guide)', async () => {
+  for (const [loc, url] of [['zh-cn', P.GUIDE_URL_ZH], ['zh-tw', P.GUIDE_URL_ZH], ['ko', P.GUIDE_URL], ['ja', P.GUIDE_URL]]) {
+    resetUi();
+    const sc = scenario(`guide-${loc}`, { i18n: i18nLib.createI18n(loc, { timeZone: 'UTC' }) });
+    ui.onQuickPick = (qp) => qp.accept(qp.find((it) => it.action && it.action.type === 'guide'));
+    try {
+      await sc.handle.run(sc.session.key);
+      assert.deepStrictEqual(log.opened, [url], loc);
+    } finally { sc.handle.dispose(); }
+  }
 });
 
 test('flow: 200K model picks a disabled preset → only shows the reason and keeps the QuickPick open; then "Research" writes 160K', async () => {
@@ -902,7 +969,7 @@ test('safety: autocompact.js spawns no child processes, makes no network calls, 
       console.log(`  FAIL  ${name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5 }); } catch { /* ignore */ }
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);
   process.exitCode = passed === results.length ? 0 : 1;

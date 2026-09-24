@@ -32,6 +32,19 @@ function write(p, bytes) {
   fs.writeFileSync(p, Buffer.alloc(bytes, 97));
 }
 
+// Directory link. On Windows this is a junction, which (unlike a symlink) needs no admin rights or Developer Mode;
+// the type is ignored elsewhere. Returns false, after a note, if this Windows account cannot create links at all (EPERM).
+function linkDir(target, link) {
+  try {
+    fs.symlinkSync(target, link, 'junction');
+    return true;
+  } catch (err) {
+    if (process.platform !== 'win32' || !err || err.code !== 'EPERM') throw err;
+    console.log(`  skip  cannot create links on this Windows account (${err.code})`);
+    return false;
+  }
+}
+
 // POSIX word splitting: only handles what this extension generates (single quotes, '\'' escapes, whitespace separators)
 function posixWords(line) {
   const out = [];
@@ -100,21 +113,23 @@ function makeClaudeHome(base) {
   return { home, claude, codex };
 }
 
-// Fake volumes: / (system), <base>/My Disk (external, most free space), <base>/Small (external), <base>/RO (read-only)
+// Fake volumes: the root of <base> (system: / on macOS/Linux, the drive such as D:\ on Windows),
+// <base>/My Disk (external, most free space), <base>/Small (external), <base>/RO (read-only)
 function fakeVolumes(base) {
+  const root = path.parse(base).root;
   const big = path.join(base, 'My Disk');
   const small = path.join(base, 'Small');
   const ro = path.join(base, 'RO');
   for (const d of [big, small, ro]) fs.mkdirSync(d, { recursive: true });
   const sizes = new Map([
-    ['/', { freeBytes: 39 * GB, totalBytes: 228 * GB, writable: true }],
+    [root, { freeBytes: 39 * GB, totalBytes: 228 * GB, writable: true }],
     [big, { freeBytes: 440 * GB, totalBytes: 1000 * GB, writable: true }],
     [small, { freeBytes: 20 * GB, totalBytes: 64 * GB, writable: true }],
     [ro, { freeBytes: 900 * GB, totalBytes: 1000 * GB, writable: false }],
   ]);
   return {
-    big, small, ro,
-    opts: { roots: ['/', big, small, ro], statfs: (p) => sizes.get(p), systemMount: '/' },
+    root, big, small, ro,
+    opts: { roots: [root, big, small, ro], statfs: (p) => sizes.get(p), systemMount: root },
   };
 }
 
@@ -201,8 +216,8 @@ test('scanStorage: per-entry size, file count, "everything else" total, .claude.
   assert.deepStrictEqual([x['*'].count, x['*'].bytes], [1, 8]);
   assert.strictEqual(r.codex.dirSource, 'default');
   // Volumes: injected mount points; each entry is tagged with its volume
-  assert.deepStrictEqual(r.volumes.map((v) => [v.mount, v.system]), [['/', true], [vols.big, false], [vols.ro, false], [vols.small, false]]);
-  assert.strictEqual(by.projects.volume, '/');
+  assert.deepStrictEqual(r.volumes.map((v) => [v.mount, v.system]), [[vols.root, true], [vols.big, false], [vols.ro, false], [vols.small, false]]);
+  assert.strictEqual(by.projects.volume, vols.root);
   // Source: environment variable / setting
   const r2 = await storage.scanStorage({ claudeDir: claude, codexHome: codex, homeDir: home, env: { CLAUDE_CONFIG_DIR: claude + '/' }, volumes: vols.opts });
   assert.strictEqual(r2.claude.dirSource, 'env');
@@ -222,15 +237,17 @@ test('Symlinks: top-level entries are followed once and their target is shown; s
   write(path.join(ext, '-p', 'a.jsonl'), 4000);
   write(path.join(base, 'big', 'blob.bin'), 100000);
   // A symlink inside projects points to a large directory: not followed
-  fs.symlinkSync(path.join(base, 'big'), path.join(ext, '-p', 'link-to-big'));
+  if (!linkDir(path.join(base, 'big'), path.join(ext, '-p', 'link-to-big'))) return;
   // Hard link: one file with two names
   fs.linkSync(path.join(ext, '-p', 'a.jsonl'), path.join(ext, '-p', 'a-hard.jsonl'));
   fs.mkdirSync(claude, { recursive: true });
-  fs.symlinkSync(ext, path.join(claude, 'projects'));
+  linkDir(ext, path.join(claude, 'projects'));
   // cache points to the same place too
-  fs.symlinkSync(ext, path.join(claude, 'cache'));
-  // Broken symlink (external drive not mounted)
-  fs.symlinkSync(path.join(base, 'Unplugged', 'x'), path.join(claude, 'backups'));
+  linkDir(ext, path.join(claude, 'cache'));
+  // Broken symlink (external drive not mounted). A junction needs an existing target, so link first, then remove the target
+  fs.mkdirSync(path.join(base, 'Unplugged', 'x'), { recursive: true });
+  linkDir(path.join(base, 'Unplugged', 'x'), path.join(claude, 'backups'));
+  fs.rmSync(path.join(base, 'Unplugged'), { recursive: true, force: true });
   const vols = fakeVolumes(base);
   const r = await storage.scanStorage({ claudeDir: claude, homeDir: path.join(base, 'home'), env: {}, volumes: vols.opts });
   const by = Object.fromEntries(r.claude.entries.map((e) => [e.name, e]));
@@ -251,7 +268,7 @@ test('Symlinks: top-level entries are followed once and their target is shown; s
   // The whole data directory is a symlink
   const linkedHome = path.join(base, 'home2');
   fs.mkdirSync(linkedHome);
-  fs.symlinkSync(claude, path.join(linkedHome, '.claude'));
+  linkDir(claude, path.join(linkedHome, '.claude'));
   const r2 = await storage.scanStorage({ claudeDir: path.join(linkedHome, '.claude'), homeDir: linkedHome, env: {}, volumes: vols.opts });
   assert.strictEqual(r2.claude.isSymlink, true);
   assert.strictEqual(r2.claude.symlinkTarget, claude);
@@ -264,7 +281,8 @@ test('Scan errors do not throw: unreadable subdirectories are counted in errors;
   const locked = path.join(claude, 'projects', 'locked');
   fs.mkdirSync(locked);
   write(path.join(locked, 'x'), 5);
-  const canLock = typeof process.getuid !== 'function' || process.getuid() !== 0;
+  // Windows has no unreadable mode (chmod only sets the read-only attribute) and root can read anything: there locked/ is counted
+  const canLock = process.platform !== 'win32' && (typeof process.getuid !== 'function' || process.getuid() !== 0);
   if (canLock) fs.chmodSync(locked, 0o000);
   let yields = 0;
   let immediates = 0;
@@ -274,8 +292,8 @@ test('Scan errors do not throw: unreadable subdirectories are counted in errors;
   try {
     const r = await storage.scanStorage({ claudeDir: claude, homeDir: base, env: {}, volumes: { roots: ['/'], statfs: () => ({ freeBytes: 1, totalBytes: 2, writable: true }) }, yieldEvery: 20, batch: 8, onYield: () => { yields++; } });
     const p = r.claude.entries.find((e) => e.name === 'projects');
-    assert.strictEqual(p.bytes, 3000);
-    if (canLock && process.platform !== 'win32') assert.ok(p.errors >= 1, 'unreadable directory is counted in errors');
+    assert.strictEqual(p.bytes, canLock ? 3000 : 3005);
+    if (canLock) assert.ok(p.errors >= 1, 'unreadable directory is counted in errors');
     assert.ok(yields >= 10, `yield count ${yields}`);
     assert.ok(immediates >= 10, `other callbacks keep running during the scan (${immediates})`);
   } finally {
@@ -465,6 +483,15 @@ test('Migration commands: never generated for relative paths, identical paths, n
 
 // ---------- View model ----------
 
+// The view-model and panel tests that pass platform 'darwin' use a report scanned from the real temp dir. On a Windows host
+// that report holds drive-letter paths which the POSIX rules cannot place (not absolute, no '/' separators), so those tests
+// are skipped there. Their logic is platform-independent and runs on macOS and Linux; Windows paths have their own tests.
+function skipMacModelOnWindows() {
+  if (process.platform !== 'win32') return false;
+  console.log('  skip  models macOS paths on a report from the real temp dir; covered on macOS and Linux');
+  return true;
+}
+
 async function syntheticReport(base) {
   const { home, claude, codex } = makeClaudeHome(base);
   const vols = fakeVolumes(base);
@@ -473,6 +500,7 @@ async function syntheticReport(base) {
 }
 
 test('View model: entry text, volume tags, default target on the external disk with the most free space at AI-Data/<app>/<subdir>, warnings for open sessions', async () => {
+  if (skipMacModelOnWindows()) return;
   const base = path.join(TMP, 'vm');
   const { home, claude, vols, report } = await syntheticReport(base);
   const live = [{ provider: 'claude', sessionId: 's1', title: 'Refactor payments' }, { provider: 'codex', sessionId: 't1', title: 'Fix CI' }];
@@ -524,6 +552,7 @@ test('View model: entry text, volume tags, default target on the external disk w
 });
 
 test('View model: user-picked folder, same disk, synced folder, not enough space, already moved, no other disk', async () => {
+  if (skipMacModelOnWindows()) return;
   const base = path.join(TMP, 'vm2');
   const { home, report, vols } = await syntheticReport(base);
   const build = (o) => SV.buildStorageVm({ report, i18n: en, platform: 'darwin', home, live: [], ...o });
@@ -647,6 +676,7 @@ test('media/storage.js, storage.css: no innerHTML, no direct terminal access; no
 // ---------- WebviewPanel ----------
 
 test('Panel: singleton; posts the view model after ready; refresh passes force; Reveal in Finder and Copy Path accept only extension-issued ids', async () => {
+  if (skipMacModelOnWindows()) return;
   const base = path.join(TMP, 'panel1');
   const { home, claude, report } = await syntheticReport(base);
   const { vscode, log } = makeVscode();
@@ -687,6 +717,7 @@ test('Panel: singleton; posts the view model after ready; refresh passes force; 
 });
 
 test('Panel: copy command, open in terminal (sendText second argument is false, single-line command); a modal warning comes first when sessions are open', async () => {
+  if (skipMacModelOnWindows()) return;
   const base = path.join(TMP, 'panel2');
   const { home, claude, report, vols } = await syntheticReport(base);
   const { vscode, log, ctl } = makeVscode();
@@ -771,6 +802,7 @@ test('Panel: copy command, open in terminal (sendText second argument is false, 
 });
 
 test('Migration commands are reference only: without ack from the page, a modal confirmation comes first; cancel means no copy and no terminal', async () => {
+  if (skipMacModelOnWindows()) return;
   const base = path.join(TMP, 'panel-ack');
   const { home, report } = await syntheticReport(base);
   const { vscode, log, ctl } = makeVscode();
@@ -876,7 +908,7 @@ test('l10n/storage.en.json: all keys start with storage., values are English wit
       console.log(`  FAIL  ${name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5 }); } catch { /* ignore */ }
   console.log(`\n${tests.length - failed}/${tests.length} passed`);
   process.exitCode = failed ? 1 : 0;
 })();
