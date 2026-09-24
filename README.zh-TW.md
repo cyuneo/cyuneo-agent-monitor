@@ -74,6 +74,7 @@ CYUNEO Agent Monitor 依 [PolyForm Noncommercial License 1.0.0](LICENSE) 授權�
 ## 著作權與商標
 
 - © 2026 Chenyu Guo。授權條款未明確授予的一切權利均予保留。
+- 本專案由 Chenyu Guo 在 AI 輔助下開發（主要使用 Claude Code）。產品構想、需求和設計決定來自作者本人，結果也經過作者審閱。
 - CYUNEO™ 名稱和標誌不在授權範圍內。不得用於你自己的產品，也不得以任何方式暗示你的版本來自 CYUNEO 或獲得 CYUNEO 認可。
 - 未取得授權而商用、刪除著作權或授權聲明、或者換個名字當作自己的作品重新發布，都侵害作者的權利。作者可以要求 GitHub、Visual Studio Marketplace、Open VSX 等平台下架這類副本，並保留採取進一步法律行動的權利。
 - 如果發現有人違反授權條款使用或販售本專案，請在 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 告訴我們。

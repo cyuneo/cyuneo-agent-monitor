@@ -1,8 +1,8 @@
 'use strict';
-// 压缩功能的测试：lib/compact.js、l10n/compact.en.json、test/fixtures/fake-claude.js。
-// 纯 node 运行：node test/compact.test.js
-// 绝不调用真实的 claude、不读写 ~/.claude：会话记录、在线登记表、CLI 全是临时目录里的合成品；
-// 每次 spawn 都经过断言“可执行文件在临时目录里”的包装。临时目录取 AGENT_MONITOR_TEST_TMP，没设就用系统临时目录。
+// Tests for the compact feature: lib/compact.js, l10n/compact.en.json, test/fixtures/fake-claude.js.
+// Run with plain node: node test/compact.test.js
+// Never calls the real claude and never reads or writes ~/.claude: transcripts, the live-session registry and the CLI are all synthetic, in a temp dir;
+// every spawn goes through a wrapper that asserts the executable is inside the temp dir. The temp dir is AGENT_MONITOR_TEST_TMP, or the system temp dir if unset.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -16,7 +16,7 @@ const TMP_BASE = process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir();
 fs.mkdirSync(TMP_BASE, { recursive: true });
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(TMP_BASE, 'am-compact-')));
 
-// ---------- vscode 桩 ----------
+// ---------- vscode stub ----------
 
 class Emitter {
   constructor() {
@@ -126,7 +126,7 @@ const i18n = i18nLib.createI18n('en', { timeZone: 'UTC' });
 const EN = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'compact.en.json'), 'utf8'));
 const t = (k, v) => i18n.t(k, v);
 
-// ---------- 小工具 ----------
+// ---------- helpers ----------
 
 const results = [];
 const tests = [];
@@ -146,7 +146,7 @@ const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e)
 
 function mkdirp(p) { fs.mkdirSync(p, { recursive: true }); return p; }
 
-/** 合成的 Claude 会话（字段形状同 lib/providers/claude.js 的 Session） */
+/** Synthetic Claude session (same fields as Session in lib/providers/claude.js) */
 function claudeSession(o = {}) {
   const id = o.id || SID;
   const lastApiMs = o.lastApiMs ?? NOW - 10 * MIN;
@@ -190,7 +190,7 @@ function codexSession(o = {}) {
 const actionItems = (built) => built.items.filter((it) => it.kind !== -1 && it.action && it.action.type !== 'info');
 const isSep = (it) => it.kind === -1;
 
-// 合成会话记录：一条提示 + 一条 assistant（usage 给出 400K 上下文）
+// Synthetic transcript: one prompt + one assistant reply (its usage gives a 400K context)
 function writeTranscript(file, sid, used = 400000) {
   mkdirp(path.dirname(file));
   const rows = [
@@ -200,7 +200,7 @@ function writeTranscript(file, sid, used = 400000) {
   fs.writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
 
-// 合成在线登记表条目
+// Synthetic live-session registry entry
 function writeRegistry(home, pid, sid, o = {}) {
   const dir = mkdirp(path.join(home, 'sessions'));
   fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify({
@@ -209,7 +209,7 @@ function writeRegistry(home, pid, sid, o = {}) {
   }));
 }
 
-// 假 CLI 复制到临时目录并加执行位
+// Copy the fake CLI into the temp dir and make it executable
 const BIN = mkdirp(path.join(TMP, 'bin'));
 const FAKE = path.join(BIN, 'claude-fake');
 fs.copyFileSync(path.join(__dirname, 'fixtures', 'fake-claude.js'), FAKE);
@@ -224,7 +224,7 @@ function guardedSpawn(cli, args, opts) {
   return cp.spawn(cli, args, opts);
 }
 
-/** 一套后台压缩的场景：临时 claudeHome、会话记录、cwd、登记表（只有一个死进程条目，说明登记表可用） */
+/** A background-compact scenario: temp claudeHome, transcript, cwd and registry (with a single dead-process entry, so the registry counts as readable) */
 function scenario(name, o = {}) {
   const dir = mkdirp(path.join(TMP, name));
   const home = mkdirp(path.join(dir, 'claude-home'));
@@ -267,10 +267,10 @@ const pickBackground = (model) => (qp) => qp.accept(qp.items.find((it) => it.act
 const confirmGo = (rec) => (rec.opts && rec.opts.modal && rec.items.includes(t('compact.confirm.go')) ? t('compact.confirm.go') : undefined);
 
 // ===========================================================================
-// 估价（§11.5）
+// Cost estimates
 // ===========================================================================
 
-test('估价：§11.5 表里的数（1 小时档按 TTL 修正，5 分钟档照原值）', () => {
+test('estimate: matches the reference price table (1-hour cache tier corrected for TTL, 5-minute tier unchanged)', () => {
   const warm = claudeSession({ lastApiMs: NOW - 10 * MIN });
   const cold = claudeSession({ lastApiMs: NOW - 2 * HOUR });
   approx(compact.estimateFor(warm, 'claude-opus-5-5', NOW).usd, 0.40, 'warm');
@@ -280,11 +280,11 @@ test('估价：§11.5 表里的数（1 小时档按 TTL 修正，5 分钟档照�
   approx(compact.estimateFor(cold5, 'claude-opus-5-5', NOW).usd, 2.32, 'cold 5m');
   approx(compact.estimateFor(cold5, 'claude-sonnet-5', NOW).usd, 1.16, 'sonnet 5m');
   assert.strictEqual(compact.estimateFor(cold, 'claude-haiku-4-5', NOW).available, false);
-  // 过期后再压缩（提醒用）
+  // Compacting after the cache has expired (used by reminders)
   approx(compact.estimateFor(warm, 'claude-opus-5-5', NOW, { expired: true }).usd, 3.52, 'forced expired');
 });
 
-test('估价：applyTtl 只修正“恰好等于 5 分钟档”的结果，基座修好后不重复换算', () => {
+test('estimate: applyTtl only corrects results that exactly match the 5-minute tier, so it never converts twice once the base estimator handles TTL', () => {
   const est = pricing.estimateCompact({ contextUsed: 400000, model: 'claude-opus-5-5', targetModel: 'claude-sonnet-5', ttl: '1h', lastActivityMs: null, now: NOW });
   const fixed = compact.applyTtl(est, '1h');
   approx(fixed.usd, 1.76);
@@ -295,7 +295,7 @@ test('估价：applyTtl 只修正“恰好等于 5 分钟档”的结果，基�
   approx(compact.applyTtl(est5, '5m').usd, 1.16, '5m untouched');
 });
 
-test('推荐：最便宜的标推荐；同价原模型优先；没有 id 的不推荐', () => {
+test('recommendation: the cheapest option is marked recommended; on a tie the original model wins; options without an id are never recommended', () => {
   const a = { id: 'orig', available: true, usd: 1 };
   const b = { id: 'x', available: true, usd: 1 };
   const c = { id: 'y', available: false, usd: null };
@@ -308,10 +308,10 @@ test('推荐：最便宜的标推荐；同价原模型优先；没有 id 的不�
 });
 
 // ===========================================================================
-// QuickPick 选项
+// QuickPick items
 // ===========================================================================
 
-test('选项：打开中的 Claude 会话 → 顶部两行说明 + 在会话里压缩 / 带保留要求 / 交接笔记，没有后台项', () => {
+test('items: open Claude session → two info rows at the top + compact in session / with keep instructions / handoff note, no background items', () => {
   const s = claudeSession({ live: true, liveStatus: 'idle', lastApiMs: NOW - 10 * MIN });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: true, liveStatus: 'idle' });
   assert.strictEqual(b.title, t('compact.pick.title', { title: s.title, tokens: i18n.fmtTokens(400000) }));
@@ -330,7 +330,7 @@ test('选项：打开中的 Claude 会话 → 顶部两行说明 + 在会话里�
   assert.ok(!b.items.some((it) => /lightbulb/.test(it.label || '')), 'no cheaper tip while warm');
 });
 
-test('选项：忙碌时第一项 detail 前加“正在运行”', () => {
+test('items: when busy, the first item detail is prefixed with "running"', () => {
   const s = claudeSession({ live: true, liveStatus: 'busy', lastApiMs: NOW - 1 * MIN });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: true, liveStatus: 'busy' });
   assert.ok(b.active.detail.startsWith(t('compact.detail.busy')), b.active.detail);
@@ -338,7 +338,7 @@ test('选项：忙碌时第一项 detail 前加“正在运行”', () => {
   assert.ok(!idle.active.detail.includes(t('compact.detail.busy')));
 });
 
-test('选项：缓存过期且换 Sonnet 5 省 ≥30% → 分隔线下加说明项（选它只弹说明）', () => {
+test('items: cache expired and switching to Sonnet 5 saves ≥30% → info item below a separator (picking it only shows the explanation)', () => {
   const s = claudeSession({ live: true, liveStatus: 'idle', lastApiMs: NOW - 2 * HOUR });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: true, liveStatus: 'idle' });
   assert.ok(b.active.detail.includes(t('compact.detail.cacheExpired')));
@@ -348,13 +348,13 @@ test('选项：缓存过期且换 Sonnet 5 省 ≥30% → 分隔线下加说明�
   assert.ok(last.label.includes('$(lightbulb)'));
   assert.strictEqual(last.action.type, 'info');
   assert.ok(last.action.text.includes(usd(1.76)), last.action.text);
-  // 原模型已是 Sonnet 5：没有这条
+  // Original model is already Sonnet 5: no such item
   const son = claudeSession({ live: true, model: 'claude-sonnet-5', lastApiMs: NOW - 2 * HOUR });
   const b2 = compact.buildPickItems(son, { i18n, now: NOW, live: true });
   assert.ok(!b2.items.some((it) => /lightbulb/.test(it.label || '')));
 });
 
-test('选项：未打开 + 缓存过期 → Sonnet 5 推荐排第一，原模型其次，Haiku 超窗口不可选', () => {
+test('items: not open + cache expired → recommended Sonnet 5 first, original model second, Haiku disabled (context exceeds its window)', () => {
   const s = claudeSession({ lastApiMs: NOW - 2 * HOUR });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: false });
   const acts = actionItems(b);
@@ -371,12 +371,12 @@ test('选项：未打开 + 缓存过期 → Sonnet 5 推荐排第一，原模型
   assert.ok(haiku && haiku.label.startsWith('$(circle-slash)'));
   assert.strictEqual(haiku.action.type, 'info');
   assert.ok(haiku.detail.includes(i18n.fmtTokens(200000)), haiku.detail);
-  // 说明项在顶部，交接笔记在压缩项之后
+  // Info items at the top, handoff note after the compact items
   assert.strictEqual(b.items[0].action.type, 'info');
   assert.ok(b.items.indexOf(acts[2]) > b.items.indexOf(acts[1]));
 });
 
-test('选项：未打开 + 缓存还在 → 原模型推荐（缓存还在时最省），并注明后台可能用不上缓存', () => {
+test('items: not open + cache warm → original model recommended (cheapest while warm), with a note that a background run may miss the cache', () => {
   const s = claudeSession({ lastApiMs: NOW - 10 * MIN });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: false });
   const acts = actionItems(b);
@@ -387,7 +387,7 @@ test('选项：未打开 + 缓存还在 → 原模型推荐（缓存还在时最
   assert.ok(acts[0].detail.includes(t('compact.detail.bgMayMiss', { usd: usd(3.52) })), acts[0].detail);
 });
 
-test('选项：上下文 100K → Haiku 可选且最便宜，写“摘要可能丢细节”', () => {
+test('items: 100K context → Haiku is selectable and cheapest, with a "summary may lose detail" note', () => {
   const s = claudeSession({ contextUsed: 100000, lastApiMs: NOW - 2 * HOUR });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: false });
   const acts = actionItems(b).filter((it) => it.action.type === 'background');
@@ -397,7 +397,7 @@ test('选项：上下文 100K → Haiku 可选且最便宜，写“摘要可能�
   assert.ok(!b.items.some((it) => /circle-slash/.test(it.label || '')));
 });
 
-test('选项：会话模型未知 → 不给原模型项，只给 Sonnet 5 / Haiku，并有说明', () => {
+test('items: unknown session model → no original-model item, only Sonnet 5 / Haiku, plus an explanation', () => {
   const s = claudeSession({ model: null, contextUsed: 100000, lastApiMs: NOW - 2 * HOUR });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: false });
   const models = actionItems(b).filter((it) => it.action.type === 'background').map((it) => it.action.model);
@@ -405,7 +405,7 @@ test('选项：会话模型未知 → 不给原模型项，只给 Sonnet 5 / Hai
   assert.ok(b.items.some((it) => it.action && it.action.type === 'info' && it.action.text === t('compact.detail.noModel')));
 });
 
-test('选项：200K 模型开了 1M（占用 >200K）→ 原模型传 [1m]，白名单一致', () => {
+test('items: 200K model running with 1M context (usage >200K) → original model passed as [1m], allowlist agrees', () => {
   const s = claudeSession({ model: 'claude-opus-4-6', contextUsed: 400000, lastApiMs: NOW - 2 * HOUR });
   const b = compact.buildPickItems(s, { i18n, now: NOW, live: false });
   const models = actionItems(b).filter((it) => it.action.type === 'background').map((it) => it.action.model);
@@ -414,7 +414,7 @@ test('选项：200K 模型开了 1M（占用 >200K）→ 原模型传 [1m]，白
   assert.strictEqual(compact.cliModelFor('claude-opus-4-6', claudeSession({ model: 'claude-opus-4-6', contextUsed: 150000 })), 'claude-opus-4-6');
 });
 
-test('选项：Codex 会话 → 打开 + 复制 /compact、交接笔记，没有后台项', () => {
+test('items: Codex session → open + copy /compact, handoff note, no background items', () => {
   const b = compact.buildPickItems(codexSession(), { i18n, now: NOW, live: false });
   assert.deepStrictEqual(actionItems(b).map((it) => it.action.type), ['codexOpen', 'handoff']);
   assert.strictEqual(b.active.action.type, 'codexOpen');
@@ -423,10 +423,10 @@ test('选项：Codex 会话 → 打开 + 复制 /compact、交接笔记，没有
 });
 
 // ===========================================================================
-// 文本、校验、参数、CLI 查找、结果解析
+// Text, validation, arguments, CLI lookup, result parsing
 // ===========================================================================
 
-test('文本：模板来自设置或词典；/compact 前缀与换行被规整', () => {
+test('text: template comes from settings or the dictionary; /compact prefix and newlines are normalized', () => {
   assert.strictEqual(compact.resolveTemplate('', i18n), EN['compact.template']);
   assert.strictEqual(compact.resolveTemplate('  /compact keep A\nand B ', i18n), 'keep A and B');
   assert.strictEqual(compact.compactPrompt(''), '/compact');
@@ -436,7 +436,7 @@ test('文本：模板来自设置或词典；/compact 前缀与换行被规整',
   assert.deepStrictEqual(compact.tailLines('a\n\nb\nc\nd\ne\nf\ng\n'), ['c', 'd', 'e', 'f', 'g']);
 });
 
-test('参数：命令参数可以是 sessionKey 或会话树节点', () => {
+test('args: the command argument can be a sessionKey or a session tree node', () => {
   const key = 'claude:' + SID;
   assert.strictEqual(compact.keyFromArg(key), key);
   assert.strictEqual(compact.keyFromArg({ key }), key);
@@ -449,12 +449,12 @@ test('参数：命令参数可以是 sessionKey 或会话树节点', () => {
   assert.strictEqual(compact.keyFromArg(42), null);
 });
 
-test('参数：spawn 参数顺序固定', () => {
+test('args: spawn argument order is fixed', () => {
   assert.deepStrictEqual(compact.buildSpawnArgs(SID, 'claude-sonnet-5', '/compact keep'),
     ['-p', '--resume', SID, '--model', 'claude-sonnet-5', '--output-format', 'json', '/compact keep']);
 });
 
-test('校验：非法 sessionId、白名单外的模型、不存在的 cwd 一律拒绝', () => {
+test('validation: rejects an invalid sessionId, a model outside the allowlist, and a missing cwd', () => {
   const cwd = mkdirp(path.join(TMP, 'cwd-ok'));
   const file = path.join(cwd, 'afile');
   fs.writeFileSync(file, '');
@@ -467,20 +467,20 @@ test('校验：非法 sessionId、白名单外的模型、不存在的 cwd 一�
   for (const bad of ['claude-opus-4-1', 'claude-sonnet-5 --dangerously-skip-permissions', '--help', '<synthetic>', '', null]) {
     assert.strictEqual(v({ model: bad }), 'compact.error.badModel', String(bad));
   }
-  // 白名单里的值形状也要对
+  // Even an allowlisted value must have a valid shape
   assert.strictEqual(v({ model: 'bad model', allowed: ['bad model'] }), 'compact.error.badModel');
   for (const bad of [path.join(TMP, 'nope'), 'relative/dir', file, '', null]) {
     assert.strictEqual(v({ cwd: bad }), 'compact.error.cwd', String(bad));
   }
 });
 
-test('CLI 查找顺序：cliPath 设置 → PATH（纯 JS）→ Claude 扩展自带 → 报错', () => {
+test('CLI lookup order: cliPath setting → PATH (pure JS) → binary bundled with the Claude extension → error', () => {
   const root = mkdirp(path.join(TMP, 'which'));
   const mk = (p, mode = 0o755) => { mkdirp(path.dirname(p)); fs.writeFileSync(p, '#!/bin/sh\n'); fs.chmodSync(p, mode); return p; };
   const dirA = mkdirp(path.join(root, 'a'));
   const dirB = mkdirp(path.join(root, 'b'));
   const dirN = mkdirp(path.join(root, 'noexec'));
-  mk(path.join(dirN, 'claude'), 0o644);                 // 没有执行位：跳过
+  mk(path.join(dirN, 'claude'), 0o644);                 // not executable: skipped
   const inA = mk(path.join(dirA, 'claude'));
   mk(path.join(dirB, 'claude'));
   const ext = path.join(root, 'ext');
@@ -500,7 +500,7 @@ test('CLI 查找顺序：cliPath 设置 → PATH（纯 JS）→ Claude 扩展自
   assert.deepStrictEqual(f({ env: { PATH: dirN }, extensionPath: null }), { error: 'notFound' });
   assert.deepStrictEqual(f({ env: { PATH: '' }, extensionPath: path.join(root, 'no-ext') }), { error: 'notFound' });
 
-  // Windows：.exe 优先；只有 .cmd 时排在扩展自带的 .exe 之后；.cmd 需要 shell，spawn 前拦下
+  // Windows: .exe wins; a lone .cmd ranks after the extension's bundled .exe; .cmd needs a shell, so it is blocked before spawn
   const w = mkdirp(path.join(root, 'win'));
   const wExe = mkdirp(path.join(w, 'exe'));
   const wCmd = mkdirp(path.join(w, 'cmd'));
@@ -517,14 +517,14 @@ test('CLI 查找顺序：cliPath 设置 → PATH（纯 JS）→ Claude 扩展自
   assert.strictEqual(compact.needsShell(inA), false);
 });
 
-test('结果解析：整段 JSON、多行里最后的 result 行、垃圾输出', () => {
+test('result parsing: whole-output JSON, last result line among many, garbage output', () => {
   assert.strictEqual(compact.parseResultJson('{"type":"result","is_error":false,"total_cost_usd":0.5}').total_cost_usd, 0.5);
   assert.strictEqual(compact.parseResultJson('noise\n{"type":"system"}\n{"type":"result","is_error":true}\n').is_error, true);
   assert.strictEqual(compact.parseResultJson('not json'), null);
   assert.strictEqual(compact.parseResultJson(''), null);
 });
 
-test('记录：只找偏移之后最后一条 compact_boundary；文件变短就从头找', () => {
+test('transcript: finds only the last compact_boundary after the offset; rescans from the start if the file got shorter', () => {
   const f = path.join(TMP, 'boundary', 'x.jsonl');
   mkdirp(path.dirname(f));
   const b = (pre, post) => JSON.stringify({ type: 'system', subtype: 'compact_boundary', timestamp: '2026-09-24T10:00:00.000Z', compactMetadata: { trigger: 'manual', preTokens: pre, postTokens: post } });
@@ -538,14 +538,14 @@ test('记录：只找偏移之后最后一条 compact_boundary；文件变短就
 });
 
 // ===========================================================================
-// 命令流程（vscode 桩）
+// Command flows (vscode stub)
 // ===========================================================================
 
-test('流程：登记表显示会话打开中（快照还没更新）→ 在会话里压缩：预填模板并复制', async () => {
+test('flow: registry shows the session open (snapshot not updated yet) → compact in session: prefill the template and copy it', async () => {
   resetUi();
   const sc = scenario('live-vscode', { session: { live: false } });
   writeRegistry(sc.home, process.pid, SID, { status: 'idle' });
-  ui.onExecute = () => undefined; // Claude 扩展的命令存在
+  ui.onExecute = () => undefined; // the Claude extension command exists
   try {
     await vscode.commands.executeCommand('agentMonitor.compact', { key: sc.session.key });
     const qp = log.quickPicks[0];
@@ -558,7 +558,7 @@ test('流程：登记表显示会话打开中（快照还没更新）→ 在会�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：Claude 扩展命令不存在或抛错 → 只复制并提示', async () => {
+test('flow: Claude extension command missing or throws → copy only and notify', async () => {
   resetUi();
   const sc = scenario('live-nocmd', { session: { live: true, liveStatus: 'idle' } });
   writeRegistry(sc.home, process.pid, SID);
@@ -570,7 +570,7 @@ test('流程：Claude 扩展命令不存在或抛错 → 只复制并提示', as
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：终端入口的打开中会话 → 不调 Claude 扩展，复制并提示去那个窗口', async () => {
+test('flow: open session started from a terminal → skip the Claude extension, copy and tell the user to switch to that window', async () => {
   resetUi();
   const sc = scenario('live-cli', { session: { live: true, entry: 'cli', entrypoint: 'cli' } });
   writeRegistry(sc.home, process.pid, SID, { entrypoint: 'cli' });
@@ -582,13 +582,13 @@ test('流程：终端入口的打开中会话 → 不调 Claude 扩展，复制�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：选说明项只弹说明、QuickPick 不关；再选“带保留要求”→ InputBox 改完预填', async () => {
+test('flow: picking an info item only shows it and keeps the QuickPick open; then "with keep instructions" → edit in an InputBox, then prefill', async () => {
   resetUi();
   const sc = scenario('live-custom', { session: { live: true } });
   writeRegistry(sc.home, process.pid, SID);
   ui.onExecute = () => undefined;
   ui.onQuickPick = (qp) => {
-    qp.accept(qp.items[0]);                     // 说明项
+    qp.accept(qp.items[0]);                     // info item
     assert.strictEqual(qp.disposed, false);
     qp.accept(qp.items.find((it) => it.action && it.action.type === 'custom'));
   };
@@ -600,7 +600,7 @@ test('流程：选说明项只弹说明、QuickPick 不关；再选“带保留�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：设置 compactTemplate 覆盖默认模板', async () => {
+test('flow: the compactTemplate setting overrides the default template', async () => {
   resetUi();
   const sc = scenario('live-template', { session: { live: true } });
   writeRegistry(sc.home, process.pid, SID);
@@ -612,7 +612,7 @@ test('流程：设置 compactTemplate 覆盖默认模板', async () => {
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：Codex → 打开 vscode://openai.chatgpt/local/<id> 并复制 /compact；打开失败只复制', async () => {
+test('flow: Codex → open vscode://openai.chatgpt/local/<id> and copy /compact; if opening fails, copy only', async () => {
   resetUi();
   const ctx = { globalState: memento(), workspaceState: memento() };
   const s = codexSession();
@@ -628,7 +628,7 @@ test('流程：Codex → 打开 vscode://openai.chatgpt/local/<id> 并复制 /co
   } finally { h.dispose(); }
 });
 
-test('流程：写交接笔记 → 预填提示，通知里可复制续接提示', async () => {
+test('flow: write handoff note → prefill the prompt; the notification can copy a resume prompt', async () => {
   resetUi();
   const sc = scenario('handoff', { session: { live: true } });
   writeRegistry(sc.home, process.pid, SID);
@@ -644,25 +644,25 @@ test('流程：写交接笔记 → 预填提示，通知里可复制续接提示
   } finally { sc.handle.dispose(); }
 });
 
-test('交接命令：runHandoff(sessionKey) 与 QuickPick 里的“写交接笔记”走同一个函数；模块级 runHandoff 转给当前实例', async () => {
+test('handoff command: runHandoff(sessionKey) shares its code path with "write handoff note" in the QuickPick; module-level runHandoff forwards to the active instance', async () => {
   resetUi();
   const sc = scenario('handoff-cmd', { session: { live: true } });
   writeRegistry(sc.home, process.pid, SID);
   ui.onExecute = () => undefined;
   try {
     await sc.handle.runHandoff(sc.session.key);
-    assert.strictEqual(log.quickPicks.length, 0, '给了参数就不弹选择');
+    assert.strictEqual(log.quickPicks.length, 0, 'no picker when an argument is given');
     assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, t('compact.handoff.prompt')]);
     assert.ok(log.messages.pop().msg.includes(t('compact.handoff.next')));
-    // 模块级入口（extension.js 可直接 require 调用），参数也可以是会话树节点
+    // Module-level entry point (extension.js can require and call it directly); the argument can also be a session tree node
     log.executed = [];
     await compact.runHandoff({ key: sc.session.key });
     assert.ok(log.executed.some((e) => e[0] === 'claude-vscode.editor.open' && e[2] === t('compact.handoff.prompt')));
   } finally { sc.handle.dispose(); }
-  await assert.rejects(() => compact.runHandoff(SID), /not active/, 'dispose 后模块级入口不再可用');
+  await assert.rejects(() => compact.runHandoff(SID), /not active/, 'module-level entry point is unavailable after dispose');
 });
 
-test('交接命令：没有参数 → 先选会话（列全部会话，当前选中的排第一）；会话已关闭 → 只复制；会话不在列表 → 报错', async () => {
+test('handoff command: no argument → pick a session first (all sessions listed, the selected one first); session closed → copy only; session not listed → error', async () => {
   resetUi();
   const sc = scenario('handoff-pick', {
     session: { live: false, contextUsed: 5000 },
@@ -675,21 +675,21 @@ test('交接命令：没有参数 → 先选会话（列全部会话，当前选
     await sc.handle.runHandoff();
     const qp = log.quickPicks[0];
     assert.strictEqual(qp.opts.placeHolder, t('compact.handoff.pickSession'));
-    assert.deepStrictEqual(qp.items.map((it) => it.key), [cx.key, sc.session.key], '小上下文的会话也列出；选中的排第一');
+    assert.deepStrictEqual(qp.items.map((it) => it.key), [cx.key, sc.session.key], 'sessions with a small context are listed too; the selected one comes first');
     assert.deepStrictEqual(log.clipboard, [t('compact.handoff.prompt')]);
     assert.ok(log.messages.pop().msg.includes(t('compact.handoff.next.codex')));
-    // Claude 会话已关闭（登记表可用、里面没有它）：claude-vscode 入口照样用 editor.open 重新打开并预填；
-    // Claude 扩展命令不可用时退回只复制
+    // Claude session closed (registry readable, session not in it): the claude-vscode entry point still reopens it with editor.open and prefills;
+    // falls back to copy only when the Claude extension command is unavailable
     resetUi();
     await sc.handle.runHandoff(sc.session.key);
     assert.ok(log.executed.some((e) => e[0] === 'claude-vscode.editor.open' && e[1] === SID));
     assert.deepStrictEqual(log.clipboard, [t('compact.handoff.prompt')]);
     assert.ok(log.messages.pop().msg.startsWith(t('compact.deliver.copied')));
-    // 不在列表
+    // not in the list
     resetUi();
     await sc.handle.runHandoff('claude:' + SID2);
     assert.strictEqual(log.messages.pop().msg, t('compact.error.noSession'));
-    // 没有会话
+    // no sessions
     resetUi();
     sc.sessions.clear();
     await sc.handle.runHandoff();
@@ -697,7 +697,7 @@ test('交接命令：没有参数 → 先选会话（列全部会话，当前选
   } finally { sc.handle.dispose(); }
 });
 
-test('压缩命令：没有参数时当前选中的会话排第一（给了 getSelectedKey 时）', async () => {
+test('compact command: with no argument, the selected session comes first (when getSelectedKey is provided)', async () => {
   resetUi();
   const sc = scenario('compact-pick-selected', { deps: { getSelectedKey: () => 'claude:' + SID2 } });
   const other = claudeSession({ id: SID2, title: 'Second synthetic task', cwd: sc.cwd });
@@ -709,7 +709,7 @@ test('压缩命令：没有参数时当前选中的会话排第一（给了 getS
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：后台压缩（假 CLI）→ 参数、cwd、stdin、记录追加、完成提示 pre → post 与花费', async () => {
+test('flow: background compact (fake CLI) → args, cwd, stdin, transcript append, completion notice with pre → post and cost', async () => {
   resetUi();
   const sc = scenario('bg-ok');
   ui.onQuickPick = pickBackground('claude-sonnet-5');
@@ -722,14 +722,14 @@ test('流程：后台压缩（假 CLI）→ 参数、cwd、stdin、记录追加�
     assert.deepStrictEqual(lg.argv, ['-p', '--resume', SID, '--model', 'claude-sonnet-5', '--output-format', 'json', '/compact ' + EN['compact.template']]);
     assert.strictEqual(fs.realpathSync(lg.cwd), fs.realpathSync(sc.cwd));
     assert.strictEqual(lg.stdin, 'devnull');
-    // 输入框预填模板；确认框是模态、带模型和估价
+    // The input box is prefilled with the template; the confirm dialog is modal and shows the model and estimate
     assert.strictEqual(log.inputs[0].value, EN['compact.template']);
     const confirm = log.messages.find((m) => m.opts && m.opts.modal);
     assert.ok(confirm.opts.detail.includes('claude-sonnet-5') && confirm.opts.detail.includes(usd(1.76)), confirm.opts.detail);
     assert.ok(!confirm.opts.detail.includes(t('compact.confirm.unverified')));
     assert.strictEqual(log.progress[0].opts.cancellable, true);
     assert.strictEqual(log.progress[0].opts.location, vscode.ProgressLocation.Notification);
-    // 记录里多了 compact_boundary（400000 → 12000）
+    // The transcript gained a compact_boundary (400000 → 12000)
     const done = log.messages[log.messages.length - 1];
     assert.strictEqual(done.msg, t('compact.done', { title: sc.session.title, pre: i18n.fmtTokens(400000), post: i18n.fmtTokens(12000), usd: usd(0.0123), model: 'claude-sonnet-5' }));
     assert.ok(fs.readFileSync(sc.file, 'utf8').includes('compact_boundary'));
@@ -737,7 +737,7 @@ test('流程：后台压缩（假 CLI）→ 参数、cwd、stdin、记录追加�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：compactConfirm 关掉且登记表可用 → 不弹确认；登记表不可用 → 仍要确认并说明核实不了', async () => {
+test('flow: compactConfirm off and registry readable → no confirmation; registry unreadable → still confirms and says it cannot verify', async () => {
   resetUi();
   const sc = scenario('bg-noconfirm', { mode: 'noBoundary' });
   config.compactConfirm = false;
@@ -754,19 +754,19 @@ test('流程：compactConfirm 关掉且登记表可用 → 不弹确认；登记
   config.compactConfirm = false;
   ui.onQuickPick = pickBackground('claude-sonnet-5');
   try {
-    await sc2.handle.compact(sc2.session.key);   // 不点确认 → 不运行
+    await sc2.handle.compact(sc2.session.key);   // not confirmed → does not run
     const confirm = log.messages.find((m) => m.opts && m.opts.modal);
     assert.ok(confirm && confirm.opts.detail.includes(t('compact.confirm.unverified')));
     assert.strictEqual(readFakeLog(sc2), null);
   } finally { sc2.handle.dispose(); }
 });
 
-test('流程：执行前复查登记表，会话刚被打开 → 中止，不启动 CLI；可改为在会话里压缩', async () => {
+test('flow: registry is rechecked before running; session was just opened → abort without starting the CLI; offer to compact in the session instead', async () => {
   resetUi();
   const sc = scenario('bg-recheck');
   const before = spawned.length;
   ui.onQuickPick = pickBackground('claude-sonnet-5');
-  ui.onInputBox = (o) => { writeRegistry(sc.home, process.pid, SID); return o.value; }; // 用户在这期间打开了会话
+  ui.onInputBox = (o) => { writeRegistry(sc.home, process.pid, SID); return o.value; }; // the session gets opened in the meantime
   ui.onExecute = () => undefined;
   ui.onMessage = (rec) => confirmGo(rec) || (rec.items.includes(t('compact.nowOpen.action')) ? t('compact.nowOpen.action') : undefined);
   try {
@@ -778,7 +778,7 @@ test('流程：执行前复查登记表，会话刚被打开 → 中止，不启
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：CLI 失败 → 模态错误，detail 是退出码和 stderr 最后 5 行', async () => {
+test('flow: CLI fails → modal error whose detail is the exit code and the last 5 stderr lines', async () => {
   resetUi();
   const sc = scenario('bg-error', { mode: 'error' });
   ui.onQuickPick = pickBackground('claude-opus-5-5');
@@ -793,7 +793,7 @@ test('流程：CLI 失败 → 模态错误，detail 是退出码和 stderr 最�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：结果 JSON 带 is_error → 按失败处理，显示报错首行', async () => {
+test('flow: result JSON has is_error → treated as a failure, shows the first error line', async () => {
   resetUi();
   const sc = scenario('bg-iserror', { mode: 'isError' });
   ui.onQuickPick = pickBackground('claude-sonnet-5');
@@ -805,9 +805,9 @@ test('流程：结果 JSON 带 is_error → 按失败处理，显示报错首行
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：取消 → 结束子进程，提示已取消', async () => {
+test('flow: cancel → kills the child process and reports it was cancelled', async () => {
   resetUi();
-  // 超时设成 15 秒：取消后要在几秒内结束，不能靠超时兜底
+  // Timeout set to 15 s: cancelling must finish within a few seconds, not rely on the timeout
   const sc = scenario('bg-cancel', { mode: 'hang', deps: { timeoutMs: 15000 } });
   ui.onQuickPick = pickBackground('claude-sonnet-5');
   ui.onMessage = confirmGo;
@@ -828,7 +828,7 @@ test('流程：取消 → 结束子进程，提示已取消', async () => {
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：超时 → 结束子进程，提示超时', async () => {
+test('flow: timeout → kills the child process and reports the timeout', async () => {
   resetUi();
   const sc = scenario('bg-timeout', { mode: 'hang', deps: { timeoutMs: 600 } });
   ui.onQuickPick = pickBackground('claude-sonnet-5');
@@ -843,7 +843,7 @@ test('流程：超时 → 结束子进程，提示超时', async () => {
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：dispose 时结束还在跑的子进程', async () => {
+test('flow: dispose kills a still-running child process', async () => {
   resetUi();
   const sc = scenario('bg-dispose', { mode: 'hang' });
   ui.onQuickPick = pickBackground('claude-sonnet-5');
@@ -857,7 +857,7 @@ test('流程：dispose 时结束还在跑的子进程', async () => {
   assert.ok(!commands.has('agentMonitor.compact'));
 });
 
-test('流程：cwd 不存在、sessionId 非法、会话已不在列表 → 报错且不启动 CLI', async () => {
+test('flow: missing cwd, invalid sessionId, or session no longer listed → error, CLI not started', async () => {
   resetUi();
   const sc = scenario('bg-nocwd', { session: { cwd: path.join(TMP, 'gone-dir') } });
   const before = spawned.length;
@@ -877,7 +877,7 @@ test('流程：cwd 不存在、sessionId 非法、会话已不在列表 → 报�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：找不到 CLI → 报错并可打开设置', async () => {
+test('flow: CLI not found → error with an option to open settings', async () => {
   resetUi();
   const sc = scenario('bg-nocli', { deps: { env: { PATH: '' } } });
   config['claude.cliPath'] = '';
@@ -891,7 +891,7 @@ test('流程：找不到 CLI → 报错并可打开设置', async () => {
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：没有参数 → 先选会话（只列可压缩的）', async () => {
+test('flow: no argument → pick a session first (only compactable sessions listed)', async () => {
   resetUi();
   const sc = scenario('noarg', { session: { live: true } });
   writeRegistry(sc.home, process.pid, SID);
@@ -907,10 +907,10 @@ test('流程：没有参数 → 先选会话（只列可压缩的）', async () 
 });
 
 // ===========================================================================
-// 提醒
+// Reminders
 // ===========================================================================
 
-test('提醒判定：缓存快过期（1 小时档、空闲、够大、省 ≥ $0.50）', () => {
+test('reminder check: cache about to expire (1-hour tier, idle, large enough, saves ≥ $0.50)', () => {
   const base = { live: true, liveStatus: 'idle', lastApiMs: NOW - 55 * MIN };
   const s = claudeSession(base);
   const due = compact.cacheReminderDue(s, NOW, {});
@@ -928,16 +928,16 @@ test('提醒判定：缓存快过期（1 小时档、空闲、够大、省 ≥ $
   assert.strictEqual(compact.cacheReminderDue(s, NOW, { reminded: new Set([due.key]) }), null);
   assert.strictEqual(compact.cacheReminderDue(s, NOW, { muted: () => true }), null);
   assert.strictEqual(compact.cacheReminderDue(s, NOW, { enabled: false }), null);
-  // 5 分钟档：默认不弹，打开 cacheReminderShortTtl 才弹
+  // 5-minute tier: silent by default, shown only when cacheReminderShortTtl is on
   const short = claudeSession({ ...base, cacheTtl: '5m', lastApiMs: NOW - 2 * MIN });
   assert.strictEqual(compact.cacheReminderDue(short, NOW, {}), null);
   assert.ok(compact.cacheReminderDue(short, NOW, { shortTtl: true }));
-  // 省得不到 $0.50：Haiku 150K
+  // Saves less than $0.50: Haiku at 150K
   assert.strictEqual(compact.cacheReminderDue(claudeSession({ ...base, model: 'claude-haiku-4-5', contextUsed: 150000 }), NOW, {}), null);
   assert.strictEqual(compact.cacheReminderDue(codexSession(), NOW, {}), null);
 });
 
-test('提醒判定：关窗口（缓存还在、够大、只有 claude-vscode 入口给“重新打开”）', () => {
+test('reminder check: window closed (cache warm, large enough; only the claude-vscode entry point offers "reopen")', () => {
   const s = claudeSession({ live: false, lastApiMs: NOW - 20 * MIN });
   const due = compact.closeReminderDue(s, NOW, {});
   assert.ok(due && due.reopen === true && due.minutes === 40);
@@ -957,7 +957,7 @@ function reminderRig(sessionsNow) {
   return { ctx, h, store };
 }
 
-test('提醒：缓存快过期 → 每个缓存窗口只弹一次；按钮“带保留要求压缩”预填模板', async () => {
+test('reminder: cache about to expire → shown once per cache window; the "compact with keep instructions" button prefills the template', async () => {
   resetUi();
   const now = Date.now();
   const s = claudeSession({ live: true, liveStatus: 'idle', lastApiMs: now - 55 * MIN });
@@ -973,7 +973,7 @@ test('提醒：缓存快过期 → 每个缓存窗口只弹一次；按钮“带
     assert.deepStrictEqual(reminders[0].items, [t('compact.remind.cache.compact'), t('compact.remind.handoff'), t('compact.remind.mute')]);
     assert.ok(reminders[0].msg.includes(usd(0.4)) && reminders[0].msg.includes(usd(3.52)), reminders[0].msg);
     assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact ' + EN['compact.template']]);
-    // 不在本窗口工作区的会话不提醒
+    // No reminder for sessions outside this window's workspace
     resetUi();
     const other = claudeSession({ id: SID2, live: true, lastApiMs: now - 55 * MIN, extra: { notInWs: true } });
     h.onSnapshot({ now, sessions: [other] });
@@ -982,7 +982,7 @@ test('提醒：缓存快过期 → 每个缓存窗口只弹一次；按钮“带
   } finally { h.dispose(); }
 });
 
-test('提醒：关窗口（存活 → 消失）弹一次；一次关掉多个不弹；“不再提醒”写 workspaceState', async () => {
+test('reminder: window closed (live → gone) shows once; closing several at once shows nothing; "do not remind" is saved to workspaceState', async () => {
   resetUi();
   const now = Date.now();
   const open = claudeSession({ live: true, liveStatus: 'busy', lastApiMs: now - 20 * MIN });
@@ -1001,14 +1001,14 @@ test('提醒：关窗口（存活 → 消失）弹一次；一次关掉多个不
     assert.strictEqual(r.length, 1);
     assert.deepStrictEqual(r[0].items, [t('compact.remind.close.compact'), t('compact.remind.close.handoff'), t('compact.remind.mute')]);
     assert.ok(ctx.workspaceState.get(compact.MUTE_KEY)[SID]);
-    // 已设“不再提醒”：再关一次也不弹
+    // "Do not remind" is set: closing again shows nothing
     resetUi();
     h.onSnapshot({ now, sessions: [open] });
     h.onSnapshot({ now: now + 2000, sessions: [closed] });
     h.onSnapshot({ now: now + 4000, sessions: [closed] });
     await tick(10);
     assert.strictEqual(log.messages.length, 0);
-    // 只消失一份快照（登记表文件正在改写）→ 不算关掉
+    // Gone for only one snapshot (registry file being rewritten) → not counted as closed
     resetUi();
     const other = { ...open, id: SID2, key: 'claude:' + SID2 };
     h.onSnapshot({ now, sessions: [other] });
@@ -1032,7 +1032,7 @@ test('提醒：关窗口（存活 → 消失）弹一次；一次关掉多个不
   } finally { rig.h.dispose(); }
 });
 
-test('提醒：压缩次数增加 → 提示检查约束一次；首次看到不提示；“不再提示”后不再弹', async () => {
+test('reminder: compact count goes up → prompt once to check constraints; no prompt on first sight; nothing more after "do not show again"', async () => {
   resetUi();
   const now = Date.now();
   const s0 = claudeSession({ lastApiMs: now - 3 * HOUR });
@@ -1060,11 +1060,11 @@ test('提醒：压缩次数增加 → 提示检查约束一次；首次看到不
 });
 
 // ===========================================================================
-// 词典
+// Dictionary
 // ===========================================================================
 
-test('词典：代码里用到的 compact.* / autocompact.* 键都在 compact.en.json 里，反之亦然；只用这两个前缀、无中日韩字符', () => {
-  // compact 区由三个文件共用：compact.js、autocompact.js、compact-presets.js（§11.12.6）
+test('dictionary: every compact.* / autocompact.* key used in code is in compact.en.json and vice versa; only these two prefixes; no CJK characters', () => {
+  // The compact section is shared by three files: compact.js, autocompact.js, compact-presets.js
   const src = ['compact.js', 'autocompact.js', 'compact-presets.js']
     .map((f) => fs.readFileSync(path.join(ROOT, 'lib', f), 'utf8')).join('\n');
   const used = new Set(src.match(/'(?:auto)?compact\.[A-Za-z0-9.]+'/g).map((s) => s.slice(1, -1)));
@@ -1076,12 +1076,12 @@ test('词典：代码里用到的 compact.* / autocompact.* 键都在 compact.en
     assert.ok(!/[　-鿿가-힯＀-￯]/.test(EN[k]), `CJK in ${k}`);
     assert.strictEqual(i18n.t(k), EN[k], `i18n resolves ${k}`);
   }
-  // 其它区的键（entry.*、provider.*）在 core 里
+  // Keys from other sections (entry.*, provider.*) live in core
   assert.notStrictEqual(i18n.t('entry.cli'), 'entry.cli');
   assert.notStrictEqual(i18n.t('provider.claude'), 'provider.claude');
 });
 
-test('安全：测试里每次 spawn 的都是临时目录里的假 CLI', () => {
+test('safety: every spawn in these tests runs the fake CLI from the temp dir', () => {
   assert.ok(spawned.length >= 5);
   for (const s of spawned) {
     assert.strictEqual(s.cli, FAKE);
@@ -1089,7 +1089,7 @@ test('安全：测试里每次 spawn 的都是临时目录里的假 CLI', () => 
   }
 });
 
-// ---------- 运行 ----------
+// ---------- run ----------
 
 (async () => {
   for (const [name, fn] of tests) {
@@ -1102,7 +1102,7 @@ test('安全：测试里每次 spawn 的都是临时目录里的假 CLI', () => 
       console.log(`  FAIL  ${name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);
   process.exitCode = passed === results.length ? 0 : 1;

@@ -1,8 +1,8 @@
 'use strict';
-// “存储位置、占用与迁移参考”的测试：lib/storage.js、lib/storage-view.js、media/storage.{js,css}、l10n/storage.en.json。
-// 纯 node 运行：node test/storage.test.js。数据全部是合成的临时目录，不读 ~/.claude、~/.codex；
-// 卷用注入的挂载点和假 statfs。临时文件放在 AGENT_MONITOR_TEST_TMP（没设就用系统临时目录），跑完删除。
-// 生成的命令只做文本检查（按 shell 规则切词后比对路径），测试里不执行任何命令。
+// Tests for "storage locations, usage and migration reference": lib/storage.js, lib/storage-view.js, media/storage.{js,css}, l10n/storage.en.json.
+// Plain node: node test/storage.test.js. All data lives in synthetic temp directories; ~/.claude and ~/.codex are never read.
+// Volumes use injected mount points and a fake statfs. Temp files go under AGENT_MONITOR_TEST_TMP (system temp dir if unset) and are removed afterwards.
+// Generated commands are only checked as text (split into words by shell rules, then paths compared); no command is ever executed.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -22,7 +22,7 @@ const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
 const LOCALES = ['en', 'zh-cn', 'zh-tw', 'ko', 'ja'];
 const GB = 1e9;
 
-// ---------- 小工具 ----------
+// ---------- Helpers ----------
 
 const tests = [];
 function test(name, fn) { tests.push([name, fn]); }
@@ -32,7 +32,7 @@ function write(p, bytes) {
   fs.writeFileSync(p, Buffer.alloc(bytes, 97));
 }
 
-// POSIX 切词：只认本插件生成的写法（单引号、'\'' 转义、空白分隔）
+// POSIX word splitting: only handles what this extension generates (single quotes, '\'' escapes, whitespace separators)
 function posixWords(line) {
   const out = [];
   let cur = null;
@@ -40,7 +40,7 @@ function posixWords(line) {
     const c = line[i];
     if (c === "'") {
       const j = line.indexOf("'", i + 1);
-      assert.ok(j > i, '单引号没有闭合：' + line);
+      assert.ok(j > i, 'Unclosed single quote: ' + line);
       cur = (cur || '') + line.slice(i + 1, j);
       i = j;
     } else if (c === '\\') {
@@ -56,20 +56,20 @@ function posixWords(line) {
   if (cur != null) out.push(cur);
   return out;
 }
-// 按引号外的 && 切成几条命令
+// Split into separate commands at && outside quotes
 function posixSteps(line) {
   const steps = [];
   let q = false;
   let start = 0;
   for (let i = 0; i < line.length; i++) {
-    if (!q && line[i] === '\\') i++; // 引号外的 \' 是字面的单引号
+    if (!q && line[i] === '\\') i++; // \' outside quotes is a literal single quote
     else if (line[i] === "'") q = !q;
     else if (!q && line.startsWith(' && ', i)) { steps.push(line.slice(start, i)); start = i + 4; i += 3; }
   }
   steps.push(line.slice(start));
   return steps.map(posixWords);
 }
-// PowerShell 单引号字符串（'' 表示一个 '）
+// PowerShell single-quoted strings ('' means one ')
 function pwshStrings(line) {
   const out = [];
   const re = /'((?:[^']|'')*)'/g;
@@ -78,7 +78,7 @@ function pwshStrings(line) {
   return out;
 }
 
-// 合成的 Claude / Codex 目录（projects 等），返回各路径
+// Synthetic Claude / Codex directories (projects etc.); returns their paths
 function makeClaudeHome(base) {
   const home = path.join(base, 'home');
   const claude = path.join(home, '.claude');
@@ -100,7 +100,7 @@ function makeClaudeHome(base) {
   return { home, claude, codex };
 }
 
-// 假卷：/（系统）、<base>/My Disk（外置，空间最多）、<base>/Small（外置）、<base>/RO（只读）
+// Fake volumes: / (system), <base>/My Disk (external, most free space), <base>/Small (external), <base>/RO (read-only)
 function fakeVolumes(base) {
   const big = path.join(base, 'My Disk');
   const small = path.join(base, 'Small');
@@ -118,7 +118,7 @@ function fakeVolumes(base) {
   };
 }
 
-// ---------- vscode 桩（只含本页面用到的 API） ----------
+// ---------- vscode stub (only the APIs this page uses) ----------
 
 function makeVscode() {
   const log = { panels: [], warn: [], info: [], dialogs: [], terminals: [], clipboard: [], executed: [] };
@@ -165,9 +165,9 @@ function makeVscode() {
   return { vscode, log, ctl };
 }
 
-// ---------- 目录统计 ----------
+// ---------- Directory scan ----------
 
-test('scanStorage：各项大小、文件数、其它合计、.claude.json 在主目录下、cleanupPeriodDays、目录来源', async () => {
+test('scanStorage: per-entry size, file count, "everything else" total, .claude.json in the home directory, cleanupPeriodDays, directory source', async () => {
   const base = path.join(TMP, 'scan1');
   const { home, claude, codex } = makeClaudeHome(base);
   const vols = fakeVolumes(base);
@@ -179,12 +179,12 @@ test('scanStorage：各项大小、文件数、其它合计、.claude.json 在�
   assert.deepStrictEqual([by.projects.bytes, by.projects.files], [1500, 3]);
   assert.deepStrictEqual([by['file-history'].bytes, by['file-history'].files], [50, 1]);
   assert.strictEqual(by.plugins.bytes, 70);
-  // 没有的已知子目录不列（projects 除外）
+  // Known subdirectories that do not exist are not listed (except projects)
   assert.ok(!by.skills && !by.cache && !by.backups);
   assert.strictEqual(by['.claude.json'].bytes, 40);
   assert.strictEqual(by['.claude.json'].outside, true);
   assert.strictEqual(by['.claude.json'].path, path.join(home, '.claude.json'));
-  // 其它：history.jsonl + todos/ + settings.json
+  // Everything else: history.jsonl + todos/ + settings.json
   const settingsBytes = fs.statSync(path.join(claude, 'settings.json')).size;
   assert.strictEqual(by['*'].rest, true);
   assert.strictEqual(by['*'].count, 3);
@@ -192,44 +192,44 @@ test('scanStorage：各项大小、文件数、其它合计、.claude.json 在�
   assert.deepStrictEqual(by['*'].top.map((x) => x.name).sort(), ['history.jsonl', 'settings.json', 'todos'].sort());
   assert.strictEqual(c.totalBytes, 1500 + 50 + 70 + 40 + 30 + 20 + settingsBytes);
   assert.strictEqual(r.cleanupPeriodDays, 14);
-  // 顺序固定：已知项按清单顺序，.claude.json，最后是其它
+  // Fixed order: known entries in list order, then .claude.json, then everything else
   assert.deepStrictEqual(c.entries.map((e) => e.name), ['projects', 'file-history', 'plugins', '.claude.json', '*']);
-  // Codex：sqlite 连同 -wal / -shm 一项；其它里只有 config.toml
+  // Codex: sqlite plus its -wal / -shm files count as one entry; everything else is just config.toml
   const x = Object.fromEntries(r.codex.entries.map((e) => [e.name, e]));
   assert.strictEqual(x.sessions.bytes, 500);
   assert.deepStrictEqual([x['state_5.sqlite'].bytes, x['state_5.sqlite'].files], [115, 3]);
   assert.deepStrictEqual([x['*'].count, x['*'].bytes], [1, 8]);
   assert.strictEqual(r.codex.dirSource, 'default');
-  // 卷：注入的挂载点；条目标上所在的卷
+  // Volumes: injected mount points; each entry is tagged with its volume
   assert.deepStrictEqual(r.volumes.map((v) => [v.mount, v.system]), [['/', true], [vols.big, false], [vols.ro, false], [vols.small, false]]);
   assert.strictEqual(by.projects.volume, '/');
-  // 来源：环境变量 / 设置
+  // Source: environment variable / setting
   const r2 = await storage.scanStorage({ claudeDir: claude, codexHome: codex, homeDir: home, env: { CLAUDE_CONFIG_DIR: claude + '/' }, volumes: vols.opts });
   assert.strictEqual(r2.claude.dirSource, 'env');
   assert.strictEqual(r2.codex.dirSource, 'default');
   const r3 = await storage.scanStorage({ claudeDir: claude, homeDir: path.join(base, 'elsewhere'), env: {}, volumes: vols.opts });
   assert.strictEqual(r3.claude.dirSource, 'setting');
   assert.strictEqual(r3.codex, null);
-  // 不在默认位置时 .claude.json 在该目录里找（这里没有 → 不存在，但照样列出）
+  // When not in the default location, .claude.json is looked up inside that directory (missing here, but still listed)
   const cj = r3.claude.entries.find((e) => e.name === '.claude.json');
   assert.deepStrictEqual([cj.exists, cj.outside, cj.path], [false, false, path.join(claude, '.claude.json')]);
 });
 
-test('软链接：顶层条目跟过去统计一次并写出目标；目录里的软链接不跟随；两个条目指向同一处不重复统计；硬链接只算一次', async () => {
+test('Symlinks: top-level entries are followed once and their target is shown; symlinks inside directories are not followed; two entries pointing to the same place are counted once; hard links count once', async () => {
   const base = path.join(TMP, 'links');
   const claude = path.join(base, 'home', '.claude');
   const ext = path.join(base, 'My Disk', 'AI-Data', 'claude', 'projects');
   write(path.join(ext, '-p', 'a.jsonl'), 4000);
   write(path.join(base, 'big', 'blob.bin'), 100000);
-  // projects 里的软链接指向一个大目录：不跟随
+  // A symlink inside projects points to a large directory: not followed
   fs.symlinkSync(path.join(base, 'big'), path.join(ext, '-p', 'link-to-big'));
-  // 硬链接：同一个文件两个名字
+  // Hard link: one file with two names
   fs.linkSync(path.join(ext, '-p', 'a.jsonl'), path.join(ext, '-p', 'a-hard.jsonl'));
   fs.mkdirSync(claude, { recursive: true });
   fs.symlinkSync(ext, path.join(claude, 'projects'));
-  // cache 也指向同一处
+  // cache points to the same place too
   fs.symlinkSync(ext, path.join(claude, 'cache'));
-  // 断掉的软链接（外置盘没挂）
+  // Broken symlink (external drive not mounted)
   fs.symlinkSync(path.join(base, 'Unplugged', 'x'), path.join(claude, 'backups'));
   const vols = fakeVolumes(base);
   const r = await storage.scanStorage({ claudeDir: claude, homeDir: path.join(base, 'home'), env: {}, volumes: vols.opts });
@@ -239,7 +239,7 @@ test('软链接：顶层条目跟过去统计一次并写出目标；目录里�
   assert.strictEqual(p.symlinkTarget, ext);
   assert.strictEqual(p.volume, vols.big);
   const linkLen = fs.lstatSync(path.join(ext, '-p', 'link-to-big')).size;
-  assert.strictEqual(p.bytes, 4000 + linkLen, '软链接只按自身大小算、硬链接只算一次');
+  assert.strictEqual(p.bytes, 4000 + linkLen, 'symlinks count only their own size; hard links count once');
   assert.strictEqual(p.files, 2);
   assert.strictEqual(by.cache.isSymlink, true);
   assert.strictEqual(by.cache.sameAs, 'projects');
@@ -247,8 +247,8 @@ test('软链接：顶层条目跟过去统计一次并写出目标；目录里�
   assert.strictEqual(by.backups.isSymlink, true);
   assert.strictEqual(by.backups.error, 'TARGET_MISSING');
   assert.strictEqual(by.backups.symlinkTarget, path.join(base, 'Unplugged', 'x'));
-  assert.strictEqual(r.claude.totalBytes, p.bytes, '总数不重复统计');
-  // 整个数据目录是软链接
+  assert.strictEqual(r.claude.totalBytes, p.bytes, 'total does not double count');
+  // The whole data directory is a symlink
   const linkedHome = path.join(base, 'home2');
   fs.mkdirSync(linkedHome);
   fs.symlinkSync(claude, path.join(linkedHome, '.claude'));
@@ -257,7 +257,7 @@ test('软链接：顶层条目跟过去统计一次并写出目标；目录里�
   assert.strictEqual(r2.claude.symlinkTarget, claude);
 });
 
-test('统计出错不抛：读不了的子目录记 errors；数据目录不存在 → exists=false；分批让出事件循环', async () => {
+test('Scan errors do not throw: unreadable subdirectories are counted in errors; missing data directory -> exists=false; yields to the event loop in batches', async () => {
   const base = path.join(TMP, 'errs');
   const claude = path.join(base, '.claude');
   for (let i = 0; i < 300; i++) write(path.join(claude, 'projects', 'p' + (i % 5), `f${i}.jsonl`), 10);
@@ -275,9 +275,9 @@ test('统计出错不抛：读不了的子目录记 errors；数据目录不存�
     const r = await storage.scanStorage({ claudeDir: claude, homeDir: base, env: {}, volumes: { roots: ['/'], statfs: () => ({ freeBytes: 1, totalBytes: 2, writable: true }) }, yieldEvery: 20, batch: 8, onYield: () => { yields++; } });
     const p = r.claude.entries.find((e) => e.name === 'projects');
     assert.strictEqual(p.bytes, 3000);
-    if (canLock && process.platform !== 'win32') assert.ok(p.errors >= 1, '读不了的目录记一次 errors');
-    assert.ok(yields >= 10, `让出次数 ${yields}`);
-    assert.ok(immediates >= 10, `统计期间别的回调也在跑（${immediates}）`);
+    if (canLock && process.platform !== 'win32') assert.ok(p.errors >= 1, 'unreadable directory is counted in errors');
+    assert.ok(yields >= 10, `yield count ${yields}`);
+    assert.ok(immediates >= 10, `other callbacks keep running during the scan (${immediates})`);
   } finally {
     stop = true;
     if (canLock) fs.chmodSync(locked, 0o755);
@@ -285,13 +285,13 @@ test('统计出错不抛：读不了的子目录记 errors；数据目录不存�
   const none = await storage.scanStorage({ claudeDir: path.join(base, 'nope'), codexHome: path.join(base, 'nope2'), homeDir: base, env: {}, volumes: { roots: [] } });
   assert.deepStrictEqual([none.claude.exists, none.claude.entries.length, none.codex.exists], [false, 0, false]);
   assert.strictEqual(none.cleanupPeriodDays, null);
-  // 文件数上限：停下并标 partial
+  // File count limit: stop and mark as partial
   const cut = await storage.scanStorage({ claudeDir: claude, homeDir: base, env: {}, volumes: { roots: [] }, maxFiles: 50 });
   assert.strictEqual(cut.partial, true);
   assert.ok(cut.claude.entries.find((e) => e.name === 'projects').partial);
 });
 
-test('readCleanupPeriodDays：没设 / 坏 JSON → null；0 和正数照读', () => {
+test('readCleanupPeriodDays: unset / bad JSON -> null; 0 and positive numbers are read as is', () => {
   const d = path.join(TMP, 'cleanup');
   fs.mkdirSync(d, { recursive: true });
   assert.strictEqual(storage.readCleanupPeriodDays(d), null);
@@ -304,7 +304,7 @@ test('readCleanupPeriodDays：没设 / 坏 JSON → null；0 和正数照读', (
   assert.strictEqual(storage.readCleanupPeriodDays(''), null);
 });
 
-test('sessionStorage：主记录、<项目>/<sid>/、file-history/<sid>；Codex 只给 rollout；会话 id 不合法时不拼路径', async () => {
+test('sessionStorage: transcript, <project>/<sid>/, file-history/<sid>; Codex reports only the rollout; no paths are built for an invalid session id', async () => {
   const base = path.join(TMP, 'sess');
   const claude = path.join(base, '.claude');
   const proj = path.join(claude, 'projects', '-work-a');
@@ -316,11 +316,11 @@ test('sessionStorage：主记录、<项目>/<sid>/、file-history/<sid>；Codex 
   assert.deepStrictEqual([s.transcriptBytes, s.subagentsBytes, s.fileHistoryBytes], [777, 123, 9]);
   assert.strictEqual(s.subagentsDir, path.join(proj, 'sid-1'));
   assert.strictEqual(s.fileHistoryDir, path.join(claude, 'file-history', 'sid-1'));
-  // 没有子智能体、没有 file-history → 0；projectDir 不给时取主记录所在目录
+  // No subagents, no file-history -> 0; without projectDir, the transcript's directory is used
   write(path.join(proj, 'sid-2.jsonl'), 5);
   const s2 = await storage.sessionStorage({ claudeDir: claude, sessionId: 'sid-2', transcript: path.join(proj, 'sid-2.jsonl') });
   assert.deepStrictEqual([s2.transcriptBytes, s2.subagentsBytes, s2.fileHistoryBytes], [5, 0, 0]);
-  // Codex：只有 rollout
+  // Codex: rollout only
   write(path.join(base, 'rollout.jsonl'), 42);
   const cx = await storage.sessionStorage({ transcript: path.join(base, 'rollout.jsonl'), sessionId: 'thread-1' });
   assert.deepStrictEqual([cx.transcriptBytes, cx.subagentsBytes, cx.fileHistoryBytes], [42, null, null]);
@@ -328,11 +328,11 @@ test('sessionStorage：主记录、<项目>/<sid>/、file-history/<sid>；Codex 
   assert.deepStrictEqual([bad.transcriptBytes, bad.subagentsBytes, bad.fileHistoryBytes, bad.subagentsDir], [null, null, null, null]);
 });
 
-// ---------- 卷与默认目标 ----------
+// ---------- Volumes and default target ----------
 
-test('卷：真实的 listVolumes 至少有一个系统卷；默认目标 = 剩余空间最多的可写非系统卷、且不是数据所在的卷', () => {
+test('Volumes: the real listVolumes returns at least one system volume; default target = the writable non-system volume with the most free space that does not already hold the data', () => {
   const real = storage.listVolumes();
-  assert.ok(real.length >= 1 && real.some((v) => v.system), '本机至少有系统卷');
+  assert.ok(real.length >= 1 && real.some((v) => v.system), 'the host has at least one system volume');
   assert.ok(real.every((v) => v.totalBytes > 0 && v.freeBytes >= 0 && typeof v.name === 'string'));
   const vols = [
     { mount: '/', freeBytes: 39 * GB, totalBytes: 228 * GB, system: true, writable: true },
@@ -341,14 +341,14 @@ test('卷：真实的 listVolumes 至少有一个系统卷；默认目标 = 剩�
     { mount: '/Volumes/Installer', freeBytes: 900 * GB, totalBytes: 1000 * GB, system: false, writable: false },
   ];
   assert.strictEqual(storage.pickTargetVolume(vols, '/', 'darwin').mount, '/Volumes/My Disk');
-  // 数据已经在 My Disk 上：换一块
+  // Data is already on My Disk: pick another one
   assert.strictEqual(storage.pickTargetVolume(vols, '/Volumes/My Disk', 'darwin').mount, '/Volumes/Small');
-  assert.strictEqual(storage.pickTargetVolume([vols[0], vols[3]], '/', 'darwin'), null, '只读卷、系统卷都不选');
+  assert.strictEqual(storage.pickTargetVolume([vols[0], vols[3]], '/', 'darwin'), null, 'never picks read-only or system volumes');
   assert.strictEqual(storage.defaultBase('claude', vols, '/', 'darwin'), '/Volumes/My Disk/AI-Data/claude');
   assert.strictEqual(storage.defaultBase('codex', [vols[0]], '/', 'darwin'), null);
   assert.strictEqual(storage.volumeOf('/Volumes/My Disk/软件/x', vols, 'darwin'), '/Volumes/My Disk');
   assert.strictEqual(storage.volumeOf('/Users/demo/.claude', vols, 'darwin'), '/');
-  assert.strictEqual(storage.volumeOf('/Volumes/My Diskette/x', vols, 'darwin'), '/', '前缀要按目录边界比');
+  assert.strictEqual(storage.volumeOf('/Volumes/My Diskette/x', vols, 'darwin'), '/', 'prefix match must respect directory boundaries');
   const win = [
     { mount: 'C:\\', freeBytes: 30 * GB, totalBytes: 256 * GB, system: true, writable: true },
     { mount: 'D:\\', freeBytes: 300 * GB, totalBytes: 1000 * GB, system: false, writable: true },
@@ -356,22 +356,22 @@ test('卷：真实的 listVolumes 至少有一个系统卷；默认目标 = 剩�
   ];
   assert.strictEqual(storage.volumeOf('c:\\Users\\Demo\\.claude', win, 'win32'), 'C:\\');
   assert.strictEqual(storage.defaultBase('claude', win, 'C:\\', 'win32'), 'D:\\AI-Data\\claude');
-  // listVolumes：注入的挂载点 + 假 statfs；系统盘在前
+  // listVolumes: injected mount points + fake statfs; system drive first
   const lv = storage.listVolumes({ platform: 'win32', roots: ['E:\\', 'C:\\', 'D:\\'], env: { SystemDrive: 'C:' }, statfs: (m) => ({ freeBytes: 1, totalBytes: 2, writable: m !== 'E:\\' }) });
   assert.deepStrictEqual(lv.map((v) => [v.mount, v.name, v.system, v.writable]), [['C:\\', 'C:', true, true], ['D:\\', 'D:', false, true], ['E:\\', 'E:', false, false]]);
   assert.strictEqual(storage._internal.decodeMount('/media/me/My\\040Disk'), '/media/me/My Disk');
 });
 
-// ---------- 迁移命令 ----------
+// ---------- Migration commands ----------
 
-test('方案 A（macOS）：带空格和中文的路径一律加单引号，切词后与原路径完全一致；终端用的是一行、不含换行', () => {
+test('Plan A (macOS): paths with spaces and Chinese characters are always single-quoted and split back to the exact original path; the terminal version is one line with no newlines', () => {
   const src = '/Users/demo/.claude/projects';
   const dst = "/Volumes/My Disk/软件/Bob's AI-Data/claude/projects";
   const p = storage.migrationPlan({ platform: 'darwin', kind: 'symlink', app: 'claude', source: src, target: dst });
   assert.strictEqual(p.ok, true);
   assert.strictEqual(p.shell, 'posix');
-  assert.ok(!p.oneLine.includes('\n') && !p.oneLine.includes('\r'), '送进终端的命令不含换行（否则会被执行）');
-  assert.strictEqual(p.commands.replace(/ \\\n {2}&& /g, ' && '), p.oneLine, '复制用的多行写法只是续行');
+  assert.ok(!p.oneLine.includes('\n') && !p.oneLine.includes('\r'), 'the command sent to the terminal has no newlines (otherwise it would run)');
+  assert.strictEqual(p.commands.replace(/ \\\n {2}&& /g, ' && '), p.oneLine, 'the multi-line copy version only uses line continuations');
   const steps = posixSteps(p.oneLine);
   assert.deepStrictEqual(steps, [
     ['test', '-d', src],
@@ -382,7 +382,7 @@ test('方案 A（macOS）：带空格和中文的路径一律加单引号，切�
     ['mv', src, src + '.bak'],
     ['ln', '-s', dst, src],
   ]);
-  // 每个路径参数都在单引号里
+  // Every path argument is single-quoted
   assert.ok(p.oneLine.includes("'/Volumes/My Disk/软件/Bob'\\''s AI-Data/claude/projects'"));
   assert.deepStrictEqual(posixSteps(p.cleanup), [['rm', '-rf', src + '.bak']]);
   assert.deepStrictEqual(posixSteps(p.rollback), [
@@ -390,13 +390,13 @@ test('方案 A（macOS）：带空格和中文的路径一律加单引号，切�
   ]);
   assert.strictEqual(p.env, null);
   assert.ok(p.notes.length >= 2 && p.notes.every((n) => typeof n === 'string' && n && !/\{\w+\}/.test(n)));
-  // 末尾的分隔符去掉
+  // Trailing separators are removed
   const q = storage.migrationPlan({ platform: 'linux', kind: 'symlink', app: 'codex', source: '/home/me/.codex/sessions/', target: '/media/me/Data 盘/AI-Data/codex/sessions/' });
   assert.deepStrictEqual(posixSteps(q.oneLine)[4], ['rsync', '-a', '/home/me/.codex/sessions/', '/media/me/Data 盘/AI-Data/codex/sessions/']);
-  assert.ok(q.notes.some((n) => n.includes('cp -a')), 'Linux 提示没有 rsync 时的替代');
+  assert.ok(q.notes.some((n) => n.includes('cp -a')), 'Linux notes mention the fallback when rsync is missing');
 });
 
-test('方案 A（Windows）：robocopy + Rename-Item .bak + mklink /J，PowerShell 单引号（内部 \' 写成 \'\'）', () => {
+test('Plan A (Windows): robocopy + Rename-Item .bak + mklink /J, PowerShell single quotes (an inner \' becomes \'\')', () => {
   const src = 'C:\\Users\\Demo User\\.claude\\projects';
   const dst = "D:\\AI-Data\\软件\\O'Neil\\claude\\projects";
   const p = storage.migrationPlan({ platform: 'win32', kind: 'symlink', app: 'claude', source: src, target: dst });
@@ -407,16 +407,16 @@ test('方案 A（Windows）：robocopy + Rename-Item .bak + mklink /J，PowerShe
   assert.ok(/robocopy '[^']+' '(?:[^']|'')+' \/E /.test(p.oneLine), p.oneLine);
   assert.ok(p.oneLine.includes(`cmd /c mklink /J '${src}' 'D:\\AI-Data\\软件\\O''Neil\\claude\\projects'`));
   assert.ok(p.oneLine.includes(`Rename-Item -LiteralPath '${src}' -NewName 'projects.bak'`));
-  assert.ok(p.oneLine.includes('$LASTEXITCODE -lt 8'), 'robocopy 的 0–7 都算成功');
+  assert.ok(p.oneLine.includes('$LASTEXITCODE -lt 8'), 'robocopy exit codes 0-7 all count as success');
   const strs = pwshStrings(p.oneLine);
   assert.ok(strs.includes(src) && strs.includes(dst) && strs.includes(src + '.bak'));
-  assert.ok(!p.oneLine.includes('"'), '不用双引号（避免 $ 展开）');
+  assert.ok(!p.oneLine.includes('"'), 'no double quotes (avoids $ expansion)');
   assert.strictEqual(p.cleanup, `Remove-Item -LiteralPath '${src}.bak' -Recurse -Force`);
-  assert.ok(p.rollback.includes(`cmd /c rmdir '${src}'`), '撤销时只删联接本身');
+  assert.ok(p.rollback.includes(`cmd /c rmdir '${src}'`), 'rollback removes only the junction itself');
   assert.ok(p.notes.some((n) => n.includes('mklink /J')));
 });
 
-test('方案 B：CLAUDE_CONFIG_DIR / CODEX_HOME 的设置片段；默认目录时复制 ~/.claude.json；Windows 版', () => {
+test('Plan B: CLAUDE_CONFIG_DIR / CODEX_HOME setting snippets; copies ~/.claude.json when using the default directory; Windows version', () => {
   const home = '/Users/demo';
   const dst = '/Volumes/My Disk/AI-Data/claude';
   const p = storage.migrationPlan({ platform: 'darwin', kind: 'env', app: 'claude', source: home + '/.claude', target: dst, homeDir: home });
@@ -431,11 +431,11 @@ test('方案 B：CLAUDE_CONFIG_DIR / CODEX_HOME 的设置片段；默认目录�
   assert.deepStrictEqual(posixWords(p.env.shellLine), ['export', 'CLAUDE_CONFIG_DIR=' + dst]);
   assert.deepStrictEqual(JSON.parse('{' + p.monitorSetting + '}'), { 'agentMonitor.claude.projectsDir': dst + '/projects' });
   assert.ok(p.notes.some((n) => n.includes('claudeCode.environmentVariables')));
-  assert.ok(p.notes.some((n) => /not verified/.test(n)), '重新登录写明未验证');
-  // 不是默认目录：不复制 .claude.json
+  assert.ok(p.notes.some((n) => /not verified/.test(n)), 're-login is stated as not verified');
+  // Not the default directory: .claude.json is not copied
   const p2 = storage.migrationPlan({ platform: 'darwin', kind: 'env', app: 'claude', source: '/data/claude-cfg', target: dst, homeDir: home });
   assert.ok(!p2.oneLine.includes('.claude.json'));
-  // Codex：没有 VS Code 设置片段
+  // Codex: no VS Code setting snippet
   const c = storage.migrationPlan({ platform: 'darwin', kind: 'env', app: 'codex', source: home + '/.codex', target: '/Volumes/My Disk/AI-Data/codex', homeDir: home });
   assert.strictEqual(c.env.name, 'CODEX_HOME');
   assert.strictEqual(c.env.vscodeSetting, null);
@@ -447,11 +447,11 @@ test('方案 B：CLAUDE_CONFIG_DIR / CODEX_HOME 的设置片段；默认目录�
   assert.deepStrictEqual(JSON.parse('{' + w.env.vscodeSetting + '}')['claudeCode.environmentVariables'][0].value, 'D:\\AI-Data\\claude');
 });
 
-test('迁移命令：相对路径、相同路径、互相包含、含换行的路径一律不生成', () => {
+test('Migration commands: never generated for relative paths, identical paths, nested paths, or paths containing newlines', () => {
   const mk = (source, target, platform = 'darwin') => storage.migrationPlan({ platform, kind: 'symlink', app: 'claude', source, target });
   assert.strictEqual(mk('~/.claude/projects', '/Volumes/X/p').error, 'NOT_ABSOLUTE');
   assert.strictEqual(mk('/a/projects', '').error, 'NOT_ABSOLUTE');
-  assert.strictEqual(mk('/a/projects', '/A/Projects/').error, 'SAME_PATH', 'macOS 不分大小写');
+  assert.strictEqual(mk('/a/projects', '/A/Projects/').error, 'SAME_PATH', 'macOS is case-insensitive');
   assert.strictEqual(mk('/a/projects', '/a/projects/new').error, 'TARGET_INSIDE_SOURCE');
   assert.strictEqual(mk('/a/projects', '/a').error, 'SOURCE_INSIDE_TARGET');
   assert.strictEqual(mk('/a/projects', '/b/x\ny').error, 'BAD_PATH');
@@ -463,7 +463,7 @@ test('迁移命令：相对路径、相同路径、互相包含、含换行的�
   assert.deepStrictEqual([bad.ok, bad.commands, bad.oneLine], [false, '', '']);
 });
 
-// ---------- 视图模型 ----------
+// ---------- View model ----------
 
 async function syntheticReport(base) {
   const { home, claude, codex } = makeClaudeHome(base);
@@ -472,7 +472,7 @@ async function syntheticReport(base) {
   return { home, claude, codex, vols, report };
 }
 
-test('视图模型：各项文字、卷的标签、默认目标在剩余空间最多的外置盘 AI-Data/<app>/<子目录>、打开中的会话给警告', async () => {
+test('View model: entry text, volume tags, default target on the external disk with the most free space at AI-Data/<app>/<subdir>, warnings for open sessions', async () => {
   const base = path.join(TMP, 'vm');
   const { home, claude, vols, report } = await syntheticReport(base);
   const live = [{ provider: 'claude', sessionId: 's1', title: 'Refactor payments' }, { provider: 'codex', sessionId: 't1', title: 'Fix CI' }];
@@ -487,7 +487,7 @@ test('视图模型：各项文字、卷的标签、默认目标在剩余空间�
   assert.strictEqual(paths.get(proj.pathId), path.join(claude, 'projects'));
   assert.ok(c.entries.find((e) => e.rest).name.startsWith('Everything else (3'));
   assert.strictEqual(vm.retention.text, '14 days (cleanupPeriodDays)');
-  // 卷
+  // Volumes
   const bigRow = vm.volumes.rows.find((r) => r.name === 'My Disk');
   assert.ok(bigRow.tags.includes('Suggested target'));
   assert.strictEqual(bigRow.freeText, '440 GB free of 1 TB');
@@ -495,7 +495,7 @@ test('视图模型：各项文字、卷的标签、默认目标在剩余空间�
   const sys = vm.volumes.rows[0];
   assert.ok(sys.tags.includes('System disk') && sys.tags.includes('Claude Code data'));
   assert.ok(vm.volumes.rows.find((r) => r.name === 'RO').tags.includes('Read-only'));
-  // 迁移：默认目标
+  // Migration: default target
   const card = vm.migrate.cards.find((x) => x.app === 'claude');
   assert.strictEqual(card.target.text, path.join(vols.big, 'AI-Data', 'claude'));
   const a = plans.get('claude|symlink');
@@ -503,14 +503,14 @@ test('视图模型：各项文字、卷的标签、默认目标在剩余空间�
   assert.strictEqual(a.source, path.join(claude, 'projects'));
   assert.strictEqual(plans.get('claude|env').target, path.join(vols.big, 'AI-Data', 'claude'));
   assert.strictEqual(plans.get('codex|symlink').target, path.join(vols.big, 'AI-Data', 'codex', 'sessions'));
-  // 打开中的会话：各自的卡片上列出来
+  // Open sessions: listed on their own app's card
   assert.ok(card.live && card.live.text.includes('(1)'));
   assert.deepStrictEqual(card.live.items, ['Refactor payments']);
   const cx = vm.migrate.cards.find((x) => x.app === 'codex');
   assert.deepStrictEqual(cx.live.items, ['Fix CI']);
   const quiet = SV.buildStorageVm({ report, i18n: en, platform: 'darwin', home, live: [] });
   assert.ok(quiet.vm.migrate.cards.every((x) => x.live === null));
-  // 步骤：方案 A 的命令段可复制、可送进终端；清理、撤销只能复制
+  // Steps: Plan A's commands can be copied or sent to the terminal; cleanup and rollback can only be copied
   const pa = card.plans.find((x) => x.kind === 'symlink');
   const run = pa.steps.find((s) => s.part === 'commands');
   assert.deepStrictEqual(run.actions, ['copy', 'terminal']);
@@ -518,16 +518,16 @@ test('视图模型：各项文字、卷的标签、默认目标在剩余空间�
   assert.deepStrictEqual(pa.steps.filter((s) => s.part && s.part !== 'commands').map((s) => [s.part, s.actions.join()]), [['cleanup', 'copy'], ['rollback', 'copy']]);
   const pb = card.plans.find((x) => x.kind === 'env');
   assert.deepStrictEqual(pb.steps.filter((s) => s.part).map((s) => s.part), ['commands', 'vscodeSetting', 'shellLine', 'monitorSetting', 'cleanup', 'rollback']);
-  // 注意事项全文列出
+  // Notes are listed in full
   assert.strictEqual(vm.notes.items.length, 6);
   assert.ok(vm.notes.items.some((n) => /iCloud/.test(n)) && vm.notes.items.some((n) => /mklink \/J/.test(n)));
 });
 
-test('视图模型：用户选的文件夹、同一块盘、同步盘、空间不够、已经挪过、没有别的盘', async () => {
+test('View model: user-picked folder, same disk, synced folder, not enough space, already moved, no other disk', async () => {
   const base = path.join(TMP, 'vm2');
   const { home, report, vols } = await syntheticReport(base);
   const build = (o) => SV.buildStorageVm({ report, i18n: en, platform: 'darwin', home, live: [], ...o });
-  // 选的文件夹叫 claude → 直接用；否则放进 <选的>/claude
+  // A picked folder named claude is used as is; otherwise data goes into <picked>/claude
   assert.strictEqual(SV._internal.baseFromPick('/Volumes/X/Backup', 'claude', 'darwin'), '/Volumes/X/Backup/claude');
   assert.strictEqual(SV._internal.baseFromPick('/Volumes/X/Claude/', 'claude', 'darwin'), '/Volumes/X/Claude');
   assert.strictEqual(SV._internal.baseFromPick('D:\\', 'codex', 'win32'), 'D:\\codex');
@@ -535,25 +535,25 @@ test('视图模型：用户选的文件夹、同一块盘、同步盘、空间�
   const card = custom.vm.migrate.cards.find((c) => c.app === 'claude');
   assert.strictEqual(card.target.custom, true);
   assert.strictEqual(custom.plans.get('claude|symlink').target, path.join(vols.small, 'Mine', 'claude', 'projects'));
-  // 同一块盘（数据在 / 上）
+  // Same disk (data is on /)
   const same = build({ bases: { claude: path.join(home, 'Elsewhere', 'claude') } });
   assert.ok(same.vm.migrate.cards[0].warnings.some((w) => /same disk/.test(w)));
-  // 同步盘
+  // Synced folder
   const synced = build({ bases: { claude: '/Users/demo/Library/Mobile Documents/com~apple~CloudDocs/claude' } });
   assert.ok(synced.vm.migrate.cards[0].warnings.some((w) => /synced folder/.test(w)));
   assert.ok(SV._internal.SYNCED_RE.test('C:\\Users\\me\\OneDrive\\claude') && !SV._internal.SYNCED_RE.test('/Volumes/My Disk/AI-Data/claude'));
-  // 只读盘、空间不够
+  // Read-only disk, not enough space
   const ro = build({ bases: { claude: path.join(vols.ro, 'claude') } });
   assert.ok(ro.vm.migrate.cards[0].warnings.some((w) => /read-only/.test(w)));
   const tiny = JSON.parse(JSON.stringify(report));
   tiny.volumes.find((v) => v.mount === vols.big).freeBytes = 100;
   const full = SV.buildStorageVm({ report: tiny, i18n: en, platform: 'darwin', home, live: [], bases: { claude: path.join(vols.big, 'claude') } });
   assert.ok(full.vm.migrate.cards[0].plans[0].warnings.some((w) => /Not enough free space/.test(w)));
-  // 目标里已经有文件
+  // Target already contains files
   const probe = { exists: () => true, nonEmptyDir: (p) => p.endsWith('projects') };
   const merged = build({ probe });
   assert.ok(merged.vm.migrate.cards[0].plans[0].warnings.some((w) => /already has files/.test(w)));
-  // projects 已经是软链接：方案 A 显示已挪过，不生成命令
+  // projects is already a symlink: Plan A shows it as moved and generates no commands
   const linked = JSON.parse(JSON.stringify(report));
   const pe = linked.claude.entries.find((e) => e.name === 'projects');
   Object.assign(pe, { isSymlink: true, symlinkTarget: '/Volumes/My Disk/AI-Data/claude/projects' });
@@ -562,19 +562,19 @@ test('视图模型：用户选的文件夹、同一块盘、同步盘、空间�
   assert.ok(/Already moved/.test(la.info) && la.steps.length === 0);
   assert.strictEqual(lv.paths.get(la.infoId), '/Volumes/My Disk/AI-Data/claude/projects');
   assert.ok(!lv.plans.has('claude|symlink') && lv.plans.has('claude|env'));
-  // 没有别的可写盘
+  // No other writable disk
   const lone = JSON.parse(JSON.stringify(report));
   lone.volumes = lone.volumes.filter((v) => v.system);
   const nv = SV.buildStorageVm({ report: lone, i18n: en, platform: 'darwin', home, live: [] });
   assert.strictEqual(nv.vm.migrate.cards[0].target.text, '');
   assert.ok(/No other writable disk/.test(nv.vm.migrate.cards[0].plans[0].errorText));
   assert.strictEqual(nv.plans.size, 0);
-  // 还没统计完
+  // Scan not finished yet
   const loading = SV.buildStorageVm({ report: null, loading: true, i18n: en, platform: 'darwin', home });
   assert.deepStrictEqual([loading.vm.dirs.length, loading.vm.statusText], [0, 'Measuring folder sizes…']);
 });
 
-test('视图模型：Windows 的按钮文字与命令；五种语言都没有未替换的占位符、没有缺词条的键名', async () => {
+test('View model: Windows button labels and commands; no unreplaced placeholders or missing keys in any of the five languages', async () => {
   const base = path.join(TMP, 'vm3');
   const { home, report } = await syntheticReport(base);
   const w = SV.buildStorageVm({ report, i18n: en, platform: 'win32', home, live: [] });
@@ -592,13 +592,13 @@ test('视图模型：Windows 的按钮文字与命令；五种语言都没有未
       walk(out.vm);
       for (const p of out.plans.values()) texts.push(...p.notes);
     }
-    for (const s of texts) assert.ok(!/\{\w+\}/.test(s), `${locale}：未替换的占位符 ${s}`);
+    for (const s of texts) assert.ok(!/\{\w+\}/.test(s), `${locale}: unreplaced placeholder ${s}`);
     const missing = [...used].filter((k) => !i18n.has(k) && !/^storage\.item\./.test(k));
-    assert.deepStrictEqual(missing, [], `${locale} 缺词条`);
+    assert.deepStrictEqual(missing, [], `${locale} missing strings`);
   }
 });
 
-test('fmtBytes：十进制单位、按语言', () => {
+test('fmtBytes: decimal units, locale-aware', () => {
   assert.strictEqual(SV.fmtBytes(0, en), '0 byte');
   assert.strictEqual(SV.fmtBytes(71306, en), '71.3 kB');
   assert.strictEqual(SV.fmtBytes(932e6, en), '932 MB');
@@ -607,29 +607,29 @@ test('fmtBytes：十进制单位、按语言', () => {
   assert.strictEqual(SV.fmtBytes(-1, en), '—');
 });
 
-// ---------- 页面 HTML ----------
+// ---------- Page HTML ----------
 
-test('页面 HTML：CSP 只放 cspSource 与 nonce；只有 JSON 数据块和带 nonce 的脚本；没有内联样式；词典带上 storage.page.*', () => {
+test('Page HTML: CSP allows only cspSource and the nonce; only a JSON data block and a nonce script; no inline styles; dictionary includes storage.page.*', () => {
   const html = SV.storageHtml({ cspSource: 'vscode-webview://abc', asset: (p) => 'https://asset/' + p, nonce: 'N0NCE', i18n: i18nLib.createI18n('zh-cn') });
   const csp = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1].replace(/&#39;/g, "'");
   assert.strictEqual(csp, "default-src 'none'; style-src vscode-webview://abc; font-src vscode-webview://abc; script-src 'nonce-N0NCE'");
   assert.ok(!/unsafe-/.test(html));
   const scripts = html.match(/<script[^>]*>/g);
   assert.deepStrictEqual(scripts, ['<script type="application/json" id="l10n">', '<script nonce="N0NCE" src="https://asset/storage.js">']);
-  assert.ok(!/\sstyle=/.test(html) && !/<style/.test(html), '没有内联样式');
+  assert.ok(!/\sstyle=/.test(html) && !/<style/.test(html), 'no inline styles');
   assert.ok(html.includes('<html lang="zh-CN">'));
   assert.ok(html.includes('href="https://asset/codicons/codicon.css"') && html.includes('href="https://asset/storage.css"'));
   const json = html.slice(html.indexOf('id="l10n">') + 10, html.indexOf('</script>'));
   const payload = JSON.parse(json);
   assert.ok(Object.keys(payload.dict).length > 0 && Object.keys(payload.dict).every((k) => k.startsWith('storage.page.')));
   assert.ok(payload.dict['storage.page.loading']);
-  // 文字里的 < 不会提前闭合
+  // A < in text cannot close the script block early
   const evil = { ...en, t: () => '</script><img src=x>' };
   const h2 = SV.storageHtml({ cspSource: 'x', asset: (p) => p, nonce: 'n', i18n: evil });
   assert.ok(!h2.includes('<img'));
 });
 
-test('media/storage.js、storage.css：不用 innerHTML、不直接碰终端；不用 opacity；字号不小于界面字号', () => {
+test('media/storage.js, storage.css: no innerHTML, no direct terminal access; no opacity; font size not below the UI font size', () => {
   const js = fs.readFileSync(path.join(ROOT, 'media', 'storage.js'), 'utf8');
   assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|eval\(|new Function/.test(js));
   assert.ok(!/sendText|createTerminal/.test(js));
@@ -637,16 +637,16 @@ test('media/storage.js、storage.css：不用 innerHTML、不直接碰终端；�
     assert.ok(js.includes(`type: '${type}'`), type);
   }
   const css = fs.readFileSync(path.join(ROOT, 'media', 'storage.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.ok(!/opacity/.test(css), '不用 opacity 调暗');
+  assert.ok(!/opacity/.test(css), 'no opacity dimming');
   for (const m of css.matchAll(/font-size:\s*([^;]+);/g)) {
-    assert.ok(/var\(--vscode-font-size\)|inherit/.test(m[1]), `字号 ${m[1]}`);
+    assert.ok(/var\(--vscode-font-size\)|inherit/.test(m[1]), `font size ${m[1]}`);
   }
   assert.ok(/overflow-x:\s*hidden/.test(css) && /@media \(max-width: 640px\)/.test(css));
 });
 
 // ---------- WebviewPanel ----------
 
-test('面板：单例；ready 后发视图模型；刷新带 force；在 Finder 中显示与复制路径只认扩展给的 id', async () => {
+test('Panel: singleton; posts the view model after ready; refresh passes force; Reveal in Finder and Copy Path accept only extension-issued ids', async () => {
   const base = path.join(TMP, 'panel1');
   const { home, claude, report } = await syntheticReport(base);
   const { vscode, log } = makeVscode();
@@ -655,7 +655,7 @@ test('面板：单例；ready 后发视图模型；刷新带 force；在 Finder 
   const ctx = { extensionUri: vscode.Uri.file(ROOT) };
   const a = SV.openStorageView(ctx, deps);
   const b = SV.openStorageView(ctx, deps);
-  assert.strictEqual(a, b, '单例');
+  assert.strictEqual(a, b, 'singleton');
   assert.strictEqual(log.panels.length, 1);
   const panel = log.panels[0];
   assert.strictEqual(panel.revealed, 1);
@@ -669,24 +669,24 @@ test('面板：单例；ready 后发视图模型；刷新带 force；在 Finder 
   assert.strictEqual(last.vm.dirs[0].pathText, '~/.claude');
   await a.onMessage({ type: 'refresh' });
   assert.deepStrictEqual(calls, [false, false, true]);
-  // 在 Finder 中显示：按 id 找到真实路径
+  // Reveal in Finder: the real path is looked up by id
   const vm = last.vm;
   const proj = vm.dirs[0].entries.find((e) => e.name === 'projects');
   await a.onMessage({ type: 'reveal', id: proj.pathId });
   assert.deepStrictEqual(log.executed.map((x) => [x[0], x[1].fsPath]), [['revealFileInOS', path.join(claude, 'projects')]]);
   await a.onMessage({ type: 'reveal', id: 'nope' });
   await a.onMessage({ type: 'reveal', path: '/etc' });
-  assert.strictEqual(log.executed.length, 1, '不认 webview 给的路径');
+  assert.strictEqual(log.executed.length, 1, 'ignores paths sent by the webview');
   await a.onMessage({ type: 'copyPath', id: proj.pathId });
   assert.deepStrictEqual(log.clipboard, [path.join(claude, 'projects')]);
   panel.dispose();
   assert.strictEqual(a.disposed, true);
   const c = SV.openStorageView(ctx, deps);
-  assert.notStrictEqual(c, a, '关掉后再开是新面板');
+  assert.notStrictEqual(c, a, 'reopening after close creates a new panel');
   c.dispose();
 });
 
-test('面板：复制命令、在终端中打开（sendText 第二个参数是 false，命令只有一行）；有打开中的会话先弹模态警告', async () => {
+test('Panel: copy command, open in terminal (sendText second argument is false, single-line command); a modal warning comes first when sessions are open', async () => {
   const base = path.join(TMP, 'panel2');
   const { home, claude, report, vols } = await syntheticReport(base);
   const { vscode, log, ctl } = makeVscode();
@@ -697,7 +697,7 @@ test('面板：复制命令、在终端中打开（sendText 第二个参数是 f
   await new Promise((r) => setImmediate(r));
   const plan = p.plans.get('claude|symlink');
   assert.ok(plan && plan.ok);
-  // 有打开中的会话：先警告；取消 → 什么都不做
+  // Sessions are open: warn first; cancel -> do nothing
   ctl.warnAnswer = undefined;
   await p.onMessage({ type: 'terminal', app: 'claude', kind: 'symlink', ack: true });
   assert.strictEqual(log.terminals.length, 0);
@@ -706,18 +706,18 @@ test('面板：复制命令、在终端中打开（sendText 第二个参数是 f
   assert.ok(log.warn[0].rest[0].detail.includes('Refactor payments'));
   await p.onMessage({ type: 'copy', app: 'claude', kind: 'symlink', part: 'commands', ack: true });
   assert.deepStrictEqual(log.clipboard, []);
-  // 选“仍然继续”
+  // Choose "Continue Anyway"
   ctl.warnAnswer = 'Continue Anyway';
   await p.onMessage({ type: 'terminal', app: 'claude', kind: 'symlink', ack: true });
   assert.strictEqual(log.terminals.length, 1);
   const term = log.terminals[0];
   assert.strictEqual(term.shown, 1);
   assert.strictEqual(term.sent.length, 1);
-  assert.strictEqual(term.sent[0][1], false, 'sendText 的第二个参数必须是 false（不按回车）');
+  assert.strictEqual(term.sent[0][1], false, 'sendText second argument must be false (no Enter)');
   assert.strictEqual(term.sent[0][0], plan.oneLine);
   assert.ok(!/[\r\n]/.test(term.sent[0][0]));
   assert.strictEqual(term.opts.shellPath, undefined);
-  // 会话都关了：不再警告
+  // All sessions closed: no more warning
   live = [];
   const warnBefore = log.warn.length;
   await p.onMessage({ type: 'copy', app: 'claude', kind: 'symlink', part: 'commands', ack: true });
@@ -725,15 +725,15 @@ test('面板：复制命令、在终端中打开（sendText 第二个参数是 f
   assert.strictEqual(log.warn.length, warnBefore);
   await p.onMessage({ type: 'copy', app: 'claude', kind: 'env', part: 'vscodeSetting', ack: true });
   assert.ok(log.clipboard[1].includes('claudeCode.environmentVariables'));
-  // 不认识的段、app、方案 → 忽略
+  // Unknown step, app or plan -> ignored
   await p.onMessage({ type: 'copy', app: 'claude', kind: 'symlink', part: 'oneLine; rm -rf /', ack: true });
   await p.onMessage({ type: 'copy', app: 'evil', kind: 'symlink', part: 'commands', ack: true });
   await p.onMessage({ type: 'terminal', app: 'claude', kind: 'bogus', ack: true });
   await p.onMessage({ type: 'terminal', app: 'claude', kind: 'symlink', command: 'rm -rf ~', ack: true });
   assert.strictEqual(log.clipboard.length, 2);
   assert.strictEqual(log.terminals.length, 2);
-  assert.deepStrictEqual(log.terminals[1].sent, [[plan.oneLine, false]], 'webview 给的 command 不用');
-  // 另选文件夹：目标跟着变；恢复建议的
+  assert.deepStrictEqual(log.terminals[1].sent, [[plan.oneLine, false]], 'command sent by the webview is not used');
+  // Pick another folder: the target follows; then reset to the suggested one
   ctl.pick = path.join(vols.small, 'Backups');
   await p.onMessage({ type: 'pickTarget', app: 'claude' });
   assert.strictEqual(log.dialogs[0].canSelectFolders, true);
@@ -746,15 +746,15 @@ test('面板：复制命令、在终端中打开（sendText 第二个参数是 f
   assert.strictEqual(log.terminals[2].sent[0][1], false);
   await p.onMessage({ type: 'resetTarget', app: 'claude' });
   assert.strictEqual(p.plans.get('claude|symlink').target, path.join(vols.big, 'AI-Data', 'claude', 'projects'));
-  assert.ok(fs.existsSync(path.join(claude, 'projects')) && !fs.lstatSync(path.join(claude, 'projects')).isSymbolicLink(), '什么都没被执行');
+  assert.ok(fs.existsSync(path.join(claude, 'projects')) && !fs.lstatSync(path.join(claude, 'projects')).isSymbolicLink(), 'nothing was executed');
   p.dispose();
-  // Windows：PowerShell 终端
+  // Windows: PowerShell terminal
   const W = makeVscode();
   const wr = JSON.parse(JSON.stringify(report));
   const wp = SV.openStorageView({ extensionUri: W.vscode.Uri.file(ROOT) }, { ...deps, vscode: W.vscode, liveSessions: () => [], requestStorage: async () => wr, platform: 'win32' });
   await wp.onMessage({ type: 'ready' });
   await new Promise((r) => setImmediate(r));
-  // 合成报告是 POSIX 路径，Windows 下判为非绝对路径、不生成命令：换成 Windows 路径再试
+  // The synthetic report uses POSIX paths, which are not absolute on Windows, so no commands are generated: retry with Windows paths
   wp.report = {
     at: Date.now(), homeDir: 'C:\\Users\\Demo', partial: false, cleanupPeriodDays: null,
     claude: { dir: 'C:\\Users\\Demo\\.claude', dirSource: 'default', exists: true, volume: 'C:\\', entries: [{ name: 'projects', path: 'C:\\Users\\Demo\\.claude\\projects', bytes: 10, files: 1, exists: true, kind: 'dir', isSymlink: false, symlinkTarget: null }], totalBytes: 10, totalFiles: 1 },
@@ -770,7 +770,7 @@ test('面板：复制命令、在终端中打开（sendText 第二个参数是 f
   wp.dispose();
 });
 
-test('迁移命令只作参考：页面没带 ack 时先弹模态确认，取消就不复制、不开终端', async () => {
+test('Migration commands are reference only: without ack from the page, a modal confirmation comes first; cancel means no copy and no terminal', async () => {
   const base = path.join(TMP, 'panel-ack');
   const { home, report } = await syntheticReport(base);
   const { vscode, log, ctl } = makeVscode();
@@ -790,7 +790,7 @@ test('迁移命令只作参考：页面没带 ack 时先弹模态确认，取消
   ctl.warnAnswer = en.t('storage.disclaimer.continue');
   await p.onMessage({ type: 'copy', app: 'claude', kind: 'symlink', part: 'commands' });
   assert.deepStrictEqual(log.clipboard, [plan.commands]);
-  // 勾过确认（ack: true）就不再弹
+  // Once confirmed (ack: true), no more dialog
   const before = log.warn.length;
   await p.onMessage({ type: 'terminal', app: 'claude', kind: 'symlink', ack: true });
   assert.strictEqual(log.warn.length, before);
@@ -798,9 +798,9 @@ test('迁移命令只作参考：页面没带 ack 时先弹模态确认，取消
   p.dispose();
 });
 
-test('存储页：迁移方案开头是免责说明和确认勾选框；没勾时复制 / 终端按钮不可用', () => {
+test('Storage page: migration plans start with a disclaimer and a confirmation checkbox; copy / terminal buttons are disabled until it is ticked', () => {
   const js = fs.readFileSync(path.join(ROOT, 'media', 'storage.js'), 'utf8');
-  assert.ok(/let ack = false;/.test(js), '默认没勾');
+  assert.ok(/let ack = false;/.test(js), 'unticked by default');
   assert.ok(/type: 'checkbox', id: 'ack'/.test(js));
   assert.ok(/const lock = ack \|\| !vm\.migrate\.disclaimer \? null : vm\.migrate\.disclaimer\.locked;/.test(js));
   assert.ok(/disabled: locked/.test(js));
@@ -811,7 +811,7 @@ test('存储页：迁移方案开头是免责说明和确认勾选框；没勾�
   assert.ok(/as is/.test(en.t('storage.disclaimer.risk')) && /without warranty/.test(en.t('storage.disclaimer.risk')));
 });
 
-test('面板：统计失败显示错误；过期的结果不覆盖新的', async () => {
+test('Panel: shows an error when the scan fails; stale results do not overwrite newer ones', async () => {
   const { vscode } = makeVscode();
   let n = 0;
   const resolvers = [];
@@ -836,17 +836,17 @@ test('面板：统计失败显示错误；过期的结果不覆盖新的', async
   p.dispose();
 });
 
-// ---------- 词典 ----------
+// ---------- Dictionary ----------
 
-test('l10n/storage.en.json：键都以 storage. 开头、英文、占位符写法正确；代码里用到的键都在；区名清单含 storage', () => {
+test('l10n/storage.en.json: all keys start with storage., values are English with well-formed placeholders; every key used in code exists; the region list includes storage', () => {
   const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'storage.en.json'), 'utf8'));
   for (const [k, v] of Object.entries(dict)) {
     assert.ok(k.startsWith('storage.'), k);
     assert.strictEqual(typeof v, 'string');
     assert.ok(v.trim(), k);
-    for (const m of v.matchAll(/\{([^{}]*)\}/g)) assert.ok(/^\w+$/.test(m[1]), `${k} 占位符 {${m[1]}}`);
+    for (const m of v.matchAll(/\{([^{}]*)\}/g)) assert.ok(/^\w+$/.test(m[1]), `${k} placeholder {${m[1]}}`);
   }
-  assert.ok(!/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(JSON.stringify(dict)), '英文词典里没有中日韩字符');
+  assert.ok(!/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(JSON.stringify(dict)), 'no CJK characters in the English dictionary');
   assert.ok(i18nLib.REGIONS.includes('storage'));
   const src = ['lib/storage.js', 'lib/storage-view.js'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
   const keys = new Set([...src.matchAll(/'(storage\.[\w.-]+[\w-])'/g)].map((m) => m[1]).filter((k) => !/\.(js|css)$/.test(k)));
@@ -858,12 +858,12 @@ test('l10n/storage.en.json：键都以 storage. 开头、英文、占位符写�
   for (const n of storage.CODEX_ITEMS) dyn.push('storage.item.codex.' + n);
   const missing = [...keys, ...dyn].filter((k) => !(k in dict));
   assert.deepStrictEqual(missing, []);
-  // 页面要显示的 storage.page.* 能经 webviewJson 注入（词典合并了全部区）
+  // storage.page.* strings shown by the page can be injected via webviewJson (the dictionary merges all regions)
   const inj = JSON.parse(en.webviewJson(SV.STORAGE_DICT_PREFIXES)).dict;
   assert.strictEqual(inj['storage.page.loading'], dict['storage.page.loading']);
 });
 
-// ---------- 运行 ----------
+// ---------- Run ----------
 
 (async () => {
   let failed = 0;
@@ -876,7 +876,7 @@ test('l10n/storage.en.json：键都以 storage. 开头、英文、占位符写�
       console.log(`  FAIL  ${name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   console.log(`\n${tests.length - failed}/${tests.length} passed`);
   process.exitCode = failed ? 1 : 0;
 })();

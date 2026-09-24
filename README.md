@@ -74,6 +74,7 @@ CYUNEO Agent Monitor is **free for personal and noncommercial use** under the [P
 ## Copyright and trademarks
 
 - © 2026 Chenyu Guo. All rights not expressly granted by the license are reserved.
+- Developed by Chenyu Guo with AI assistance (mainly Claude Code). The idea, requirements and design decisions are the author's, and the author reviewed the results.
 - The CYUNEO™ name and logo are not licensed. Don't use them for your own products, or in a way that suggests your version comes from or is endorsed by CYUNEO.
 - Using this project commercially without a license, removing its copyright or license notices, or republishing it under another name as your own work infringes the author's rights. The author may ask GitHub, the Visual Studio Marketplace, Open VSX and other platforms to take such copies down, and reserves the right to take further legal action.
 - If you see a copy being used or sold in violation of the license, please tell us in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).

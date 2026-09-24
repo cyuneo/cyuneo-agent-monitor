@@ -1,8 +1,8 @@
 'use strict';
-// 扩展入口（extension.js）与 package.json 的测试。纯 node 运行：node test/extension.test.js
-// - 内置 vscode 桩（含 l10n、window.tabGroups、TabInputWebview、TabInputCustom、globalState、QuickPick）和假 worker。
-// - 右侧 lib/agents-view.js、压缩 lib/compact.js 用真实模块，只在外面包一层记录调用；不会真的弹框或调用 claude CLI。
-// - 数据全部是合成的；不读 ~/.claude、~/.codex。临时文件放在 AGENT_MONITOR_TEST_TMP（没设就用系统临时目录），跑完删除。
+// Tests for the extension entry point (extension.js) and package.json. Run with plain Node: node test/extension.test.js
+// - Built-in vscode stub (including l10n, window.tabGroups, TabInputWebview, TabInputCustom, globalState, QuickPick) and a fake worker.
+// - lib/agents-view.js and lib/compact.js are the real modules, wrapped only to record calls; no real dialogs are shown and the claude CLI is never called.
+// - All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
 
 const assert = require('assert');
 const path = require('path');
@@ -18,7 +18,7 @@ const nls = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.nls.json'), 'utf
 const TMP = fs.mkdtempSync(path.join(process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir(), 'am-ext-'));
 
 // ---------------------------------------------------------------------------
-// vscode 桩
+// vscode stub
 // ---------------------------------------------------------------------------
 
 const log = {
@@ -27,7 +27,7 @@ const log = {
   compactDeps: null, reveals: [], treeViews: {}, webviews: {}, statusItem: null,
   handoffs: [], autoDeps: null, storageOpens: [],
 };
-const config = {}; // 设置名 -> { globalValue, workspaceValue }
+const config = {}; // setting name -> { globalValue, workspaceValue }
 const listeners = { config: [], folders: [], tabs: [], tabGroups: [], windowState: [] };
 let quickPickAnswer = null; // (items) => item
 
@@ -71,7 +71,7 @@ function setConfig(key, value, target = ConfigurationTarget.Global) {
   for (const fn of [...listeners.config]) fn(e);
 }
 
-// 终端标签列表的位置（terminal.integrated.tabs.location）：同一个 config 表里用 tabs.location 这个键，事件带终端的设置名
+// position of the terminal tab list (terminal.integrated.tabs.location): kept in the same config table under the tabs.location key; the event carries the terminal setting name
 function setTerminalTabs(value) {
   const c = config['tabs.location'] || (config['tabs.location'] = {});
   c.globalValue = value;
@@ -102,7 +102,7 @@ function makeTreeView(id, opts) {
       log.reveals.push({ view: id, key: node.key || node.id, o });
       if (o && o.select !== false) { tv.selection = [node]; sel.fire({ selection: [node] }); }
     },
-    // 测试用：模拟用户点选、切换可见
+    // test helpers: simulate a user click and visibility changes
     userSelect: (node) => { tv.selection = [node]; sel.fire({ selection: [node] }); },
     setVisible: (v) => { tv.visible = v; vis.fire({ visible: v }); },
     dispose() {},
@@ -179,11 +179,11 @@ const vscode = {
   },
   commands: {
     registerCommand: (id, fn) => {
-      assert.ok(!registered.has(id), `命令重复注册：${id}`);
+      assert.ok(!registered.has(id), `command registered twice: ${id}`);
       registered.set(id, fn);
       return { dispose() { registered.delete(id); } };
     },
-    // 只记录，不去调用注册的处理函数（压缩命令会弹 QuickPick；测试里直接调 registered.get(id)）
+    // only records; does not call the registered handler (the compact command would open a QuickPick; tests call registered.get(id) directly)
     executeCommand: async (id, ...args) => {
       log.executed.push([id, ...args]);
       if (id === 'setContext') log.contexts[args[0]] = args[1];
@@ -191,7 +191,7 @@ const vscode = {
   },
 };
 
-// 假 worker：测试里手动发快照、模拟崩溃；terminate 后和真的一样以 1 退出
+// fake worker: tests send snapshots by hand and simulate crashes; after terminate it exits with 1, like the real one
 class FakeWorker extends NodeEmitter {
   constructor(file, opts) {
     super();
@@ -205,7 +205,7 @@ class FakeWorker extends NodeEmitter {
   terminate() { this.terminated = true; setImmediate(() => this.emit('exit', 1)); return Promise.resolve(1); }
 }
 
-// 右侧视图与压缩：真实模块外面包一层记录调用
+// agents view and compaction: real modules wrapped to record calls
 const realAgents = require(path.join(ROOT, 'lib', 'agents-view'));
 class RecordingAgentsView extends realAgents.AgentsViewProvider {
   update(input) { log.agentInputs.push(input); return super.update(input); }
@@ -219,12 +219,12 @@ const compactWrap = {
     const api = realCompact.activateCompact(context, deps);
     const inner = api.onSnapshot;
     api.onSnapshot = (snap) => { log.compactSnapshots.push(snap); return inner(snap); };
-    // 交接笔记只记录调用（真实流程在 compact.test.js 里测）
+    // handoff notes only record the call (the real flow is tested in compact.test.js)
     api.runHandoff = async (arg) => { log.handoffs.push(arg); };
     return api;
   },
 };
-// 自动压缩容量：真实模块（自己注册 agentMonitor.setAutoCompact），外面记下拿到的依赖
+// auto-compact capacity: the real module (registers agentMonitor.setAutoCompact itself), wrapped to record the deps it receives
 let realAuto = null;
 try { realAuto = require(path.join(ROOT, 'lib', 'autocompact')); } catch { realAuto = null; }
 const autoWrap = realAuto && {
@@ -234,9 +234,9 @@ const autoWrap = realAuto && {
     return realAuto.activateAutoCompact(context, deps);
   },
 };
-// 模拟模块缺失：设成 {} 时扩展应注册占位命令
+// simulate a missing module: when set to {}, the extension should register placeholder commands
 const modOverride = { autocompact: null, storage: null };
-// 存储页面：只记录打开时拿到的依赖（页面本身在 storage 的测试里测）
+// storage page: only records the deps passed when it opens (the page itself is covered by the storage tests)
 const storageWrap = {
   openStorageView(context, deps) { log.storageOpens.push(deps); return { reveal() {} }; },
 };
@@ -262,7 +262,7 @@ const { emptyDailyTotals } = require(path.join(ROOT, 'lib', 'core', 'daily'));
 const i18n = createI18n('en');
 
 // ---------------------------------------------------------------------------
-// 小工具
+// Helpers
 // ---------------------------------------------------------------------------
 
 const results = [];
@@ -281,7 +281,7 @@ const clone = (x) => JSON.parse(JSON.stringify(x));
 const last = (a) => a[a.length - 1];
 
 // ---------------------------------------------------------------------------
-// 合成数据（Snapshot v2）
+// synthetic data (Snapshot v2)
 // ---------------------------------------------------------------------------
 
 const NOW = Date.now();
@@ -325,7 +325,7 @@ function session(o = {}) {
   };
 }
 
-// 四个会话：两个“打开中”（alpha：Claude 在跑；gamma：Codex 可能在等批准），两个“最近”
+// four sessions: two "open" (alpha: Claude running; gamma: Codex maybe waiting for approval) and two "recent"
 function fixtures() {
   return [
     session({
@@ -363,11 +363,11 @@ function snapshot(sessions, extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 扩展入口
+// Extension entry point
 // ---------------------------------------------------------------------------
 
-// 模拟底部面板的页面：把真实 AgentsViewProvider 解析到一个假 webview 视图上，记下发给页面的消息，
-// 并能像页面一样发 ready / select / resizeList / more（§11.13）
+// simulate the bottom-panel page: resolve the real AgentsViewProvider onto a fake webview view, record messages sent to the page,
+// and send ready / select / resizeList / more like the page does
 function openPanel() {
   const provider = log.webviews['agentMonitor.agents'].provider;
   const posted = [];
@@ -417,10 +417,10 @@ async function extensionTests() {
   const focusMsgs = () => w0.messages.filter((m) => m.type === 'focus');
   const page = openPanel();
 
-  await test('激活：底部面板只有一个 webview（没有会话原生树）+ 侧边栏总览树；worker 用 v2 配置启动；未加载时的上下文键', () => {
-    assert.deepStrictEqual(Object.keys(log.treeViews), ['agentMonitor.tree'], '底部面板不再注册原生树');
+  await test('activation: the bottom panel has a single webview (no native session tree) + the sidebar overview tree; the worker starts with the v2 config; context keys before loading', () => {
+    assert.deepStrictEqual(Object.keys(log.treeViews), ['agentMonitor.tree'], 'bottom panel no longer registers a native tree');
     assert.strictEqual(tv.opts.showCollapseAll, true);
-    assert.ok(log.webviews['agentMonitor.agents'], 'webview 没注册');
+    assert.ok(log.webviews['agentMonitor.agents'], 'webview not registered');
     assert.ok(log.webviews['agentMonitor.agents'].provider instanceof RecordingAgentsView);
     assert.strictEqual(w0.file, path.join(ROOT, 'lib', 'worker.js'));
     const cfg = w0.opts.workerData;
@@ -428,7 +428,7 @@ async function extensionTests() {
     assert.deepStrictEqual(Object.keys(cfg.claude).sort(), ['configDir', 'configDirSource', 'enabled', 'home', 'projectsDir', 'settingsPath']);
     assert.deepStrictEqual(Object.keys(cfg.codex).sort(), ['enabled', 'home', 'homeSource']);
     assert.strictEqual(cfg.claude.home, path.dirname(cfg.claude.projectsDir));
-    // §11.11 第 4 条：CLAUDE_CONFIG_DIR 优先，否则 ~/.claude；登记表与 settings.json 都在它下面
+    // CLAUDE_CONFIG_DIR wins, otherwise ~/.claude; the registry and settings.json both live under it
     if (process.env.CLAUDE_CONFIG_DIR) {
       assert.strictEqual(cfg.claude.configDir, process.env.CLAUDE_CONFIG_DIR);
       assert.strictEqual(cfg.claude.configDirSource, 'env');
@@ -443,15 +443,15 @@ async function extensionTests() {
     assert.strictEqual(log.contexts['agentMonitor.loaded'], false);
     assert.strictEqual(log.statusItem.id, 'agentMonitor.status');
     assert.strictEqual(log.statusItem.command, 'agentMonitor.show');
-    // 未加载：内容区“正在读取”，列表是空的，位置默认跟随终端（右），宽度默认 200
+    // not loaded: content area shows "loading", the list is empty, position follows the terminal by default (right), width defaults to 200
     assert.strictEqual(last(log.agentInputs).loaded, false);
     const l = page.list();
-    assert.ok(l, 'ready 之后没发列表');
+    assert.ok(l, 'no list posted after ready');
     assert.deepStrictEqual([l.items.length, l.position, l.width, l.selectedKey], [0, 'right', 200, null]);
     assert.ok(/Content-Security-Policy/.test(page.view.webview.html));
   });
 
-  await test('第一次激活聚焦一次底部面板（globalState 记一次）；状态栏点击 / 显示命令聚焦这个 webview', async () => {
+  await test('first activation focuses the bottom panel once (remembered in globalState); status bar click / show command focuses this webview', async () => {
     assert.ok(log.executed.some((x) => x[0] === 'agentMonitor.agents.focus'));
     assert.ok(globalState.get('agentMonitor.panelIntro.v1'));
     const n = log.executed.length;
@@ -459,85 +459,85 @@ async function extensionTests() {
     assert.deepStrictEqual(log.executed.slice(n), [['agentMonitor.agents.focus']]);
   });
 
-  await test('注册的命令与 package.json 声明一一对应（含 compact.js 的 compact、autocompact.js 的 setAutoCompact）', () => {
+  await test('registered commands match package.json one to one (including compact from compact.js and setAutoCompact from autocompact.js)', () => {
     const declared = pkg.contributes.commands.map((c) => c.command).sort();
     assert.deepStrictEqual([...registered.keys()].sort(), declared);
     for (const id of ['revealTranscript', 'copyTranscriptPath', 'handoff', 'setAutoCompact', 'storage']) {
-      assert.ok(registered.has('agentMonitor.' + id), '没注册 ' + id);
+      assert.ok(registered.has('agentMonitor.' + id), 'not registered: ' + id);
     }
   });
 
-  await test('自动压缩模块：activateAutoCompact 拿到 getSession / getSessions / i18n / claudeHome / codexHome / output / getSelectedKey', () => {
-    if (!realAuto) { console.log('        （lib/autocompact.js 不在，跳过）'); return; }
+  await test('auto-compact module: activateAutoCompact receives getSession / getSessions / i18n / claudeHome / codexHome / output / getSelectedKey', () => {
+    if (!realAuto) { console.log('        (lib/autocompact.js missing, skipped)'); return; }
     const d = log.autoDeps;
-    assert.ok(d, 'activateAutoCompact 没被调用');
+    assert.ok(d, 'activateAutoCompact was not called');
     for (const k of ['getSession', 'getSessions', 'getSelectedKey']) assert.strictEqual(typeof d[k], 'function', k);
     assert.strictEqual(typeof d.i18n.t, 'function');
     assert.strictEqual(typeof d.output.appendLine, 'function');
-    assert.strictEqual(d.claudeHome, w0.opts.workerData.claude.configDir, 'claudeHome = Claude 配置目录（settings.json 所在）');
-    // codexHome 要跟着设置 agentMonitor.codex.home 走（不传时模块只认 CODEX_HOME / ~/.codex）
-    assert.strictEqual(d.codexHome, w0.opts.workerData.codex.home, 'codexHome = Codex 目录（config.toml 所在）');
+    assert.strictEqual(d.claudeHome, w0.opts.workerData.claude.configDir, 'claudeHome = Claude config dir (where settings.json is)');
+    // codexHome must follow the agentMonitor.codex.home setting (without it the module only knows CODEX_HOME / ~/.codex)
+    assert.strictEqual(d.codexHome, w0.opts.workerData.codex.home, 'codexHome = Codex dir (where config.toml is)');
   });
 
-  await test('压缩模块：activateCompact 拿到 getSession / i18n / claudeHome / output / getSelectedKey', () => {
+  await test('compact module: activateCompact receives getSession / i18n / claudeHome / output / getSelectedKey', () => {
     const d = log.compactDeps;
-    assert.ok(d, 'activateCompact 没被调用');
+    assert.ok(d, 'activateCompact was not called');
     assert.strictEqual(typeof d.getSession, 'function');
     assert.strictEqual(typeof d.i18n.t, 'function');
     const home = typeof d.claudeHome === 'function' ? d.claudeHome() : d.claudeHome;
-    assert.strictEqual(home, w0.opts.workerData.claude.configDir, '登记表在 Claude 配置目录下');
+    assert.strictEqual(home, w0.opts.workerData.claude.configDir, 'registry lives under the Claude config dir');
     assert.strictEqual(typeof d.output.appendLine, 'function');
-    assert.strictEqual(typeof d.getSelectedKey, 'function', '无参数调用时当前选中的会话排第一');
+    assert.strictEqual(typeof d.getSelectedKey, 'function', 'called without arguments, the selected session comes first');
   });
 
-  await test('首份快照：列表“打开中 / 最近”两组，组内按开始时间倒序；内容区显示第一行并发 focus；选中推给页面', async () => {
+  await test('first snapshot: the list has "open / recent" groups, each by start time descending; content area shows the first row and sends focus; selection is pushed to the page', async () => {
     send(fixtures());
     await tick();
     assert.strictEqual(log.contexts['agentMonitor.loaded'], true);
     const l = page.list();
     assert.deepStrictEqual(l.items.map((x) => x.id || x.key), ['g:open', GAMMA, ALPHA, 'g:recent', BETA, DELTA]);
-    // 从没选过、没有当前对话 → 选第一行，并推给页面
+    // nothing selected before and no current chat → select the first row and push it to the page
     assert.strictEqual(ctl.selectedKey, GAMMA);
     assert.strictEqual(agentsShown(), GAMMA);
     assert.strictEqual(l.selectedKey, GAMMA);
     assert.deepStrictEqual(last(focusMsgs()).keys, [GAMMA]);
-    // 压缩提醒拿到了快照
+    // the compaction reminder received the snapshot
     assert.strictEqual(log.compactSnapshots.length, 1);
     assert.strictEqual(log.compactDeps.getSession(ALPHA).title, 'Alpha chat');
   });
 
-  await test('选中往返：页面发 select → 内容区切过去、发 focus、记为看过（Beta 从未查看变成已查看），扩展把选中推回页面', async () => {
+  await test('selection round trip: page sends select → content area switches, sends focus, marks as seen (Beta goes from unseen to seen), extension pushes the selection back to the page', async () => {
     assert.strictEqual(page.row(BETA).lamp, 'doneUnseen');
     page.select(BETA);
     await tick();
     assert.strictEqual(ctl.selectedKey, BETA);
     assert.strictEqual(agentsShown(), BETA);
     assert.deepStrictEqual(last(focusMsgs()).keys, [BETA]);
-    assert.ok(globalState.get('agentMonitor.seen.v1')[BETA] > 0, '没有记已看过');
+    assert.ok(globalState.get('agentMonitor.seen.v1')[BETA] > 0, 'not marked as seen');
     assert.strictEqual(page.list().selectedKey, BETA);
     assert.strictEqual(page.row(BETA).lamp, 'doneSeen');
-    // 内容区拿到的是该会话的灯（已看过）
+    // the content area gets this session's lamp (seen)
     const input = last(log.agentInputs);
     assert.strictEqual(input.lamps.lamp, 'doneSeen');
     assert.strictEqual(input.loaded, true);
-    // 不在列表里的 key：不理
+    // key not in the list: ignored
     page.select('claude:nope');
     await tick();
     assert.strictEqual(ctl.selectedKey, BETA);
   });
 
-  await test('数据刷新不移动选中；新快照带上该会话的细节', async () => {
+  await test('data refresh keeps the selection; the new snapshot carries the details of this session', async () => {
     const sessions = fixtures();
-    sessions[0].updatedMs = Date.now(); // Alpha 有活动
+    sessions[0].updatedMs = Date.now(); // Alpha has activity
     send(sessions, { details: { [BETA]: { key: BETA, agents: { main: { timeline: [], result: null, files: [], errors: [] } } } } });
     await tick();
     assert.strictEqual(ctl.selectedKey, BETA);
     assert.strictEqual(agentsShown(), BETA);
     assert.strictEqual(page.list().selectedKey, BETA);
-    assert.ok(last(log.agentInputs).detail, '细节没传给内容区');
+    assert.ok(last(log.agentInputs).detail, 'details not passed to the content area');
   });
 
-  await test('跟随：切到 Claude 标签 → 选中对应会话并推给页面；同一标签上的焦点事件不再移动', async () => {
+  await test('follow: switching to a Claude tab → selects that session and pushes it to the page; focus events on the same tab do not move it again', async () => {
     tabState.active = { label: 'Alpha chat', input: new TabInputWebview('mainThreadWebview-claudeVSCodePanel') };
     for (const fn of listeners.tabs) fn({ opened: [], closed: [], changed: [tabState.active] });
     await tick();
@@ -545,21 +545,21 @@ async function extensionTests() {
     assert.strictEqual(agentsShown(), ALPHA);
     assert.strictEqual(page.list().selectedKey, ALPHA);
     assert.deepStrictEqual(last(focusMsgs()).keys, [ALPHA]);
-    // 程序跟随的选中不立即记已看过（交给 1.5 秒停留计时）
+    // a selection made by following is not marked as seen right away (left to the 1.5-second dwell timer)
     assert.ok(!(globalState.get('agentMonitor.seen.v1') || {})[ALPHA]);
-    // 用户点回 Beta；同一个 Claude 标签上的窗口焦点事件不会把选中抢回去
+    // the user clicks back to Beta; window focus events on the same Claude tab do not take the selection back
     page.select(BETA);
     for (const fn of listeners.windowState) fn({ focused: true });
     await tick();
     assert.strictEqual(ctl.selectedKey, BETA);
-    // 数据刷新也不会
+    // neither does a data refresh
     send(fixtures());
     await tick();
     assert.strictEqual(ctl.selectedKey, BETA);
     assert.strictEqual(page.list().selectedKey, BETA);
   });
 
-  await test('跟随：切去看代码标签保持不变；切到 Codex 标签按 URI 里的 id 跟随', async () => {
+  await test('follow: switching to a code tab keeps the selection; switching to a Codex tab follows the id in the URI', async () => {
     tabState.active = { label: 'a.js', input: new TabInputText(Uri.file('/tmp/a.js')) };
     for (const fn of listeners.tabs) fn({});
     await tick();
@@ -571,7 +571,7 @@ async function extensionTests() {
     assert.deepStrictEqual(last(focusMsgs()).keys, [GAMMA]);
   });
 
-  await test('跟随：面板不可见时不给页面发消息（不去强行打开面板），重新可见、页面 ready 后补发当前选中', async () => {
+  await test('follow: no messages to the page while the panel is hidden (the panel is not forced open); the current selection is sent once visible again and the page is ready', async () => {
     page.setVisible(false);
     const before = page.posted.length;
     const focusCount = () => log.executed.filter((x) => x[0] === 'agentMonitor.agents.focus').length;
@@ -581,8 +581,8 @@ async function extensionTests() {
     await tick();
     assert.strictEqual(ctl.selectedKey, ALPHA);
     assert.strictEqual(agentsShown(), ALPHA);
-    assert.strictEqual(page.posted.length, before, '不可见时不该发');
-    assert.strictEqual(focusCount(), focus0, '跟随不去聚焦（打开）面板');
+    assert.strictEqual(page.posted.length, before, 'should not post while hidden');
+    assert.strictEqual(focusCount(), focus0, 'following does not focus (open) the panel');
     page.setVisible(true);
     page.ready();
     await tick();
@@ -590,7 +590,7 @@ async function extensionTests() {
     assert.strictEqual(last(page.posted.filter((m) => m.type === 'render')).sessionKey, ALPHA);
   });
 
-  await test('followActiveChat 关掉：切标签不移动选中', async () => {
+  await test('followActiveChat off: switching tabs does not move the selection', async () => {
     setConfig('followActiveChat', false);
     page.select(DELTA);
     tabState.active = { label: 'Beta chat', input: new TabInputWebview('mainThreadWebview-claudeVSCodePanel') };
@@ -602,7 +602,7 @@ async function extensionTests() {
     for (const fn of listeners.tabs) fn({});
   });
 
-  await test('状态栏总灯：NeedsYou → 品红 + 警告底色；文字按紧急度计数', () => {
+  await test('status bar overall lamp: NeedsYou → magenta + warning background; text counts by urgency', () => {
     const item = log.statusItem;
     assert.ok(item.shown);
     assert.strictEqual(item.color.id, 'agentMonitor.lampNeedsYou');
@@ -615,7 +615,7 @@ async function extensionTests() {
     assert.ok(!/\$\(/.test(item.accessibilityInformation.label));
   });
 
-  await test('状态栏总灯：只有报错 → 红 + 错误底色；关掉底色设置就不加；全部完成 → 绿', async () => {
+  await test('status bar overall lamp: errors only → red + error background; no background when that setting is off; all done → green', async () => {
     const f = fixtures();
     send([f[3]]);
     await tick();
@@ -637,9 +637,9 @@ async function extensionTests() {
     assert.strictEqual(log.statusItem.shown, true);
   });
 
-  await test('“已看过”变化与徽标：徽标挂在底部面板的 webview 视图上；markSeen({ sessionKey }) → 灯变暗绿、徽标清掉、状态栏跟着变', async () => {
+  await test('"seen" changes and badge: the badge sits on the bottom-panel webview view; markSeen({ sessionKey }) → lamp turns dim green, badge clears, status bar follows', async () => {
     const s = fixtures()[1];
-    s.doneAtMs = Date.now() + 1000; // 比刚才点选的时间晚：又有新结果
+    s.doneAtMs = Date.now() + 1000; // later than the click just now: there is a new result
     s.main.status = st('done', s.doneAtMs);
     send([s]);
     await tick();
@@ -647,9 +647,9 @@ async function extensionTests() {
     assert.deepStrictEqual(page.view.badge && page.view.badge.value, 1);
     assert.ok(page.view.badge.tooltip.includes(i18n.t('badge.doneUnseen', { n: 1 })));
     assert.strictEqual(tv.badge.value, 1);
-    // webview 右键菜单传来的参数形态
+    // argument shape passed by the webview context menu
     await registered.get('agentMonitor.markSeen')({ webviewSection: 'session', sessionKey: BETA, compactable: false, resumable: true, webview: 'agentMonitor.agents' });
-    // seenAtMs = 现在，比 doneAtMs 早 1 秒 → 仍未看过；再用晚一点的时间标一次（字符串 key 也行）
+    // seenAtMs = now, 1 second before doneAtMs → still unseen; mark again with a later time (a string key works too)
     globalState.update('agentMonitor.seen.v1', { [BETA]: Date.now() + 5000 });
     await registered.get('agentMonitor.markSeen')(BETA);
     assert.strictEqual(page.row(BETA).lamp, 'doneSeen');
@@ -658,16 +658,16 @@ async function extensionTests() {
     assert.strictEqual(log.statusItem.color.id, 'agentMonitor.lampDoneSeen');
   });
 
-  await test('markAllSeen：范围内全部记为看过', async () => {
+  await test('markAllSeen: everything in scope is marked as seen', async () => {
     const f = fixtures();
     send(f);
     await tick();
     await registered.get('agentMonitor.markAllSeen')();
     const seen = globalState.get('agentMonitor.seen.v1');
-    for (const k of KEYS) assert.ok(seen[k] > 0, `没记：${k}`);
+    for (const k of KEYS) assert.ok(seen[k] > 0, `not marked: ${k}`);
   });
 
-  await test('列表顺序在 20 份快照间不变：活动交替、灯来回切、输入顺序打乱；列表消息里只有灯变了的那一行在变', async () => {
+  await test('list order is stable across 20 snapshots: alternating activity, lamps flipping, shuffled input; in list messages only the row whose lamp changed differs', async () => {
     send(fixtures());
     await tick();
     const want = page.keys();
@@ -678,27 +678,27 @@ async function extensionTests() {
     for (let i = 0; i < 20; i++) {
       const f = fixtures();
       const t = Date.now();
-      // Alpha 与 Beta 交替最新；Alpha 在“工具 / 思考”之间切（都是 Working），Beta 在“完成 / 在跑”之间切（灯变）
+      // Alpha and Beta take turns being newest; Alpha switches between "tool / thinking" (both Working), Beta between "done / running" (lamp changes)
       f[0].updatedMs = i % 2 ? t : t - 60e3;
       f[1].updatedMs = i % 2 ? t - 60e3 : t;
       f[0].main.status = st(i % 2 ? 'thinking' : 'tool', t - 1000, { pendingTool: i % 2 ? null : 'Bash' });
       f[1].main.status = i % 2 ? st('thinking', t - 1000) : st('done', t - 1000);
-      f[0].main.tokens = tokens(84000 + i * 10); // token 在涨，但百分比不变
-      // 快照里的顺序打乱
+      f[0].main.tokens = tokens(84000 + i * 10); // tokens grow but the percentage stays the same
+      // shuffle the order in the snapshot
       const shuffled = i % 3 === 0 ? f.reverse() : i % 3 === 1 ? [f[2], f[0], f[3], f[1]] : f;
       send(shuffled);
       await tick();
-      assert.deepStrictEqual(page.keys(), want, `第 ${i + 1} 次顺序变了`);
+      assert.deepStrictEqual(page.keys(), want, `order changed at snapshot ${i + 1}`);
       const cur = page.list();
       const before = new Map(prev.items.filter((x) => x.kind === 'session').map((r) => [r.key, vis(r)]));
       const changed = page.rows().filter((r) => before.get(r.key) !== vis(r)).map((r) => r.key);
-      for (const k of changed) assert.strictEqual(k, BETA, `不该变 ${k}`);
+      for (const k of changed) assert.strictEqual(k, BETA, `should not change: ${k}`);
       prev = cur;
     }
-    assert.ok(page.lists().length > n0, 'Beta 的灯在变，列表应该重发');
+    assert.ok(page.lists().length > n0, 'the Beta lamp changes, so the list should be reposted');
   });
 
-  await test('新会话出现在它那一组的最上面；会话从“最近”变成“打开中”才换位置', async () => {
+  await test('a new session appears at the top of its group; a session only moves when it goes from "recent" to "open"', async () => {
     const f = fixtures();
     const fresh = session({ id: '44444444-4444-4444-8444-444444444444', title: 'Epsilon', startedMs: Date.now() });
     send([...f, fresh]);
@@ -713,7 +713,7 @@ async function extensionTests() {
     assert.deepStrictEqual(grp('recent'), [fresh.key, DELTA]);
   });
 
-  await test('范围切换：只看工作区 → 列表、总览、状态栏都按工作区；写到用户设置；视图说明；空状态给“显示所有会话”', async () => {
+  await test('scope switch: workspace only → list, overview and status bar all follow the workspace; written to user settings; view description; empty state offers "show all sessions"', async () => {
     send(fixtures());
     await tick();
     page.select(BETA);
@@ -722,16 +722,16 @@ async function extensionTests() {
     await registered.get('agentMonitor.scope.workspace')();
     assert.deepStrictEqual(log.updates.pop(), ['scope', 'workspace', ConfigurationTarget.Global]);
     const keys = page.keys();
-    assert.ok(!keys.includes(BETA), 'Beta 在别的目录，应该被滤掉');
+    assert.ok(!keys.includes(BETA), 'Beta is in another directory and should be filtered out');
     assert.deepStrictEqual([...keys].sort(), [ALPHA, GAMMA, DELTA].sort());
     assert.deepStrictEqual(overview.getChildren().map((n) => n.key).sort(), [ALPHA, GAMMA, DELTA].sort());
     assert.strictEqual(page.view.description, i18n.t('scope.workspace'));
     assert.ok(tv.description.includes(i18n.t('scope.workspace')));
-    // 选中的 Beta 被滤掉 → 重新按规则选：内容区换成范围内的会话，页面上高亮同一个
+    // the selected Beta is filtered out → select again by the rules: the content area switches to a session in scope and the page highlights the same one
     assert.ok(keys.includes(agentsShown()));
     assert.strictEqual(ctl.selectedKey, agentsShown());
     assert.strictEqual(page.list().selectedKey, agentsShown());
-    // 工作区里一个会话都没有 → filteredOut；内容区空状态带“显示所有会话”，页面点了执行 scope.all
+    // no sessions in the workspace → filteredOut; the content empty state offers "show all sessions", and clicking it on the page runs scope.all
     vscode.workspace.workspaceFolders = [{ uri: Uri.file(path.join(TMP, 'nothing-here')), name: 'x', index: 0 }];
     for (const fn of listeners.folders) fn({});
     assert.strictEqual(log.contexts['agentMonitor.filteredOut'], true);
@@ -747,7 +747,7 @@ async function extensionTests() {
     assert.deepStrictEqual(log.executed.slice(n), [['agentMonitor.scope.all']]);
     vscode.workspace.workspaceFolders = [{ uri: Uri.file(WS), name: 'ws', index: 0 }];
     for (const fn of listeners.folders) fn({});
-    // 工作区里设过 scope → 按钮写工作区那一层
+    // scope set in the workspace → the button writes to the workspace layer
     config.scope.workspaceValue = 'workspace';
     await registered.get('agentMonitor.scope.all')();
     assert.deepStrictEqual(log.updates.pop(), ['scope', 'all', ConfigurationTarget.Workspace]);
@@ -759,28 +759,28 @@ async function extensionTests() {
     setConfig('scope', 'all');
   });
 
-  await test('列表位置：auto 跟随终端标签列表（terminal.integrated.tabs.location），变了立即推给页面；设置 left / right 优先', async () => {
-    assert.strictEqual(page.list().position, 'right', '终端默认在右');
+  await test('list position: auto follows the terminal tab list (terminal.integrated.tabs.location) and changes are pushed to the page at once; a left / right setting takes precedence', async () => {
+    assert.strictEqual(page.list().position, 'right', 'terminal defaults to the right');
     setTerminalTabs('left');
     await tick();
     assert.strictEqual(page.list().position, 'left');
     setConfig('sessionListPosition', 'right');
     await tick();
-    assert.strictEqual(page.list().position, 'right', '设置优先');
+    assert.strictEqual(page.list().position, 'right', 'setting takes precedence');
     setConfig('sessionListPosition', 'auto');
     await tick();
     assert.strictEqual(page.list().position, 'left');
     setTerminalTabs('right');
     await tick();
     assert.strictEqual(page.list().position, 'right');
-    // 别的终端设置变了：不重发
+    // another terminal setting changed: not reposted
     const n = page.posted.length;
     for (const fn of [...listeners.config]) fn({ affectsConfiguration: (x) => x === 'terminal.integrated.fontSize' || x === 'terminal.integrated' });
     await tick();
     assert.strictEqual(page.posted.length, n);
   });
 
-  await test('列表宽度：页面拖完发 resizeList → 吸附后存 globalState 并推回页面；同样的宽度不重复写；重新激活后保持', async () => {
+  await test('list width: the page sends resizeList after dragging → snapped, stored in globalState and pushed back to the page; the same width is not written twice; kept after reactivation', async () => {
     const writes = [];
     const orig = globalState.update;
     globalState.update = (k, v) => { if (k === 'agentMonitor.sessionListWidth') writes.push(v); return orig(k, v); };
@@ -790,28 +790,28 @@ async function extensionTests() {
     assert.strictEqual(page.list().width, 264);
     page.msg({ type: 'resizeList', width: 264 });
     await tick();
-    assert.deepStrictEqual(writes, [264], '没变不写');
-    // 拖到中点以下：吸附成窄条
+    assert.deepStrictEqual(writes, [264], 'unchanged: not written');
+    // dragged below the midpoint: snaps to the narrow strip
     page.msg({ type: 'resizeList', width: 50 });
     await tick();
     assert.deepStrictEqual(writes, [264, 46]);
     assert.strictEqual(page.list().width, 46);
-    // 双击复位（页面发默认宽度）
+    // double-click resets (the page sends the default width)
     page.msg({ type: 'resizeList', width: 200 });
     await tick();
     assert.strictEqual(globalState.get('agentMonitor.sessionListWidth'), 200);
-    // 页面自己记着的宽度（webview state）在 ready 时报上来：以页面为准
+    // the width the page remembers (webview state) is reported on ready: the page wins
     page.ready({ listWidth: 240 });
     await tick();
     assert.strictEqual(globalState.get('agentMonitor.sessionListWidth'), 240);
     assert.strictEqual(page.list().width, 240);
     page.msg({ type: 'resizeList', width: 'wide' });
     await tick();
-    assert.strictEqual(globalState.get('agentMonitor.sessionListWidth'), 240, '不是数字不理');
+    assert.strictEqual(globalState.get('agentMonitor.sessionListWidth'), 240, 'non-numbers are ignored');
     globalState.update = orig;
   });
 
-  await test('行尾“…”：弹出与右键菜单同样内容的 QuickPick（标题来自 package.nls，按 compactable / resumable 过滤），选中后用 { sessionKey } 执行', async () => {
+  await test('row-end "…": opens a QuickPick with the same items as the context menu (titles from package.nls, filtered by compactable / resumable) and runs the pick with { sessionKey }', async () => {
     send(fixtures());
     await tick();
     const titleOf = (id) => nls[pkg.contributes.commands.find((c) => c.command === id).title.slice(1, -1)];
@@ -821,14 +821,14 @@ async function extensionTests() {
     await tick();
     await tick();
     const cmds = items.filter((x) => x.command).map((x) => x.command.replace('agentMonitor.', ''));
-    // Alpha：上下文 8.4 万（可压缩），没有续跑提示
+    // Alpha: 84K context (compactable), no resume hint
     assert.deepStrictEqual(cmds, ['compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-    assert.strictEqual(items.filter((x) => x.kind === vscode.QuickPickItemKind.Separator).length, 1, '两组之间一条分隔线');
+    assert.strictEqual(items.filter((x) => x.kind === vscode.QuickPickItemKind.Separator).length, 1, 'one separator between the two groups');
     const compact = items.find((x) => x.command === 'agentMonitor.compact');
     assert.strictEqual(compact.label, '$(screen-normal) ' + titleOf('agentMonitor.compact'));
     assert.strictEqual(last(log.quickPicks).o.placeHolder, 'Alpha chat');
     assert.deepStrictEqual(last(log.executed), ['agentMonitor.copyTranscriptPath', { webviewSection: 'session', sessionKey: ALPHA }]);
-    // Beta：有续跑提示、上下文不到 2 万 → 有 copyResume、没有 compact；取消就什么都不执行
+    // Beta: has a resume hint and under 20K context → copyResume but no compact; cancelling runs nothing
     const n = log.executed.length;
     quickPickAnswer = (it) => { items = it; return undefined; };
     page.msg({ type: 'more', sessionKey: BETA });
@@ -840,38 +840,38 @@ async function extensionTests() {
     quickPickAnswer = null;
   });
 
-  await test('命令都接受 webview 右键菜单传来的 { sessionKey }：compact、setAutoCompact 直接进该会话（不先选会话）', async () => {
+  await test('commands accept { sessionKey } from the webview context menu: compact and setAutoCompact go straight to that session (no session picker first)', async () => {
     const arg = { webviewSection: 'session', sessionKey: ALPHA, compactable: true, resumable: false, preventDefaultContextMenuItems: true, webview: 'agentMonitor.agents' };
     const errs = log.error.length;
     const qps = log.quickPicks.length;
     await registered.get('agentMonitor.compact')(arg);
     assert.strictEqual(log.error.length, errs);
     const qp = log.quickPicks[qps];
-    assert.ok(qp && qp.qp && String(qp.qp.title).includes('Alpha chat'), '压缩选项的标题带会话名：' + (qp && qp.qp && qp.qp.title));
+    assert.ok(qp && qp.qp && String(qp.qp.title).includes('Alpha chat'), 'compact options title includes the session name: ' + (qp && qp.qp && qp.qp.title));
     if (realAuto) {
       const n = log.quickPicks.length;
       await registered.get('agentMonitor.setAutoCompact')(arg);
       assert.strictEqual(log.error.length, errs);
       const q = log.quickPicks[n];
-      assert.ok(q, '没弹档位选择');
-      assert.ok(!(q.items || []).some((it) => it && typeof it.key === 'string' && it.key.includes(':')), '不该先弹会话选择');
+      assert.ok(q, 'no level picker shown');
+      assert.ok(!(q.items || []).some((it) => it && typeof it.key === 'string' && it.key.includes(':')), 'should not show the session picker first');
     }
   });
 
-  await test('隐藏已完成：只重算，不发给 worker；内容区拿到设置', async () => {
+  await test('hide completed: recomputed locally, not sent to the worker; the content area receives the setting', async () => {
     const sent = w0.messages.length;
     await registered.get('agentMonitor.hideCompleted')();
     assert.strictEqual(last(log.agentInputs).settings.hideCompleted, true);
     assert.strictEqual(tv.description, i18n.t('tree.hideCompleted'));
     const alpha = overview.getChildren().find((n) => n.key === ALPHA);
-    assert.ok(!overview.getChildren(alpha).some((n) => n.id.endsWith('/a/sub2')), '已完成的子智能体没隐藏');
+    assert.ok(!overview.getChildren(alpha).some((n) => n.id.endsWith('/a/sub2')), 'completed subagent not hidden');
     await registered.get('agentMonitor.showCompleted')();
     assert.strictEqual(last(log.agentInputs).settings.hideCompleted, false);
     assert.ok(overview.getChildren(overview.getChildren().find((n) => n.key === ALPHA)).some((n) => n.id.endsWith('/a/sub2')));
     assert.strictEqual(w0.messages.filter((m) => m.type === 'config').length, w0.messages.slice(0, sent).filter((m) => m.type === 'config').length);
   });
 
-  await test('扫描设置变了发 config（v2 配置）；刷新命令发 refresh，进度条（底部面板）等到下一份快照', async () => {
+  await test('scan setting changes send config (v2 config); the refresh command sends refresh, and the progress bar (bottom panel) waits for the next snapshot', async () => {
     setConfig('refreshSeconds', 3);
     let m = last(w0.messages);
     assert.strictEqual(m.type, 'config');
@@ -892,7 +892,7 @@ async function extensionTests() {
     assert.strictEqual(finished, true);
   });
 
-  await test('内容区：会话条的压缩只转给当前会话；列表行尾的压缩可以是列表里的任一会话', async () => {
+  await test('content area: compact from the session bar only goes to the current session; compact at a list row end can target any session in the list', async () => {
     const shown = agentsShown();
     page.msg({ type: 'compact', sessionKey: shown });
     await tick();
@@ -901,14 +901,14 @@ async function extensionTests() {
     page.msg({ type: 'compact', sessionKey: other });
     await tick();
     assert.deepStrictEqual(last(log.executed), ['agentMonitor.compact', other]);
-    // 不在列表里：不理
+    // not in the list: ignored
     const n = log.executed.length;
     page.msg({ type: 'compact', sessionKey: 'claude:not-listed' });
     await tick();
     assert.strictEqual(log.executed.length, n);
   });
 
-  await test('续跑：参数是 { sessionKey }；一条提示一种写法时直接复制；多种写法弹 QuickPick，复制扩展端重新生成的文本', async () => {
+  await test('resume: argument is { sessionKey }; a hint with one form is copied directly; several forms open a QuickPick and the text regenerated by the extension is copied', async () => {
     send(fixtures());
     await tick();
     quickPickAnswer = (items) => items.find((it) => it.variant === 'cli');
@@ -923,26 +923,26 @@ async function extensionTests() {
     assert.strictEqual(last(log.info), i18n.t('ext.noResume'));
   });
 
-  await test('打开记录：{ sessionKey }、字符串 key、总览树节点都行；只打开快照里出现过、存在的 .jsonl', async () => {
+  await test('open transcript: { sessionKey }, a string key or an overview tree node all work; only existing .jsonl files seen in a snapshot are opened', async () => {
     const open = registered.get('agentMonitor.openTranscript');
     await open({ webviewSection: 'session', sessionKey: ALPHA });
     assert.deepStrictEqual(log.opened.splice(0), [TRANSCRIPT]);
     await open(ALPHA);
     assert.deepStrictEqual(log.opened.splice(0), [TRANSCRIPT]);
     const alphaTree = overview.getChildren().find((n) => n.key === ALPHA);
-    await open(overview.getChildren(alphaTree)[0]); // 主智能体
+    await open(overview.getChildren(alphaTree)[0]); // main agent
     assert.deepStrictEqual(log.opened.splice(0), [TRANSCRIPT]);
     await open({ kind: 'agent', data: { file: '/etc/passwd' } });
     await open({ kind: 'agent', data: { file: path.join(TMP, 'unknown.jsonl') } });
     await open({ sessionKey: 'claude:nope' });
     await open(undefined);
     assert.deepStrictEqual(log.opened, []);
-    // 快照里有但文件不在了：提示
+    // in the snapshot but the file is gone: warn
     await open({ webviewSection: 'session', sessionKey: BETA });
     assert.strictEqual(last(log.warn), i18n.t('ext.transcriptMissing'));
   });
 
-  await test('§11.11 记录位置：revealTranscript 用 revealFileInOS 显示主记录；copyTranscriptPath 复制路径；只用快照里的路径', async () => {
+  await test('transcript location: revealTranscript shows the main transcript with revealFileInOS; copyTranscriptPath copies the path; only paths from the snapshot are used', async () => {
     send(fixtures());
     await tick();
     const reveal = registered.get('agentMonitor.revealTranscript');
@@ -950,9 +950,9 @@ async function extensionTests() {
     const n = log.executed.length;
     await reveal({ webviewSection: 'session', sessionKey: ALPHA });
     let x = log.executed.slice(n).find((e) => e[0] === 'revealFileInOS');
-    assert.ok(x, '没执行 revealFileInOS');
+    assert.ok(x, 'revealFileInOS not executed');
     assert.strictEqual(x[1].fsPath, TRANSCRIPT);
-    // 总览树的会话节点、sessionKey 字符串（内容区会话条发来的）都行
+    // an overview tree session node or a sessionKey string (sent by the content-area session bar) both work
     const alphaTree = overview.getChildren().find((node) => node.key === ALPHA);
     await copy(alphaTree);
     assert.strictEqual(last(log.clipboard), TRANSCRIPT);
@@ -961,7 +961,7 @@ async function extensionTests() {
     assert.strictEqual(last(log.clipboard), TRANSCRIPT);
     await copy({ webviewSection: 'session', sessionKey: ALPHA });
     assert.strictEqual(last(log.clipboard), TRANSCRIPT);
-    // provider 给了 transcript 字段时用它（§11.12.2）
+    // use the transcript field when the provider supplies it
     const f = fixtures();
     const other = path.join(TMP, 'alpha-transcript.jsonl');
     fs.writeFileSync(other, '{}\n');
@@ -972,7 +972,7 @@ async function extensionTests() {
     await reveal(ALPHA);
     x = log.executed.slice(m).find((e) => e[0] === 'revealFileInOS');
     assert.strictEqual(x[1].fsPath, other);
-    // 不认识的会话、伪造的路径：什么都不做
+    // unknown session or forged path: do nothing
     const k = log.executed.length;
     const clips = log.clipboard.length;
     await reveal({ kind: 'session', key: 'claude:nope', transcript: '/etc/passwd' });
@@ -981,13 +981,13 @@ async function extensionTests() {
     await reveal({ file: '/etc/passwd' });
     assert.strictEqual(log.executed.length, k);
     assert.strictEqual(log.clipboard.length, clips);
-    // 文件已不在：提示，不执行
+    // file is gone: warn, do not execute
     await reveal(BETA);
     assert.strictEqual(last(log.warn), i18n.t('ext.transcriptMissing'));
     assert.strictEqual(log.executed.length, k);
   });
 
-  await test('§11.8 第 4 条 handoff：有参数（{ sessionKey } 或 key）直接交给 compact.js 的 runHandoff；命令面板里没参数先选会话（当前选中的排第一）', async () => {
+  await test('handoff: with an argument ({ sessionKey } or key) it goes straight to runHandoff in compact.js; from the Command Palette without one, a session is picked first (the selected one comes first)', async () => {
     send(fixtures());
     await tick();
     const handoff = registered.get('agentMonitor.handoff');
@@ -999,21 +999,21 @@ async function extensionTests() {
     let seenItems = null;
     quickPickAnswer = (items) => { seenItems = items; return items[1]; };
     await handoff();
-    assert.strictEqual(seenItems[0].key, BETA, '当前选中的排第一');
+    assert.strictEqual(seenItems[0].key, BETA, 'selected session comes first');
     assert.ok(seenItems[0].description.includes(i18n.t('ext.pickSession.selected')));
     assert.deepStrictEqual(seenItems.map((it) => it.key).sort(), [...KEYS].sort());
     assert.deepStrictEqual(log.handoffs, [DELTA, seenItems[1].key]);
-    // 取消选择：不调用
+    // picker cancelled: not called
     quickPickAnswer = () => undefined;
     await handoff();
     assert.strictEqual(log.handoffs.length, 2);
     quickPickAnswer = null;
   });
 
-  await test('§11.12.3 存储：命令打开存储页，requestStorage 发 { type: storage, force } 给 worker，回来的报告去掉 type 交给页面', async () => {
+  await test('storage: the command opens the storage page; requestStorage sends { type: storage, force } to the worker, and the returned report goes to the page without type', async () => {
     await registered.get('agentMonitor.storage')();
     const deps = last(log.storageOpens);
-    assert.ok(deps, 'openStorageView 没被调用');
+    assert.ok(deps, 'openStorageView was not called');
     assert.strictEqual(deps.platform, process.platform);
     assert.strictEqual(typeof deps.i18n.t, 'function');
     const w = last(log.workers);
@@ -1024,35 +1024,35 @@ async function extensionTests() {
     const report = { at: Date.now(), claude: { dir: '/synthetic/.claude', dirSource: 'default', entries: [] }, codex: { dir: '/synthetic/.codex', dirSource: 'default', entries: [] },
       volumes: [{ mount: '/', freeBytes: 1, totalBytes: 2 }], cleanupPeriodDays: null };
     w.emit('message', { type: 'storage', ...report });
-    assert.deepStrictEqual(await p1, report, '报告里不带 type');
-    assert.deepStrictEqual(await p2, report, '同时等着的请求一起返回');
-    // worker 不在了还有人在等：再要一次时先起一个新 worker，新 worker 把等着的请求一次发出去
+    assert.deepStrictEqual(await p1, report, 'report has no type');
+    assert.deepStrictEqual(await p2, report, 'concurrent pending requests resolve together');
+    // worker gone while requests are pending: the next request starts a new worker, which sends the pending requests in one go
     const p3 = deps.requestStorage(false);
     ctl.stopWorker();
     const p4 = deps.requestStorage(false);
     const w2 = last(log.workers);
     assert.notStrictEqual(w2, w);
-    assert.strictEqual(w2.messages.filter((m) => m.type === 'storage').length, 1, '新 worker 收到一次存储请求');
+    assert.strictEqual(w2.messages.filter((m) => m.type === 'storage').length, 1, 'new worker receives one storage request');
     w2.emit('message', { type: 'storage', ...report, at: 2 });
     assert.strictEqual((await p3).at, 2);
     assert.strictEqual((await p4).at, 2);
     await tick();
-    assert.strictEqual(last(log.workers), w2, '旧 worker 被停掉后不会自己重启');
-    // 打开中的会话（迁移前检查）：Claude 看登记表，Codex 看进行中的回合
+    assert.strictEqual(last(log.workers), w2, 'a stopped old worker does not restart by itself');
+    // open sessions (checked before migration): Claude uses the registry, Codex uses turns in progress
     send(fixtures());
     await tick();
     assert.deepStrictEqual(deps.liveSessions().map((x) => x.sessionId).sort(), [fixtures()[0].id, fixtures()[2].id].sort());
     assert.deepStrictEqual(Object.keys(deps.liveSessions()[0]).sort(), ['provider', 'sessionId', 'title']);
   });
 
-  await test('§11.10 实测压缩点：新的自动压缩按“模型|窗口”写 globalState，并马上在 config 里带给 worker；旧的、手动的、设置覆盖的不算', async () => {
+  await test('observed compaction point: a new auto-compaction is written to globalState keyed by "model|window" and sent to the worker in config right away; old, manual and settings-overridden ones do not count', async () => {
     const w = last(log.workers);
     const f = fixtures();
     const t0 = Date.now() - 10 * MIN;
     f[1].contextWindow = 1000000;
     f[1].main.lastCompact = { ms: t0, trigger: 'auto', preTokens: 955123, postTokens: 30000, model: 'claude-opus-5-5' };
-    f[3].main.lastCompact = { ms: t0 + 1000, trigger: 'manual', preTokens: 400000, postTokens: 20000, model: 'claude-opus-5-5' }; // 手动：不算
-    f[2].main.lastCompact = { ms: t0 + 2000, trigger: 'auto', preTokens: 200000, postTokens: 20000, model: 'gpt-5.5' };        // Codex：不算
+    f[3].main.lastCompact = { ms: t0 + 1000, trigger: 'manual', preTokens: 400000, postTokens: 20000, model: 'claude-opus-5-5' }; // manual: ignored
+    f[2].main.lastCompact = { ms: t0 + 2000, trigger: 'auto', preTokens: 200000, postTokens: 20000, model: 'gpt-5.5' };        // Codex: ignored
     const sent = w.messages.length;
     send(f);
     await tick();
@@ -1060,7 +1060,7 @@ async function extensionTests() {
     const cfgs = w.messages.slice(sent).filter((m) => m.type === 'config');
     assert.strictEqual(cfgs.length, 1);
     assert.deepStrictEqual(cfgs[0].cfg.observedCompact, { 'claude-opus-5-5|1000000': 955123 });
-    // 同一份再来：不再发 config，也不再写 globalState（每 2 秒一份快照，不能每次都写）
+    // same snapshot again: no config sent and no globalState write (a snapshot arrives every 2 seconds, so do not write every time)
     const sent2 = w.messages.length;
     const origUpdate = globalState.update;
     let writes = 0;
@@ -1071,8 +1071,8 @@ async function extensionTests() {
     await tick();
     globalState.update = origUpdate;
     assert.strictEqual(w.messages.slice(sent2).filter((m) => m.type === 'config').length, 0);
-    assert.strictEqual(writes, 0, '没有新的实测时不写 globalState');
-    // 更早的一次（另一个会话）不覆盖；压缩点来自设置的会话不学
+    assert.strictEqual(writes, 0, 'no globalState write without a new observation');
+    // an earlier one (another session) does not overwrite; sessions whose compaction point comes from settings are not learned from
     const g = fixtures();
     g[1].contextWindow = 1000000;
     g[1].main.lastCompact = { ms: t0 - HOUR, trigger: 'auto', preTokens: 900000, model: 'claude-opus-5-5' };
@@ -1082,59 +1082,59 @@ async function extensionTests() {
     send(g);
     await tick();
     assert.deepStrictEqual(globalState.get('agentMonitor.observedCompact'), { 'claude-opus-5-5|1000000': 955123 });
-    // 更晚的一次：覆盖；另一个窗口单独记
+    // a later one overwrites; a different window is recorded separately
     const h = fixtures();
     h[1].contextWindow = 1000000;
     h[1].main.lastCompact = { ms: t0 + 5 * MIN, trigger: 'auto', preTokens: 961000, model: 'claude-opus-5-5' };
     h[3].main.lastCompact = { ms: t0 + 5 * MIN, trigger: 'auto', preTokens: 166500, model: 'claude-opus-4-8' };
-    h[3].contextWindow = 200000; // 会话级窗口优先于主智能体 tokens 里的 1M
+    h[3].contextWindow = 200000; // the session-level window takes precedence over the 1M in the main agent tokens
     const sent3 = w.messages.length;
     send(h);
     await tick();
     const want = { 'claude-opus-5-5|1000000': 961000, 'claude-opus-4-8|200000': 166500 };
     assert.deepStrictEqual(globalState.get('agentMonitor.observedCompact'), want);
     assert.deepStrictEqual(last(w.messages.slice(sent3).filter((m) => m.type === 'config')).cfg.observedCompact, want);
-    assert.ok(log.output.some((l) => l.includes('claude-opus-4-8')), '输出面板记一行');
-    // 之后别的设置变化发的 config 也带着它
+    assert.ok(log.output.some((l) => l.includes('claude-opus-4-8')), 'one line logged to the output panel');
+    // later config messages from other setting changes carry it too
     setConfig('staleMinutes', 6);
     assert.deepStrictEqual(last(w.messages).cfg.observedCompact, want);
     setConfig('staleMinutes', 5);
-    // 纯函数
+    // pure function
     const { observedCompactsOf } = ext._internal;
-    assert.strictEqual(observedCompactsOf([{ provider: 'claude', main: { model: 'm', lastCompact: { ms: 1, trigger: 'auto', preTokens: 0 }, tokens: { contextWindow: 1 } } }]).size, 0, 'preTokens 为 0 不学');
+    assert.strictEqual(observedCompactsOf([{ provider: 'claude', main: { model: 'm', lastCompact: { ms: 1, trigger: 'auto', preTokens: 0 }, tokens: { contextWindow: 1 } } }]).size, 0, 'preTokens of 0 is not learned');
     assert.strictEqual(observedCompactsOf([{ provider: 'claude', compactAtSource: 'disabled', main: { model: 'm', lastCompact: { ms: 1, trigger: 'auto', preTokens: 5 }, tokens: { contextWindow: 9 } } }]).size, 0);
     assert.strictEqual(observedCompactsOf(null).size, 0);
-    // 压缩时的模型和窗口以 lastCompact 上的为准（provider 按那次的模型算好 contextWindow）；键与 core/context.js 的 observedKey 同形
+    // model and window at compaction time come from lastCompact (the provider computes contextWindow for that model); keys have the same shape as observedKey in core/context.js
     const switched = observedCompactsOf([{ provider: 'claude', contextWindow: 1000000,
       main: { model: 'claude-opus-5-5', tokens: { contextWindow: 1000000 }, lastCompact: { ms: 5, trigger: 'auto', preTokens: 166000, model: 'claude-opus-4-8', contextWindow: 200000 } } }]);
     const { observedKey } = require(path.join(ROOT, 'lib', 'core', 'context'));
     assert.deepStrictEqual([...switched.keys()], [observedKey('claude-opus-4-8', 200000)]);
   });
 
-  await test('设置里不再有 staleAsNeedsYou；右侧拿到的设置只有这几项', () => {
+  await test('settings no longer include staleAsNeedsYou; the agents view receives only these settings', () => {
     const settings = last(log.agentInputs).settings;
     assert.deepStrictEqual(Object.keys(settings).sort(), ['contextHintAct', 'contextHintStart', 'hideCompleted', 'showCost']);
   });
 
-  await test('worker 崩溃自动重启最多 3 次；重启后重发 focus；之后刷新能再起一个', async () => {
+  await test('a crashed worker restarts automatically up to 3 times; focus is resent after restart; a later refresh can start another', async () => {
     let w = log.workers[log.workers.length - 1];
     for (let i = 0; i < 3; i++) {
       const count = log.workers.length;
       w.emit('exit', 1);
-      assert.strictEqual(log.workers.length, count + 1, `第 ${i + 1} 次崩溃没有重启`);
+      assert.strictEqual(log.workers.length, count + 1, `no restart after crash ${i + 1}`);
       w = last(log.workers);
-      assert.ok(w.messages.some((m) => m.type === 'focus'), '新 worker 没收到 focus');
+      assert.ok(w.messages.some((m) => m.type === 'focus'), 'new worker did not receive focus');
     }
     const count = log.workers.length;
     w.emit('exit', 1);
-    assert.strictEqual(log.workers.length, count, '超过 3 次还在重启');
+    assert.strictEqual(log.workers.length, count, 'still restarting after 3 times');
     const done = registered.get('agentMonitor.refresh')();
-    assert.strictEqual(log.workers.length, count + 1, 'worker 挂了之后刷新没有重起');
+    assert.strictEqual(log.workers.length, count + 1, 'refresh did not restart the dead worker');
     last(log.workers).emit('message', snapshot(fixtures()));
     await done;
   });
 
-  await test('停用：worker 被 terminate，随后的退出不会触发重启；输出面板没有报错', async () => {
+  await test('deactivation: the worker is terminated and the following exit does not trigger a restart; no errors in the output panel', async () => {
     const w = last(log.workers);
     const count = log.workers.length;
     for (const d of context.subscriptions) d.dispose();
@@ -1143,18 +1143,18 @@ async function extensionTests() {
     await tick();
     assert.strictEqual(log.workers.length, count);
     ext.deactivate();
-    // 只允许 worker 重启和“记下实测压缩点”这两类信息行
+    // only two kinds of info lines are allowed: worker restarts and "recorded an observed compaction point"
     const bad = log.output.filter((l) => !/Background reader stopped|Measured auto-compact point/.test(l));
     assert.deepStrictEqual(bad, [], bad.join('\n'));
   });
 
-  await test('再次激活：不再聚焦底部面板；旧设置 onlyWorkspace=true 迁移成 scope=workspace；实测压缩点从 globalState 带进 worker；缺模块时有占位命令', () => {
+  await test('reactivation: the bottom panel is not focused again; the legacy onlyWorkspace=true setting migrates to scope=workspace; observed compaction points go from globalState to the worker; placeholder commands when modules are missing', () => {
     for (const k of Object.keys(config)) delete config[k];
     config.onlyWorkspace = { globalValue: true };
     registered.clear();
     const executed = log.executed.length;
     const context2 = { subscriptions: [], extensionPath: ROOT, extensionUri: Uri.file(ROOT), globalState, workspaceState: memento() };
-    // 这次模拟自动压缩、存储页模块都加载不到：命令照样注册，点了给出说明
+    // this time the auto-compact and storage modules fail to load: commands are still registered and explain the problem when run
     modOverride.autocompact = {};
     modOverride.storage = {};
     ext.activate(context2);
@@ -1166,7 +1166,7 @@ async function extensionTests() {
     registered.get('agentMonitor.storage')();
     assert.deepStrictEqual(log.error.slice(errs), [i18n.t('ext.autoCompactUnavailable'), i18n.t('ext.storageUnavailable')]);
     assert.ok(!log.executed.slice(executed).some((x) => x[0] === 'agentMonitor.agents.focus'));
-    // 列表宽度从 globalState 带进新的控制器
+    // list width is carried from globalState into the new controller
     assert.strictEqual(ext._controller().listWidth, 240);
     assert.ok(log.updates.some(([k, v, t]) => k === 'scope' && v === 'workspace' && t === ConfigurationTarget.Global));
     assert.deepStrictEqual(last(log.workers).opts.workerData.observedCompact, globalState.get('agentMonitor.observedCompact'));
@@ -1189,15 +1189,15 @@ async function manifestTests() {
   const containers = new Set([...c.viewsContainers.activitybar, ...c.viewsContainers.panel].map((x) => x.id));
   const settings = new Set(Object.keys(c.configuration.properties));
 
-  await test('后台线程带内存限制：新生代压小，老生代只作保险', () => {
+  await test('background thread has memory limits: small young generation, old generation only as a safety net', () => {
     const src = fs.readFileSync(path.join(ROOT, 'extension.js'), 'utf8');
     const m = src.match(/const WORKER_LIMITS = Object\.freeze\(\{ maxYoungGenerationSizeMb: (\d+), maxOldGenerationSizeMb: (\d+) \}\);/);
-    assert.ok(m, '有 WORKER_LIMITS');
+    assert.ok(m, 'WORKER_LIMITS exists');
     assert.ok(Number(m[1]) <= 8 && Number(m[2]) >= 256, m[0]);
-    assert.ok(/new Worker\(.*resourceLimits: WORKER_LIMITS \}\);/.test(src), '起 worker 时带上');
+    assert.ok(/new Worker\(.*resourceLimits: WORKER_LIMITS \}\);/.test(src), 'passed when starting the worker');
   });
 
-  await test('发布字段：名字、版本、预览、许可、发布者、仓库、图标、分类', () => {
+  await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
     assert.strictEqual(pkg.version, '0.3.1');
     assert.strictEqual(pkg.preview, true);
@@ -1206,72 +1206,72 @@ async function manifestTests() {
     assert.strictEqual(pkg.displayName, '%displayName%');
     assert.strictEqual(nls.displayName, 'CYUNEO Agent Monitor');
     assert.strictEqual(pkg.description, '%description%');
-    assert.ok(!('private' in pkg), '要删掉 private');
+    assert.ok(!('private' in pkg), 'private must be removed');
     assert.deepStrictEqual(pkg.author, { name: 'Chenyu Guo', url: 'https://github.com/cyuneo' });
     assert.strictEqual(pkg.repository.url, 'https://github.com/cyuneo/cyuneo-agent-monitor.git');
     assert.strictEqual(pkg.bugs.url, 'https://github.com/cyuneo/cyuneo-agent-monitor/issues');
     assert.ok(pkg.homepage.startsWith('https://github.com/cyuneo/cyuneo-agent-monitor'));
     assert.ok(pkg.qna);
-    // §11.12.7a：categories 加上商店的正式分类 AI
+    // categories include the official Marketplace category AI
     assert.deepStrictEqual(pkg.categories, ['AI', 'Visualization', 'Other']);
-    assert.ok(/\.png$/.test(pkg.icon), '扩展图标必须是 PNG');
-    if (!fs.existsSync(path.join(ROOT, pkg.icon))) console.log(`        （${pkg.icon} 还没生成，由发布材料阶段提供）`);
+    assert.ok(/\.png$/.test(pkg.icon), 'extension icon must be a PNG');
+    if (!fs.existsSync(path.join(ROOT, pkg.icon))) console.log(`        (${pkg.icon} not generated yet; it comes with the release assets)`);
     assert.deepStrictEqual(pkg.galleryBanner, { color: '#080808', theme: 'dark' });
     assert.ok(pkg.keywords.length > 0 && pkg.keywords.length <= 30);
     assert.ok(pkg.engines.vscode);
   });
 
-  await test('名称、关键词、图标路径里不出现 Claude / Anthropic / Codex / OpenAI；描述带非官方声明', () => {
+  await test('name, keywords and icon path do not contain Claude / Anthropic / Codex / OpenAI; the description carries an unofficial disclaimer', () => {
     const banned = /claude|anthropic|codex|openai/i;
-    for (const s of [pkg.name, nls.displayName, pkg.icon, ...pkg.keywords]) assert.ok(!banned.test(s), `出现了第三方名称：${s}`);
+    for (const s of [pkg.name, nls.displayName, pkg.icon, ...pkg.keywords]) assert.ok(!banned.test(s), `third-party name found: ${s}`);
     assert.ok(/Unofficial; not affiliated with Anthropic or OpenAI\./.test(nls.description));
     assert.ok(/session logs/.test(nls.description) && /Claude Code/.test(nls.description) && /Codex/.test(nls.description));
   });
 
-  await test('每个 %key% 在 package.nls.json 里都有值，且没有多余的键', () => {
+  await test('every %key% has a value in package.nls.json, with no extra keys', () => {
     const used = new Set();
     JSON.stringify(pkg).replace(/%([\w.-]+)%/g, (m, k) => used.add(k));
     const missing = [...used].filter((k) => typeof nls[k] !== 'string' || !nls[k].trim());
     assert.deepStrictEqual(missing, []);
     const unused = Object.keys(nls).filter((k) => !used.has(k));
     assert.deepStrictEqual(unused, []);
-    // 命令标题、设置描述、视图名一律走 %key%
+    // command titles, setting descriptions and view names all use %key%
     for (const x of c.commands) assert.ok(/^%[\w.]+%$/.test(x.title) && /^%[\w.]+%$/.test(x.category), x.command);
     for (const [k, v] of Object.entries(c.configuration.properties)) {
       const d = v.description || v.markdownDescription;
-      assert.ok(/^%[\w.]+%$/.test(d), `设置 ${k} 的描述没走 nls`);
+      assert.ok(/^%[\w.]+%$/.test(d), `description of setting ${k} does not use nls`);
     }
-    // 译文文件（翻译阶段生成）：不能有英文里已经没有的键；英文新加、还没翻译的键 VS Code 会退回英文，这里只提示
+    // translation files: must not contain keys that English no longer has; new English keys not yet translated fall back to English in VS Code, so they are only reported here
     for (const loc of ['zh-cn', 'zh-tw', 'ko', 'ja']) {
       const f = path.join(ROOT, `package.nls.${loc}.json`);
       if (!fs.existsSync(f)) continue;
       const t = JSON.parse(fs.readFileSync(f, 'utf8'));
       const stale = Object.keys(t).filter((k) => !(k in nls));
-      assert.deepStrictEqual(stale, [], `${loc} 有多余的键`);
+      assert.deepStrictEqual(stale, [], `${loc} has extra keys`);
       const pending = Object.keys(nls).filter((k) => !(k in t));
-      if (pending.length) console.log(`        （package.nls.${loc}.json 还有 ${pending.length} 个键待翻译：${pending.join(', ')}）`);
-      for (const [k, v] of Object.entries(t)) assert.ok(typeof v === 'string' && v.trim(), `${loc} ${k} 为空`);
+      if (pending.length) console.log(`        (package.nls.${loc}.json has ${pending.length} untranslated keys: ${pending.join(', ')})`);
+      for (const [k, v] of Object.entries(t)) assert.ok(typeof v === 'string' && v.trim(), `${loc} ${k} is empty`);
     }
   });
 
-  await test('视图与容器（§11.13）：底部面板只有一个 webview 视图（标题并进面板标签，像终端），侧边栏总览树', () => {
-    for (const v of views.values()) assert.ok(containers.has(v.container), `容器 ${v.container} 未声明`);
-    assert.deepStrictEqual(c.views.agentMonitor.map((v) => v.id), ['agentMonitor.agents'], '底部面板只留一个视图');
-    assert.ok(!views.has('agentMonitor.sessions'), '会话原生树要删掉');
+  await test('views and containers: the bottom panel has a single webview view (title merged into the panel tab, like the terminal), plus the sidebar overview tree', () => {
+    for (const v of views.values()) assert.ok(containers.has(v.container), `container ${v.container} not declared`);
+    assert.deepStrictEqual(c.views.agentMonitor.map((v) => v.id), ['agentMonitor.agents'], 'bottom panel keeps a single view');
+    assert.ok(!views.has('agentMonitor.sessions'), 'native session tree must be removed');
     assert.strictEqual(views.get('agentMonitor.agents').container, 'agentMonitor');
     assert.strictEqual(views.get('agentMonitor.agents').type, 'webview');
-    // 只有一个视图时，面板标签显示 contextualTitle（容器名 Agent Monitor）
+    // with a single view, the panel tab shows contextualTitle (container name Agent Monitor)
     assert.strictEqual(views.get('agentMonitor.agents').contextualTitle, '%container.title%');
     assert.ok(!c.viewsWelcome.some((w) => w.view === 'agentMonitor.sessions'));
     assert.strictEqual(views.get('agentMonitor.tree').container, 'agentMonitorSidebar');
-    assert.ok(!views.has('agentMonitor.view'), '旧的表格视图要删掉');
+    assert.ok(!views.has('agentMonitor.view'), 'old table view must be removed');
     assert.ok(c.viewsContainers.panel.some((p) => p.id === 'agentMonitor'));
     for (const x of [...c.viewsContainers.activitybar, ...c.viewsContainers.panel, ...views.values()]) {
-      if (x.icon) assert.ok(fs.existsSync(path.join(ROOT, x.icon)), `图标不存在 ${x.icon}`);
+      if (x.icon) assert.ok(fs.existsSync(path.join(ROOT, x.icon)), `icon missing: ${x.icon}`);
     }
   });
 
-  await test('命令总表（§11.12.4）：命令与图标一致，没有 pin / unpin / conversation / pinned', () => {
+  await test('command table: commands and icons match; no pin / unpin / conversation / pinned', () => {
     const want = {
       show: undefined, showTree: '$(list-tree)', refresh: '$(refresh)', openSettings: '$(gear)',
       'scope.all': '$(globe)', 'scope.workspace': '$(root-folder)', markSeen: '$(check)', markAllSeen: '$(check-all)',
@@ -1282,37 +1282,37 @@ async function manifestTests() {
     assert.deepStrictEqual([...commands].sort(), Object.keys(want).map((x) => 'agentMonitor.' + x).sort());
     for (const [id, icon] of Object.entries(want)) assert.strictEqual(c.commands.find((x) => x.command === 'agentMonitor.' + id).icon, icon, id);
     for (const x of c.commands) if (x.icon) assert.ok(/^\$\([a-z0-9-]+\)$/.test(x.icon), x.icon);
-    // 用到的 codicon 在打包进来的 codicons 里都有
+    // every codicon used exists in the bundled codicons
     const css = fs.readFileSync(path.join(ROOT, 'media', 'codicons', 'codicon.css'), 'utf8');
     for (const icon of Object.values(want).filter(Boolean)) assert.ok(css.includes('.codicon-' + icon.slice(2, -1) + ':'), icon);
   });
 
-  await test('菜单（§11.12.4）：记录位置、交接笔记、自动压缩在总览树的会话右键；存储在底部面板标题栏 … 菜单', () => {
+  await test('menus: transcript location, handoff notes and auto-compact are in the overview tree session context menu; storage is in the … menu of the bottom panel title bar', () => {
     const ctxMenu = c.menus['view/item/context'];
     const sessionMenu = (cmd) => ctxMenu.find((m) => m.command === cmd && !m.group.startsWith('inline'));
     for (const id of ['revealTranscript', 'copyTranscriptPath', 'handoff', 'setAutoCompact']) {
       const m = sessionMenu('agentMonitor.' + id);
-      assert.ok(m, id + ' 不在右键菜单');
+      assert.ok(m, id + ' is not in the context menu');
       assert.ok(m.when.includes('view == agentMonitor.tree') && m.when.includes('viewItem =~ /\\bsession\\b/'), id + ': ' + m.when);
       const re = /viewItem =~ \/(.+?)\//.exec(m.when);
       const rx = new RegExp(re[1].replace(/\\\\/g, '\\'));
-      assert.ok(rx.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), '会话节点能命中');
-      assert.ok(!rx.test('agent') && !rx.test('mainAgent') && !rx.test('workflow') && !rx.test('group'), '智能体、工作流、组头不命中');
+      assert.ok(rx.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), 'session node matches');
+      assert.ok(!rx.test('agent') && !rx.test('mainAgent') && !rx.test('workflow') && !rx.test('group'), 'agent, workflow and group header nodes do not match');
     }
-    // 右键菜单的分组顺序：会话操作（压缩、交接、自动压缩、续跑、已看过）→ 打开（记录、显示、复制路径）
+    // context menu group order: session actions (compact, handoff, auto-compact, resume, seen) → open (transcript, reveal, copy path)
     const order = ctxMenu.filter((m) => !m.group.startsWith('inline')).map((m) => m.group + ' ' + m.command.replace('agentMonitor.', ''));
     assert.deepStrictEqual(order.filter((x) => x.startsWith('1_session')), [
       '1_session@1 compact', '1_session@2 handoff', '1_session@3 setAutoCompact', '1_session@4 copyResume', '1_session@5 markSeen']);
     assert.deepStrictEqual(order.filter((x) => x.startsWith('2_open')), ['2_open@1 openTranscript', '2_open@2 revealTranscript', '2_open@3 copyTranscriptPath']);
-    // 存储：底部面板标题栏的 … 菜单（不在 navigation 组）
+    // storage: the … menu in the bottom panel title bar (not in the navigation group)
     const st = c.menus['view/title'].filter((m) => m.command === 'agentMonitor.storage');
     assert.strictEqual(st.length, 1);
     assert.strictEqual(st[0].when, 'view == agentMonitor.agents');
-    assert.ok(!st[0].group.startsWith('navigation'), '要在 … 菜单里');
-    assert.ok(!JSON.stringify(c.menus).includes('agentMonitor.sessions'), '菜单里不再引用会话原生树');
+    assert.ok(!st[0].group.startsWith('navigation'), 'must be in the … menu');
+    assert.ok(!JSON.stringify(c.menus).includes('agentMonitor.sessions'), 'menus no longer reference the native session tree');
   });
 
-  await test('底部面板标题栏（§11.13）：范围切换、隐藏已完成、全部标为已看、刷新在按钮上；存储、设置在 … 溢出菜单', () => {
+  await test('bottom panel title bar: scope switch, hide completed, mark all seen and refresh are buttons; storage and settings are in the … overflow menu', () => {
     const items = c.menus['view/title'].filter((m) => /view == agentMonitor\.agents\b/.test(m.when));
     const nav = items.filter((m) => m.group.startsWith('navigation')).map((m) => `${m.group} ${m.command || m.submenu}`);
     assert.deepStrictEqual(nav, [
@@ -1322,21 +1322,21 @@ async function manifestTests() {
     ]);
     const overflow = items.filter((m) => !m.group.startsWith('navigation')).map((m) => m.command);
     assert.deepStrictEqual(overflow, ['agentMonitor.storage', 'agentMonitor.openSettings']);
-    // 两个范围子菜单互斥，按当前档显示图标
+    // the two scope submenus are mutually exclusive; the icon reflects the current scope
     const scope = items.filter((m) => m.submenu);
     assert.ok(scope[0].when.includes("config.agentMonitor.scope != 'workspace'") && scope[1].when.includes("config.agentMonitor.scope == 'workspace'"));
   });
 
-  await test('webview 右键菜单（§11.13）：when = webviewId + webviewSection + compactable / resumable；按行上的 data-vscode-context 求值', () => {
+  await test('webview context menu: when = webviewId + webviewSection + compactable / resumable; evaluated against the data-vscode-context of the row', () => {
     const menu = c.menus['webview/context'];
     assert.ok(Array.isArray(menu) && menu.length === 8);
-    // 极简的 when 求值：只支持 && 连接的 key == 'v' / key / !key（这里用到的就这几种）
+    // minimal when evaluator: only supports key == 'v' / key / !key joined by && (all that is used here)
     const evalWhen = (when, ctx) => when.split('&&').map((x) => x.trim()).every((cl) => {
       let m = /^(\w+) == '([^']*)'$/.exec(cl);
       if (m) return ctx[m[1]] === m[2];
       m = /^!(\w+)$/.exec(cl);
       if (m) return !ctx[m[1]];
-      assert.ok(/^\w+$/.test(cl), '不认识的写法：' + cl);
+      assert.ok(/^\w+$/.test(cl), 'unsupported clause: ' + cl);
       return !!ctx[cl];
     });
     for (const m of menu) {
@@ -1349,54 +1349,54 @@ async function manifestTests() {
       ['compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
     assert.deepStrictEqual(shown(row({ compactable: false, resumable: true })),
       ['handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-    assert.deepStrictEqual(shown({}), [], '内容区（没有 webviewSection）不出会话菜单');
-    assert.deepStrictEqual(menu.filter((m) => evalWhen(m.when, { webviewId: 'other.view', webviewSection: 'session', compactable: true })), [], '别的 webview 不出');
-    // 分组顺序：会话操作 → 打开
+    assert.deepStrictEqual(shown({}), [], 'no session menu in the content area (no webviewSection)');
+    assert.deepStrictEqual(menu.filter((m) => evalWhen(m.when, { webviewId: 'other.view', webviewSection: 'session', compactable: true })), [], 'not shown in other webviews');
+    // group order: session actions → open
     assert.deepStrictEqual(menu.map((m) => m.group), ['1_session@1', '1_session@2', '1_session@3', '1_session@4', '1_session@5', '2_open@1', '2_open@2', '2_open@3']);
   });
 
-  await test('菜单：compact 在总览树右键（viewItem =~ /\\bcompactable\\b/）与 webview 右键（compactable）；只引用声明过的命令、视图、设置', () => {
+  await test('menus: compact is in the overview tree context menu (viewItem =~ /\\bcompactable\\b/) and the webview context menu (compactable); only declared commands, views and settings are referenced', () => {
     const tree = c.menus['view/item/context'].filter((m) => m.command === 'agentMonitor.compact');
     assert.ok(tree.some((m) => !m.group.startsWith('inline') && /view == agentMonitor\.tree/.test(m.when) && m.when.includes('viewItem =~ /\\bcompactable\\b/')));
     assert.ok(c.menus['webview/context'].some((m) => m.command === 'agentMonitor.compact' && / && compactable$/.test(m.when)));
     const contextValues = ['session', 'provider-claude', 'lamp-doneUnseen', 'resumable', 'compactable', 'agent', 'mainAgent', 'workflow'];
     for (const [menu, items] of Object.entries(c.menus)) {
-      if (menu !== 'commandPalette' && !menu.startsWith('view/') && !menu.startsWith('webview/')) assert.ok(submenus.has(menu), `未声明的子菜单 ${menu}`);
+      if (menu !== 'commandPalette' && !menu.startsWith('view/') && !menu.startsWith('webview/')) assert.ok(submenus.has(menu), `undeclared submenu ${menu}`);
       for (const it of items) {
-        if (it.command) assert.ok(commands.has(it.command), `${menu} 引用了未声明的命令 ${it.command}`);
-        if (it.submenu) assert.ok(submenus.has(it.submenu), `未声明的子菜单 ${it.submenu}`);
+        if (it.command) assert.ok(commands.has(it.command), `${menu} references undeclared command ${it.command}`);
+        if (it.submenu) assert.ok(submenus.has(it.submenu), `undeclared submenu ${it.submenu}`);
         const when = it.when || '';
-        for (const m of when.matchAll(/\bview == ([\w.]+)/g)) assert.ok(views.has(m[1]), `未知视图 ${m[1]}`);
-        for (const m of when.matchAll(/\bwebviewId == '([\w.]+)'/g)) assert.ok(views.has(m[1]) && views.get(m[1]).type === 'webview', `未知 webview ${m[1]}`);
-        for (const m of when.matchAll(/\bconfig\.([\w.]+)/g)) assert.ok(settings.has(m[1]), `未知设置 ${m[1]}`);
+        for (const m of when.matchAll(/\bview == ([\w.]+)/g)) assert.ok(views.has(m[1]), `unknown view ${m[1]}`);
+        for (const m of when.matchAll(/\bwebviewId == '([\w.]+)'/g)) assert.ok(views.has(m[1]) && views.get(m[1]).type === 'webview', `unknown webview ${m[1]}`);
+        for (const m of when.matchAll(/\bconfig\.([\w.]+)/g)) assert.ok(settings.has(m[1]), `unknown setting ${m[1]}`);
         for (const m of when.matchAll(/viewItem =~ \/(.+?)\/(?:\s|$)/g)) {
           const re = new RegExp(m[1].replace(/\\\\/g, '\\'));
-          assert.ok(contextValues.some((v) => re.test(v)), `viewItem 正则匹配不到任何 contextValue：${m[1]}`);
+          assert.ok(contextValues.some((v) => re.test(v)), `viewItem regex matches no contextValue: ${m[1]}`);
         }
-        assert.ok(!/[^=!<>]=[^=~]/.test(when), `when 写成了单个 = ：${when}`);
+        assert.ok(!/[^=!<>]=[^=~]/.test(when), `when uses a single =: ${when}`);
       }
     }
-    // format.js 产出的 contextValue 能被 compact 的 when 命中
+    // the contextValue produced by format.js matches the compact when clause
     const re = /\bcompactable\b/;
     assert.ok(re.test(fmt.sessionContextValue(fixtures()[0], 'working')));
-    assert.ok(!re.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), '上下文 1.2 万不该给压缩按钮');
+    assert.ok(!re.test(fmt.sessionContextValue(fixtures()[1], 'doneSeen')), '12K context should not get a compact button');
   });
 
-  await test('命令面板（§11.12.4、§11.12.7a）：需要节点参数的隐藏；compact / handoff / setAutoCompact / storage 可用', () => {
+  await test('Command Palette: commands that need a node argument are hidden; compact / handoff / setAutoCompact / storage are available', () => {
     const hidden = c.menus.commandPalette.filter((x) => x.when === 'false').map((x) => x.command);
     assert.deepStrictEqual(hidden.sort(), ['openTranscript', 'revealTranscript', 'copyTranscriptPath', 'markSeen', 'copyResume'].map((x) => 'agentMonitor.' + x).sort());
     for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage']) {
-      assert.ok(!c.menus.commandPalette.some((x) => x.command === 'agentMonitor.' + id), id + ' 在命令面板里应该可见');
+      assert.ok(!c.menus.commandPalette.some((x) => x.command === 'agentMonitor.' + id), id + ' should be visible in the Command Palette');
     }
   });
 
-  await test('设置总表（§11.12.5）：和总表一致，没有 staleAsNeedsYou 残留', () => {
+  await test('settings table: matches the reference list, no leftover staleAsNeedsYou', () => {
     assert.ok(!('agentMonitor.staleAsNeedsYou' in c.configuration.properties));
     assert.ok(!Object.keys(nls).some((k) => /staleAsNeedsYou/.test(k)));
-    assert.ok(!/staleAsNeedsYou/.test(fs.readFileSync(path.join(ROOT, 'extension.js'), 'utf8')), 'extension.js 里还有 staleAsNeedsYou');
+    assert.ok(!/staleAsNeedsYou/.test(fs.readFileSync(path.join(ROOT, 'extension.js'), 'utf8')), 'extension.js still mentions staleAsNeedsYou');
   });
 
-  await test('设置清单（§8.6、§11.6、§11.8、决定 4）', () => {
+  await test('settings: keys, types and defaults', () => {
     const want = {
       scope: ['string', 'all'], followActiveChat: ['boolean', true], hideCompleted: ['boolean', false],
       showStatusBar: ['boolean', true], statusBarBackground: ['boolean', true], showCost: ['boolean', true],
@@ -1420,79 +1420,79 @@ async function manifestTests() {
     }
     assert.deepStrictEqual(props['agentMonitor.scope'].enum, ['all', 'workspace']);
     assert.deepStrictEqual(props['agentMonitor.approvalGuess'].enum, ['fastTools', 'allTools', 'off']);
-    // §11.13：会话列表在哪边；auto 跟随终端标签列表
+    // which side the session list is on; auto follows the terminal tab list
     assert.deepStrictEqual(props['agentMonitor.sessionListPosition'].enum, ['auto', 'left', 'right']);
     assert.strictEqual(props['agentMonitor.sessionListPosition'].enumDescriptions.length, 3);
-    assert.ok(nls['config.sessionListPosition'].includes('#terminal.integrated.tabs.location#'), '说明里链到终端的设置');
+    assert.ok(nls['config.sessionListPosition'].includes('#terminal.integrated.tabs.location#'), 'description links to the terminal setting');
     assert.ok(props['agentMonitor.onlyWorkspace'].deprecationMessage);
-    // 指向程序 / 目录的设置只能在用户设置里改（防工作区设置换掉要执行的程序）
+    // settings that point to programs / directories can only be set in user settings (machine scope), so workspace settings cannot swap the program that gets executed
     for (const k of ['claude.cliPath', 'claude.projectsDir', 'codex.home']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
-    // compact.js 的默认值与这里一致
-    for (const [k, v] of Object.entries(realCompact.DEFAULTS)) assert.deepStrictEqual(props['agentMonitor.' + k].default, v, `compact 默认值不一致：${k}`);
+    // defaults in compact.js match these
+    for (const [k, v] of Object.entries(realCompact.DEFAULTS)) assert.deepStrictEqual(props['agentMonitor.' + k].default, v, `compact default mismatch: ${k}`);
   });
 
-  await test('颜色贡献点（§3.5）与 status.LAMP_COLORS 一致，id 只有一个点', () => {
+  await test('color contributions match status.LAMP_COLORS, and ids contain a single dot', () => {
     const byId = new Map(c.colors.map((x) => [x.id, x]));
     assert.strictEqual(c.colors.length, 6);
     for (const lamp of S.LAMPS) {
       const id = S.LAMP_COLOR_ID[lamp];
-      assert.ok(byId.has(id), `缺颜色 ${id}`);
+      assert.ok(byId.has(id), `missing color ${id}`);
       assert.deepStrictEqual(byId.get(id).defaults, { ...S.LAMP_COLORS[lamp] }, id);
       assert.strictEqual(id.split('.').length, 2);
     }
   });
 
-  await test('viewsWelcome 指向存在的视图，链接的命令已声明，when 里的上下文键由扩展设置', () => {
+  await test('viewsWelcome points to existing views, linked commands are declared, and context keys in when are set by the extension', () => {
     const known = new Set(['agentMonitor.loaded', 'agentMonitor.filteredOut', 'agentMonitor.noFolder']);
     for (const w of c.viewsWelcome) {
-      assert.ok(views.has(w.view), `未知视图 ${w.view}`);
-      for (const m of w.contents.matchAll(/\(command:([\w.]+)\)/g)) assert.ok(commands.has(m[1]), `未声明 ${m[1]}`);
-      for (const m of w.when.matchAll(/agentMonitor\.\w+/g)) assert.ok(known.has(m[0]), `未知上下文键 ${m[0]}`);
-      for (const k of known) assert.ok(k in log.contexts, `扩展没设置 ${k}`);
+      assert.ok(views.has(w.view), `unknown view ${w.view}`);
+      for (const m of w.contents.matchAll(/\(command:([\w.]+)\)/g)) assert.ok(commands.has(m[1]), `undeclared ${m[1]}`);
+      for (const m of w.when.matchAll(/agentMonitor\.\w+/g)) assert.ok(known.has(m[0]), `unknown context key ${m[0]}`);
+      for (const k of known) assert.ok(k in log.contexts, `not set by the extension: ${k}`);
     }
   });
 
-  await test('界面代码里没有中文硬编码（注释除外）', () => {
+  await test('no hard-coded CJK text in UI code (comments excluded)', () => {
     for (const f of ['extension.js', 'lib/agents-view.js', 'lib/tree.js']) {
       const src = fs.readFileSync(path.join(ROOT, f), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .split('\n').map((l) => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
       const hit = src.split('\n').find((l) => /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(l));
-      assert.ok(!hit, `${f} 里有中日韩文字：${hit}`);
+      assert.ok(!hit, `${f} contains CJK text: ${hit}`);
     }
   });
 
-  await test('新增的 views 词条不和 core 的前缀冲突；ext / tree 用到的键都在英文词典里', () => {
+  await test('views strings do not collide with core; keys used by ext / tree are all in the English dictionary', () => {
     const core = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'core.en.json'), 'utf8'));
     const views = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'views.en.json'), 'utf8'));
-    for (const k of Object.keys(views)) assert.ok(!(k in core), `和 core 重复：${k}`);
+    for (const k of Object.keys(views)) assert.ok(!(k in core), `duplicate of core: ${k}`);
     const used = new Set();
     for (const f of ['extension.js', 'lib/agents-view.js', 'lib/tree.js']) {
       const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
       for (const m of src.matchAll(/\bt\('((?:ext|tree|bar|scope|tip|session|resume|cost|ctx|count|workflow)\.[\w.]*\w)'\s*[,)]/g)) used.add(m[1]);
     }
-    for (const k of used) assert.ok(i18n.has(k), `词典里没有 ${k}`);
+    for (const k of used) assert.ok(i18n.has(k), `missing from the dictionary: ${k}`);
     assert.ok(used.size >= 10);
   });
 
-  await test('.vscodeignore 把 test/ 排除出打包', () => {
+  await test('.vscodeignore excludes test/ from the package', () => {
     const ignore = fs.readFileSync(path.join(ROOT, '.vscodeignore'), 'utf8').split(/\r?\n/);
     assert.ok(ignore.includes('test/**'));
   });
 }
 
 (async () => {
-  console.log('扩展入口');
+  console.log('Extension entry point');
   try {
     await extensionTests();
   } catch (err) {
     results.push(false);
-    console.log('  FAIL  （扩展测试中断）', err && err.stack);
+    console.log('  FAIL  (extension tests aborted)', err && err.stack);
   }
   console.log('\npackage.json');
   await manifestTests();
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   const failed = results.filter((x) => !x).length;
-  console.log(`\n${results.length - failed}/${results.length} 通过`);
+  console.log(`\n${results.length - failed}/${results.length} passed`);
   process.exit(failed ? 1 : 0);
 })();

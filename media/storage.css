@@ -1,6 +1,6 @@
-/* “存储位置与占用”页面：编辑区里的 webview。沿用 agents.css 的清晰度规范：
-   字号不小于 --vscode-font-size，不用 opacity 调暗文字，codicon 图标，高对比主题有描边，
-   窄宽下换排法、不出现横向滚动。只用主题变量，三套主题都可读。 */
+/* "Storage locations and usage" page: a webview in the editor area. Follows the same legibility rules as agents.css:
+   font size never below --vscode-font-size, no opacity to dim text, codicon icons, outlines in high-contrast themes,
+   reflowed layout at narrow widths with no horizontal scrolling. Only theme variables, so all three theme kinds stay readable. */
 
 :root {
   --row-h: 22px;
@@ -42,7 +42,7 @@ body {
 .codicon { vertical-align: middle; color: var(--c-icon); }
 p { margin: 4px 0; }
 code, pre { font-family: var(--mono); }
-/* 行内路径：等宽，但字号不小于界面字号；不用 VS Code 默认的 code 底色和颜色（路径是正文，用前景色） */
+/* Inline paths: monospace, but not smaller than the UI font; skip VS Code's default code background/color (paths are body text, so use the foreground color) */
 code {
   padding: 0;
   border-radius: 0;
@@ -58,7 +58,7 @@ h2 { margin: 0 0 4px; font-size: calc(var(--vscode-font-size) * 1.2); font-weigh
 h3 { margin: 0 0 4px; font-size: calc(var(--vscode-font-size) * 1.08); font-weight: 600; display: flex; flex-wrap: wrap; column-gap: 10px; align-items: baseline; }
 h3 .size { font-weight: normal; }
 
-/* ---------- 顶部 ---------- */
+/* ---------- Header ---------- */
 
 .p-head {
   display: flex;
@@ -72,7 +72,7 @@ h3 .size { font-weight: normal; }
 .p-head .spacer { flex: 1 1 0; }
 .intro { margin-top: 10px; }
 
-/* ---------- 按钮 ---------- */
+/* ---------- Buttons ---------- */
 
 .btn {
   display: inline-flex;
@@ -102,7 +102,7 @@ h3 .size { font-weight: normal; }
 .btn .codicon { color: inherit; }
 .btn:disabled { cursor: default; color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); background: transparent; }
 
-/* 图标按钮（和视图标题栏的操作按钮一样大） */
+/* Icon buttons (same size as view title bar action buttons) */
 .ibtn {
   display: inline-flex;
   align-items: center;
@@ -146,7 +146,7 @@ h3 .size { font-weight: normal; }
 }
 :focus:not(:focus-visible) { outline: none; }
 
-/* ---------- 提示横幅（左边色带 + 图标上色，文字保持前景色） ---------- */
+/* ---------- Notice banners (colored left stripe + colored icon; text keeps the foreground color) ---------- */
 
 .banner {
   display: flex;
@@ -169,7 +169,7 @@ h3 .size { font-weight: normal; }
 .banner.b-error { border-left-color: var(--c-err-text); }
 .banner.b-error > .codicon { color: var(--c-err-text); }
 .live { margin: 2px 0 0; padding-left: 1.2em; }
-/* 迁移方案的免责说明：比普通提示醒目（整圈警示色边框），勾选确认后下面的复制 / 终端按钮才可用 */
+/* Migration plan disclaimer: more prominent than a regular notice (full warning-colored border); the copy / terminal buttons below are enabled only after the checkbox is ticked */
 .disclaimer {
   margin: 8px 0 12px;
   padding: 8px 12px;
@@ -184,7 +184,7 @@ h3 .size { font-weight: normal; }
 .disclaimer .ack { display: flex; align-items: flex-start; column-gap: 6px; font-weight: 600; cursor: pointer; }
 .disclaimer .ack input { flex: none; margin: 3px 0 0; accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder)); }
 
-/* ---------- 分节 ---------- */
+/* ---------- Sections ---------- */
 
 .sec { margin-top: 20px; min-width: 0; }
 .dline {
@@ -199,11 +199,11 @@ h3 .size { font-weight: normal; }
 .dline .total { font-weight: 600; }
 .acts, .c-acts { display: inline-flex; gap: 2px; flex: none; }
 
-/* 目录各项：CSS grid 表格；窄宽换两行排法，DOM 不变 */
+/* Directory entries: a CSS grid table; at narrow widths it reflows into two rows without changing the DOM */
 .etable { margin-top: 6px; min-width: 0; border-top: 1px solid var(--line); }
 .erow {
   display: grid;
-  /* 名字列至少 15em：放得下最长的 thread_history_1.sqlite（23 个等宽字符），760px 宽时不再断成两行 */
+  /* Name column is at least 15em: fits the longest name, thread_history_1.sqlite (23 monospace chars), so it no longer wraps at 760px width */
   grid-template-columns: minmax(15em, 1.2fr) 6.5em 5.5em minmax(0, 2fr) 52px;
   align-items: center;
   column-gap: 8px;
@@ -227,7 +227,7 @@ h3 .size { font-weight: normal; }
 .r-label { font-weight: 600; }
 .r-tip { flex-basis: 100%; padding-left: 24px; }
 
-/* ---------- 卷 ---------- */
+/* ---------- Volumes ---------- */
 
 .vols { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .vol {
@@ -257,7 +257,7 @@ h3 .size { font-weight: normal; }
   width: 120px;
   height: 8px;
   box-sizing: border-box;
-  /* 空槽只画边框：边框用次要文字色，对背景 ≥ 3:1 */
+  /* Empty track is drawn as a border only, using the secondary text color (>= 3:1 contrast against the background) */
   border: 1px solid var(--vscode-descriptionForeground);
   border-radius: 2px;
   overflow: hidden;
@@ -272,7 +272,7 @@ h3 .size { font-weight: normal; }
 }
 .vol.low .meter-fill { background: var(--c-warn); }
 
-/* ---------- 迁移 ---------- */
+/* ---------- Migration ---------- */
 
 .card {
   margin-top: 14px;
@@ -294,7 +294,7 @@ h3 .size { font-weight: normal; }
 .f-acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .hint { margin-top: 2px; }
 
-/* 方案切换：和设置编辑器的“用户 / 工作区”页签一样，选中的有下划线 */
+/* Plan switcher: like the "User / Workspace" tabs in the Settings editor; the selected one is underlined */
 .tabs {
   display: flex;
   flex-wrap: wrap;
@@ -370,18 +370,18 @@ h3 .size { font-weight: normal; }
 .notes li { margin: 3px 0; }
 .foot { margin-top: 20px; }
 
-/* ---------- 窄宽 ---------- */
+/* ---------- Narrow widths ---------- */
 
 @media (max-width: 640px) {
   body { padding: 0 12px 20px; }
-  /* 目录各项：第一行 名字 / 大小 / 按钮，第二行 文件数 / 位置 */
+  /* Directory entries: row 1 is name / size / buttons, row 2 is file count / location */
   .erow { grid-template-columns: minmax(0, 1fr) auto 52px; row-gap: 0; }
   .erow > .c-name { grid-column: 1; grid-row: 1; }
   .erow > .c-size { grid-column: 2; grid-row: 1; }
   .erow > .c-acts { grid-column: 3; grid-row: 1; }
   .erow > .c-files { grid-column: 1 / -1; grid-row: 2; text-align: left; color: var(--vscode-descriptionForeground); }
   .erow > .c-files:empty { display: none; }
-  /* 窄宽下列头隐藏了：文件数前面补上“文件：” */
+  /* Column headers are hidden at narrow widths, so prefix the file count with a "Files:" label */
   .erow > .c-files::before { content: attr(data-label); }
   .erow > .c-where { grid-column: 1 / -1; grid-row: 3; }
   .erow > .c-where:empty { display: none; }

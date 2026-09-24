@@ -1,18 +1,19 @@
 'use strict';
-// 底部面板的页面脚本（DESIGN §11.13 做成终端面板那样；内容区 §8.2、§11.2–11.4、§11.7）。
-// - 一个整体：一侧是会话列表（仿终端标签列表：listbox、22px 行、选中高亮、行尾按钮、窄条），另一块是内容区
-//   （会话条 + 智能体表），中间是可拖动的分隔线。列表在哪边、宽度多少由扩展推来（list 消息），拖动后存回扩展。
-// - 只渲染扩展算好的视图模型（lib/agents-view.js），不排序、不拼句子；文字要么已格式化，要么查注入的词典。
-// - §11.3 硬性要求：按 key / 行 id 增量更新 DOM。已有行原地改文字（同一行始终是同一个元素），
-//   新行按视图模型给的顺序插到规定位置；展开状态、焦点、滚动位置都保持。内容区换会话时才整表换掉。
-// - 所有操作（选中、压缩、复制、打开文件）只 postMessage 会话 key / 行 id / 序号，由扩展重新查找数据后执行。
-// - 宽度吸附、键盘移动、首字母跳转、增量同步的纯函数在 media/session-list.js（单测直接测它们）。
+// Page script for the bottom panel, laid out like VS Code's terminal panel.
+// - One layout: one side is the session list (modeled on the terminal tab list: listbox, 22px rows, selection highlight,
+//   row-end buttons, narrow strip), the other is the content area (session bar + agent table), with a draggable sash between them.
+//   Which side the list is on and its width are pushed by the extension (list message); after dragging, the width is saved back to the extension.
+// - Only renders the view model computed by the extension (lib/agents-view.js); never sorts or builds sentences. Text is either preformatted or looked up in the injected dictionary.
+// - Hard requirement: update the DOM incrementally by key / row id. Existing rows get their text changed in place (the same row is always the same element);
+//   new rows are inserted at the position given by the view model; expanded state, focus and scroll position are all kept. The whole table is replaced only when the content area switches sessions.
+// - Every action (select, compact, copy, open file) only posts the session key / row id / index; the extension looks up the data again and performs it.
+// - Pure functions for width snapping, keyboard navigation, type-to-jump and incremental sync live in media/session-list.js (unit-tested directly).
 (function () {
   const vscode = acquireVsCodeApi();
   const LS = window.AgentMonitorList;
   const syncKeyed = LS.syncKeyed;
 
-  // ---------- 词典（扩展注入的 JSON 数据块） ----------
+  // ---------- Dictionary (JSON data block injected by the extension) ----------
   let dict = {};
   try { dict = (JSON.parse(document.getElementById('l10n').textContent) || {}).dict || {}; } catch (e) { dict = {}; }
   const t = (key, vars) => {
@@ -20,13 +21,13 @@
     return !vars ? s : s.replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k] == null ? '' : vars[k]) : m));
   };
 
-  // ---------- 持久状态：每个会话展开了哪些行、折叠了哪些工作流、滚到哪；会话列表的宽度 ----------
+  // ---------- Persistent state: expanded rows, collapsed workflows and scroll position per session; session list width ----------
   const MAX_KEYS = 50;
   const saved = vscode.getState() || {};
   const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
   const state = {
     expanded: obj(saved.expanded), collapsed: obj(saved.collapsed), scroll: obj(saved.scroll),
-    details: obj(saved.details), // 会话条“详情”展开了哪些会话（§11.14）
+    details: obj(saved.details), // sessions whose "Details" section in the session bar is expanded
     listWidth: typeof saved.listWidth === 'number' && Number.isFinite(saved.listWidth) ? LS.snapWidth(saved.listWidth) : null,
   };
   const save = () => vscode.setState(state);
@@ -34,14 +35,14 @@
   function setIn(bag, key, id, on) {
     const list = listOf(bag, key).filter((x) => x !== id);
     if (on) list.push(id);
-    delete bag[key]; // 重新插入 = 最近用过，超出上限时删最早的
+    delete bag[key]; // re-inserting = most recently used; the oldest is dropped when over the limit
     if (list.length) bag[key] = list;
     const keys = Object.keys(bag);
     if (keys.length > MAX_KEYS) for (const k of keys.slice(0, keys.length - MAX_KEYS)) delete bag[k];
     save();
   }
 
-  // ---------- DOM 小工具：只在值真的变了时才写，免得打断选中文字、闪烁 ----------
+  // ---------- DOM helpers: write only when the value actually changed, to avoid disrupting text selection or flickering ----------
   const $ = (id) => document.getElementById(id);
   function h(tag, attrs, kids) {
     const el = document.createElement(tag);
@@ -58,7 +59,7 @@
   function cn(el, s) { if (el.className !== s) el.className = s; }
   function show(el, on) { if (el.hidden === !!on) el.hidden = !on; }
 
-  // ---------- 元素 ----------
+  // ---------- Elements ----------
   const E = {
     app: $('app'), content: $('content'), sash: $('sash'), slist: $('slist'), box: $('sl-box'),
     empty: $('empty'), emptyActLine: $('empty-act-line'), emptyAct: $('empty-act'),
@@ -73,15 +74,15 @@
     storeline: $('s-storeline'), path: $('s-path'), sizes: $('s-sizes'), reveal: $('s-reveal'), copypath: $('s-copypath'),
   };
 
-  let vm = null;           // 最近一份视图模型
-  let skew = 0;            // 扩展时钟 - 页面时钟（倒计时按扩展给的 now 走）
-  let shownKey = null;     // 当前显示的会话
-  let seq = 0;             // 细节面板 id 用
-  const units = new Map(); // 行 id -> 单元（行 + 细节面板）
+  let vm = null;           // latest view model
+  let skew = 0;            // extension clock - page clock (countdowns follow the now given by the extension)
+  let shownKey = null;     // session currently shown
+  let seq = 0;             // for detail panel ids
+  const units = new Map(); // row id -> unit (row + detail panel)
 
   const lampClass = (x) => `lamp codicon codicon-${x.shape || 'circle-large-outline'} lamp-${x.lamp || 'idle'}`;
 
-  // ---------- 顶部会话条 ----------
+  // ---------- Session bar at the top ----------
   function renderBar(s) {
     cn(E.lamp, lampClass(s));
     txt(E.title, s.title);
@@ -93,7 +94,7 @@
     if (s.badge) cn(E.badge, `badge codicon codicon-${s.badge} lamp-${s.lamp}`);
     show(E.badge, !!s.badge);
     txt(E.status, s.statusText);
-    // 窄面板下这一行会被省略号截断，悬停时先给完整的状态句
+    // In a narrow panel this line gets truncated with an ellipsis, so show the full status sentence on hover
     at(E.status, 'title', [s.statusText, s.statusTip].filter(Boolean).join('\n') || null);
     E.status.classList.toggle('guess', !!s.guess);
 
@@ -101,19 +102,19 @@
     show(E.meter, c.pct != null);
     if (c.pct != null) {
       const w = c.pct + '%';
-      if (E.fill.style.width !== w) E.fill.style.width = w; // CSSOM 写样式不受 CSP 限制
+      if (E.fill.style.width !== w) E.fill.style.width = w; // setting styles via CSSOM is not restricted by the CSP
       at(E.meter, 'aria-valuenow', c.pct);
       at(E.meter, 'aria-valuetext', c.ariaText);
     }
     txt(E.ctx, c.text);
     show(E.ctx, !!c.text);
     at(E.ctx, 'title', c.tip || null);
-    // 标题行「压缩…」旁的“上下文 41%”（会话列表不再写这段）
+    // "41% context" next to "Compact…" in the title line (the session list no longer shows this)
     txt(E.headCtx, c.shortText);
     show(E.headCtx, !!c.shortText);
     at(E.headCtx, 'title', c.tip || null);
     show(E.ctxline, c.pct != null || !!c.pctText || !!c.remainText);
-    // 占窗口的百分比、距自动压缩：各自成块，窄面板里整块换到下一行，不被省略号截掉
+    // Share of the window and distance to auto-compact: each is its own block, wrapping as a whole in a narrow panel instead of being cut off by an ellipsis
     txt(E.pct, c.pctText);
     show(E.pct, !!c.pctText);
     at(E.pct, 'title', c.tip || null);
@@ -133,7 +134,7 @@
     E.compacts.classList.toggle('tone-error', c.compactTone === 'error');
     updateCache();
 
-    // 自动压缩：{值}（来源）▾（§11.9）；点了由扩展弹档位选择
+    // Auto-compact: {value} (source) ▾; clicking it makes the extension show the level picker
     const ac = s.autoCompact;
     show(E.autocompact, !!ac);
     if (ac) {
@@ -142,9 +143,9 @@
       show(E.autocompact.children[1], !!ac.detailText);
       at(E.autocompact, 'title', ac.tip || null);
     }
-    show(E.acline, !!ac || !!c.compactText); // 缓存倒计时在摘要行
+    show(E.acline, !!ac || !!c.compactText); // the cache countdown is in the summary line
 
-    // 记录位置（§11.11）：路径、大小、在文件管理器中显示、复制路径
+    // Storage location: path, sizes, Reveal in file manager, Copy path
     const st = s.storage;
     show(E.storeline, !!st);
     if (st) {
@@ -165,9 +166,9 @@
     show(E.today, !!s.todayText);
     at(E.cost, 'title', s.costTip || null);
     at(E.today, 'title', s.todayTip || null);
-    show(E.costline, !!s.todayText); // 本会话费用在摘要行，今日合计在详情
+    show(E.costline, !!s.todayText); // this session's cost is in the summary line; today's total is in the details
 
-    // 额度、报错、提示横幅：文字可以换行，不截断
+    // Usage-limit, error and hint banners: text may wrap, never truncated
     syncKeyed(E.banners, s.banners || [], (b) => b.id, () => h('div', { class: 'banner', role: 'note' }, [
       h('i', { class: 'codicon', 'aria-hidden': 'true' }), h('span', { class: 'b-body' }, [h('span', { class: 'b-text' }), h('span', { class: 'b-detail' })]),
     ]), (node, b) => {
@@ -180,7 +181,7 @@
       at(node, 'title', b.tip || null);
     });
 
-    // 续跑提示：一条一行（名字 + 复制按钮 + 代价说明），放不下时说明折到下一行
+    // Resume hints: one per line (name + copy button + cost note); the note wraps to the next line when it doesn't fit
     const resume = s.resume || [];
     show(E.resume, resume.length > 0);
     syncKeyed(E.resume, resume, (r) => r.index + '|' + r.label, () => h('li', { class: 'r-item' }, [
@@ -201,7 +202,7 @@
       show(node.children[3], !!r.infoText);
     });
 
-    // 紧急横幅（§11.14）：报错 / 警告类横幅和压缩循环，只占一行；完整内容在悬停提示和详情里
+    // Urgent banner: error / warning banners and compaction loops, one line only; full text is in the hover tooltip and details
     const urgent = (s.banners || []).filter((b) => b.tone === 'error' || b.tone === 'warning')
       .map((b) => ({ tone: b.tone, icon: b.icon, text: [b.text, b.detail].filter(Boolean).join(' · ') }));
     if (c.compactTone === 'error' && c.compactText) urgent.push({ tone: 'error', icon: 'sync', text: c.compactText });
@@ -217,7 +218,7 @@
     applyDetails();
   }
 
-  // “详情”折叠区：默认收起，按会话记住（§11.14）
+  // "Details" collapsible section: collapsed by default, remembered per session
   function applyDetails() {
     const open = !!(shownKey && state.details[shownKey]);
     show(E.details, open);
@@ -234,12 +235,12 @@
     applyDetails();
   }
 
-  // 面板矮（< 400px）时藏起费用、用时两列，先保“名称 · 状态 · 当前步骤 · 上下文”（§11.14）
+  // In a short panel (< 400px) hide the cost and time columns, keeping "name · status · current step · context"
   function applyShort() { document.body.classList.toggle('short', window.innerHeight < 400); }
   applyShort();
   window.addEventListener('resize', applyShort);
 
-  // 缓存倒计时：用 cacheExpiresMs 自己每 30 秒刷新这一处（§11.7），不动表格
+  // Cache countdown: refresh this one spot every 30 seconds from cacheExpiresMs, without touching the table
   function updateCache() {
     const c = vm && vm.session && vm.session.cache;
     show(E.cache, !!c);
@@ -250,7 +251,7 @@
   }
   setInterval(updateCache, 30000);
 
-  // ---------- 表格行 ----------
+  // ---------- Table rows ----------
   function makeUnit(r) {
     const u = { id: r.id, detailOpen: false, detail: null };
     u.el = h('div', { class: 'unit', role: 'none' });
@@ -266,8 +267,8 @@
     u.tok = h('div', { class: 'cell c-tok num', role: 'cell' });
     u.cost = h('div', { class: 'cell c-cost num', role: 'cell' });
     u.time = h('div', { class: 'cell c-time num', role: 'cell' });
-    // 宽面板：各格按 CSS 指定的列排成一行；窄面板：c-line2 变成第二行（步骤 + token + 费用 + 用时），
-    // 第一行只放名字和状态，状态句（例如“等你批准”）不被截断
+    // Wide panel: cells sit in one row in the columns set by CSS; narrow panel: c-line2 becomes a second line (step + tokens + cost + time),
+    // and the first line holds only the name and status, so the status sentence (e.g. "Waiting for your approval") isn't truncated
     u.row = h('div', { class: 'row', role: 'row' }, [
       h('div', { class: 'cell c-name', role: 'cell' }, [u.twisty, u.lamp, h('span', { class: 'names' }, [u.name, u.sub])]),
       h('div', { class: 'cell c-status', role: 'cell' }, [u.badge, u.lampText, u.status]),
@@ -299,21 +300,21 @@
     at(u.cost, 'title', r.costTip || null);
     txt(u.time, r.durText);
 
-    // 折叠按钮：智能体行 = 展开细节；工作流行 = 折叠组内智能体
+    // Toggle button: agent row = expand details; workflow row = collapse the agents in the group
     const open = isWf ? !isCollapsed(r.id) : isExpanded(r.id);
     cn(u.twisty, 'twisty codicon codicon-chevron-' + (open ? 'down' : 'right'));
     at(u.twisty, 'aria-expanded', String(open));
     at(u.twisty, 'aria-label', t(isWf ? (open ? 'webview.group.collapse' : 'webview.group.expand') : (open ? 'webview.collapse' : 'webview.expand'), { name: r.name }));
     at(u.row, 'aria-expanded', isWf || r.expandable ? String(open) : null);
     if (!isWf) setDetail(u, open);
-    // 所在工作流被折叠时藏起来（不删，节点身份不变）
+    // Hidden while its workflow is collapsed (not removed, so node identity is unchanged)
     show(el, !(r.parentId && isCollapsed(r.parentId)));
   }
 
   const isExpanded = (id) => listOf(state.expanded, shownKey).includes(id);
   const isCollapsed = (id) => listOf(state.collapsed, shownKey).includes(id);
 
-  // ---------- 细节面板（最近几步、结果、改过的文件、报错） ----------
+  // ---------- Detail panel (recent steps, result, changed files, errors) ----------
   function makeDetail(u) {
     const id = 'd' + (++seq);
     const d = { id };
@@ -373,7 +374,7 @@
     show(d.tlEmpty, dv.timeline.length === 0);
 
     const res = dv.result;
-    if (res) txt(d.result, res.text); // 只在变了时写，结果框的滚动位置不丢
+    if (res) txt(d.result, res.text); // write only when changed, so the result box keeps its scroll position
     show(d.result, !!res);
     show(d.copy, !!res);
     show(d.trunc, !!(res && res.truncated));
@@ -409,7 +410,7 @@
     show(d.secErrs, dv.errors.length > 0);
   }
 
-  // ---------- 内容区整体渲染 ----------
+  // ---------- Rendering the whole content area ----------
   function render(m) {
     vm = m;
     if (typeof m.now === 'number') skew = m.now - Date.now();
@@ -421,7 +422,7 @@
       E.rows.replaceChildren();
       txt(E.empty, m.emptyText);
       show(E.empty, true);
-      // 只看工作区而工作区里没有会话：给“显示所有会话”
+      // Scoped to the workspace and the workspace has no sessions: offer "Show all sessions"
       const ea = m.emptyAction;
       show(E.emptyActLine, !!ea);
       if (ea) txt(E.emptyAct, ea.text);
@@ -432,7 +433,7 @@
     }
     let switched = false;
     if (m.sessionKey !== shownKey) {
-      // 换会话：整表换掉（不同会话的行本来就不是同一批），记住旧会话滚到哪
+      // Switching sessions: replace the whole table (rows of different sessions are never the same set anyway), remembering the old session's scroll position
       rememberScroll();
       shownKey = m.sessionKey;
       units.clear();
@@ -455,7 +456,7 @@
     if (switched) E.content.scrollTop = Number(state.scroll[shownKey]) || 0;
   }
 
-  // 内容区自己滚动（列表和内容各滚各的，像终端）；记住每个会话滚到哪
+  // The content area scrolls on its own (list and content scroll independently, like the terminal); remember each session's scroll position
   function rememberScroll() {
     if (!shownKey) return;
     const y = Math.round(E.content.scrollTop);
@@ -472,18 +473,18 @@
     scrollTimer = setTimeout(rememberScroll, 300);
   }, { passive: true });
 
-  // ---------- 会话列表（§11.13，仿终端标签列表） ----------
-  let listSel = null;       // 扩展推来的选中
-  let pendingSel = null;    // { key, until }：页面刚点的，等扩展确认（期间不被旧消息改回去）
-  let focusKey = null;      // 键盘焦点所在行（aria-activedescendant）
-  let position = 'right';  // 和 HTML 里的初始排法一致（内容、分隔线、列表）
-  let savedWidth = state.listWidth; // 页面记着的宽度优先；没有时用扩展存的（globalState）
+  // ---------- Session list (modeled on the terminal tab list) ----------
+  let listSel = null;       // selection pushed by the extension
+  let pendingSel = null;    // { key, until }: just clicked on the page, awaiting confirmation from the extension (not reverted by stale messages meanwhile)
+  let focusKey = null;      // row with keyboard focus (aria-activedescendant)
+  let position = 'right';  // matches the initial layout in the HTML (content, sash, list)
+  let savedWidth = state.listWidth; // the width remembered by the page wins; otherwise use the one saved by the extension (globalState)
   let dragging = false;
   let dragW = null;
   let typed = '';
   let typedAt = 0;
   let optSeq = 0;
-  let rowEls = new Map();   // key -> 行元素
+  let rowEls = new Map();   // key -> row element
 
   const currentSel = () => (pendingSel ? pendingSel.key : listSel);
   const sessionRows = () => Array.from(E.box.children).filter((el) => el._data && el._data.kind === 'session');
@@ -510,7 +511,7 @@
         act('rowMore', 'ellipsis', t('webview.list.more')),
       ]),
     ]);
-    // 鼠标离开后再换上悬停期间攒下的新提示
+    // After the pointer leaves, apply the new tooltip that accumulated while hovering
     el.addEventListener('mouseleave', () => {
       if (el._tip == null) return;
       at(el, 'title', el._tip);
@@ -523,12 +524,12 @@
     cn(el.children[0], lampClass(it));
     txt(el.children[1], it.title);
     txt(el.children[2], it.desc);
-    // 悬停提示（窄条模式下名字也在这里）：没有逐秒变化的内容，但会跟着状态、token 更新。
-    // 鼠标正停在这一行上时先不改（改了会把正在看的提示关掉），离开后再换——和原生树悬停时现算的效果一样
+    // Hover tooltip (in narrow-strip mode it also holds the name): nothing that changes every second, but it follows status and token updates.
+    // Don't change it while the pointer is on this row (that would close the tooltip being read); swap it after the pointer leaves, matching how native tree tooltips are computed on hover
     if (el.matches(':hover') && el.getAttribute('title') !== it.tip) el._tip = it.tip;
     else { el._tip = null; at(el, 'title', it.tip); }
     at(el, 'aria-label', it.a11y);
-    // VS Code 的 webview 右键菜单读这个属性（webviewSection / sessionKey / compactable / resumable）
+    // VS Code's webview context menu reads this attribute (webviewSection / sessionKey / compactable / resumable)
     at(el, 'data-vscode-context', it.context);
     show(el.children[3].children[0], !!it.compactable);
     paintRow(el);
@@ -546,7 +547,7 @@
     at(E.box, 'aria-activedescendant', f ? f.id : null);
   }
 
-  // 让某一行露出来（只滚列表自己，不动整页）
+  // Scroll a row into view (only the list scrolls, not the whole page)
   function reveal(el) {
     if (!el) return;
     const box = E.slist;
@@ -556,7 +557,7 @@
     else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
   }
 
-  // 左 = 列表、分隔线、内容；右 = 内容、分隔线、列表。DOM 顺序和看到的一致，Tab 顺序也就跟着对
+  // Left = list, sash, content; right = content, sash, list. DOM order matches what is shown, so Tab order is correct too
   function applyPosition(pos) {
     const p = pos === 'left' ? 'left' : 'right';
     if (p === position) return;
@@ -572,12 +573,12 @@
     }
   }
 
-  // 实际宽度：面板窄于 500 自动窄条；< 80 收成 46 的窄条（只有图标，名字在悬停提示里）；给内容区留出地方
+  // Actual width: automatic narrow strip when the panel is narrower than 500; below 80 collapse to the 46px narrow strip (icons only, names in the tooltip); leave room for the content area
   function applyWidth(raw) {
     const panel = window.innerWidth || document.documentElement.clientWidth;
     const eff = LS.effectiveWidth(raw != null ? raw : savedWidth, panel);
     const w = eff.width + 'px';
-    if (E.slist.style.width !== w) E.slist.style.width = w; // CSSOM 写样式不受 CSP 限制
+    if (E.slist.style.width !== w) E.slist.style.width = w; // setting styles via CSSOM is not restricted by the CSP
     E.slist.classList.toggle('narrow', eff.narrow);
     E.app.classList.toggle('auto-narrow', eff.auto);
     return eff;
@@ -597,7 +598,7 @@
     if (!dragging) applyWidth();
     const before = currentSel();
     listSel = m.selectedKey || null;
-    // 扩展确认了刚点的那一行，或者等太久：以扩展的为准
+    // The extension confirmed the row just clicked, or we waited too long: the extension's selection wins
     if (pendingSel && (pendingSel.key === listSel || Date.now() > pendingSel.until)) pendingSel = null;
     const items = Array.isArray(m.items) ? m.items : [];
     syncKeyed(E.box, items,
@@ -607,12 +608,12 @@
     rowEls = new Map(sessionRows().map((el) => [el._data.key, el]));
     if (focusKey && !rowEls.has(focusKey)) focusKey = null;
     paintAll();
-    // 选中被扩展换了（切到别的对话标签时跟随）：让它露出来
+    // The extension changed the selection (follows when switching to another conversation tab): scroll it into view
     const after = currentSel();
     if (after && after !== before) reveal(rowEls.get(after));
   }
 
-  // 用户选中：先在页面上标出来，再告诉扩展（扩展记已看过、换内容区、发 focus）
+  // User selection: mark it on the page first, then tell the extension (which marks it seen, switches the content area and sends focus)
   function choose(key) {
     if (!key || !rowEls.has(key)) return;
     pendingSel = { key, until: Date.now() + 1500 };
@@ -627,7 +628,7 @@
     reveal(rowEls.get(key));
   }
 
-  // 键盘：↑ ↓ Home End PageUp PageDown 移动焦点，Enter / 空格选中，Shift+F10 / 菜单键打开“…”，打字按标题首字母跳转
+  // Keyboard: ↑ ↓ Home End PageUp PageDown move focus, Enter / Space selects, Shift+F10 / Menu key opens "…", typing jumps by title prefix
   E.box.addEventListener('keydown', (e) => {
     const rows = sessionRows();
     if (!rows.length) return;
@@ -656,7 +657,7 @@
       if (j >= 0) { e.preventDefault(); setFocus(keys[j]); }
     }
   });
-  // Tab 进到列表：焦点落在选中的那一行（没有就第一行）
+  // Tab into the list: focus lands on the selected row (or the first row if none)
   E.box.addEventListener('focus', () => {
     if (!focusKey || !rowEls.has(focusKey)) {
       const first = sessionRows()[0];
@@ -664,21 +665,21 @@
     }
     paintAll();
   });
-  // 行尾按钮不抢焦点（列表保持“有焦点”的选中色）
+  // Row-end buttons don't take focus (the list keeps its "focused" selection color)
   E.box.addEventListener('mousedown', (e) => { if (e.target.closest('.sl-act')) e.preventDefault(); });
-  // 右键：焦点跟到这一行（不改选中；菜单由 VS Code 按 data-vscode-context 弹出，这里不 preventDefault）
+  // Right-click: focus follows to this row (selection unchanged; VS Code shows the menu from data-vscode-context, so the default is not prevented here)
   E.box.addEventListener('contextmenu', (e) => {
     const row = e.target.closest('.sl-row');
     if (row && row._data) { focusKey = row._data.key; paintAll(); }
   });
 
-  // 分隔线：拖动改宽度（按终端的规则吸附），双击复位；面板太窄自动窄条时不能拖
+  // Sash: drag to change width (snapped by the terminal's rules), double-click to reset; not draggable when the panel is too narrow and the strip is automatic
   E.sash.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || E.app.classList.contains('auto-narrow')) return;
     e.preventDefault();
     dragging = true;
     dragW = null;
-    try { E.sash.setPointerCapture(e.pointerId); } catch (err) { /* 没有捕获也能拖 */ }
+    try { E.sash.setPointerCapture(e.pointerId); } catch (err) { /* dragging works without capture too */ }
     E.app.classList.add('resizing');
   });
   E.sash.addEventListener('pointermove', (e) => {
@@ -700,13 +701,13 @@
   E.sash.addEventListener('dblclick', () => saveWidth(LS.WIDTH.DEFAULT));
   window.addEventListener('resize', () => { if (!dragging) applyWidth(); });
 
-  // ---------- 交互 ----------
+  // ---------- Interaction ----------
   function toggle(u) {
     if (!u || !u.data) return;
     const r = u.data;
     if (r.kind === 'workflow') {
       setIn(state.collapsed, shownKey, r.id, !isCollapsed(r.id));
-      for (const x of units.values()) if (x.data) updateUnit(x.el, x.data); // 组内行跟着显示/隐藏
+      for (const x of units.values()) if (x.data) updateUnit(x.el, x.data); // rows in the group show/hide along with it
       return;
     }
     const open = !isExpanded(r.id);
@@ -724,7 +725,7 @@
     const btn = e.target.closest('[data-act]');
     const act = btn && btn.dataset.act;
     const key = shownKey;
-    // 列表行尾的按钮：压缩、“…”（扩展弹出与右键菜单同样内容的 QuickPick）；不改选中
+    // Buttons at the end of a list row: compact, "…" (the extension shows a QuickPick with the same items as the context menu); selection unchanged
     if (act === 'rowCompact' || act === 'rowMore') {
       const row = btn.closest('.sl-row');
       if (row && row._data) vscode.postMessage({ type: act === 'rowCompact' ? 'compact' : 'more', sessionKey: row._data.key });
@@ -754,13 +755,13 @@
       return;
     }
     if (btn) return;
-    // 点行的其它地方也能展开 / 折叠（和原生树一样）；拖选文字、点在细节面板里不算
+    // Clicking elsewhere on the row also expands / collapses (like a native tree); drag-selecting text or clicking inside the detail panel doesn't count
     const row = e.target.closest('.row');
     if (!row || row.classList.contains('head') || String(window.getSelection() || '')) return;
     toggle(unitOf(row));
   });
 
-  // 折叠按钮上 ←/→ 折叠 / 展开（Enter、空格由 button 自带）
+  // ←/→ on the toggle button collapses / expands (Enter and Space are handled by the button itself)
   document.addEventListener('keydown', (e) => {
     const tw = e.target;
     if (!tw.classList || !tw.classList.contains('twisty')) return;
@@ -777,7 +778,7 @@
     if (m.type === 'render') render(m);
     else if (m.type === 'list') renderList(m);
   });
-  applyWidth(); // 第一份列表消息到来前先按记着的宽度（或默认 200）排好，免得跳
+  applyWidth(); // before the first list message arrives, lay out with the remembered width (or the default 200) to avoid a jump
   const ready = { type: 'ready', expanded: state.expanded };
   if (state.listWidth != null) ready.listWidth = state.listWidth;
   vscode.postMessage(ready);

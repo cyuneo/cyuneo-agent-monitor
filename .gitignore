@@ -1,4 +1,4 @@
-# 依赖与构建产物
+# Dependencies and build output
 node_modules/
 dist/
 out/
@@ -7,15 +7,15 @@ out/
 coverage/
 *.log
 
-# 系统与编辑器
+# OS and editor files
 .DS_Store
 Thumbs.db
 
-# 本地环境变量（可能含密钥）
+# Local environment variables (may contain secrets)
 .env
 .env.*
 
-# 内部底稿：发布者资料、设计规格、开发日志，不公开
+# Private working notes (publisher info, design spec, dev log); not published
 docs/PUBLISHER.md
 docs/DESIGN.md
 DEVLOG.md

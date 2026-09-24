@@ -1,6 +1,6 @@
 'use strict';
-// lib/core/* 与 lib/i18n.js 的单元测试。纯 node 运行：node test/core.test.js
-// 数据全部是合成的；不读 ~/.claude、~/.codex。临时文件放在 AGENT_MONITOR_TEST_TMP（没设就用系统临时目录），跑完删除。
+// Unit tests for lib/core/* and lib/i18n.js. Run with plain Node: node test/core.test.js
+// All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -21,7 +21,7 @@ const TMP_ROOT = process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir();
 fs.mkdirSync(TMP_ROOT, { recursive: true });
 const TMP = fs.mkdtempSync(path.join(TMP_ROOT, 'am-core-'));
 
-// ---------- 小工具 ----------
+// ---------- Helpers ----------
 
 const results = [];
 function test(name, fn) {
@@ -46,20 +46,20 @@ const tmpFile = (name) => path.join(TMP, `${++fileNo}-${name}`);
 function jsonlTests() {
   const push = (arr, e) => { arr.push(e); };
 
-  test('增量读：只读新增字节，半行留到下次', () => {
+  test('incremental read: only new bytes are read; a partial line waits for the next poll', () => {
     const f = tmpFile('a.jsonl');
     fs.writeFileSync(f, line({ n: 1 }) + '{"n":');
     const r = new JsonlTail(f, () => [], push);
     assert.strictEqual(r.poll(), true);
     assert.deepStrictEqual(r.state.map((e) => e.n), [1]);
-    assert.strictEqual(r.poll(), false, '没变化时不读');
+    assert.strictEqual(r.poll(), false, 'no read when nothing changed');
     fs.appendFileSync(f, '2}\n' + line({ n: 3 }));
     assert.strictEqual(r.poll(), true);
     assert.deepStrictEqual(r.state.map((e) => e.n), [1, 2, 3]);
     assert.strictEqual(r.offset, fs.statSync(f).size);
   });
 
-  test('坏行跳过，不影响后面的行', () => {
+  test('bad lines are skipped without affecting later lines', () => {
     const f = tmpFile('bad.jsonl');
     fs.writeFileSync(f, '{oops\n' + line({ n: 1 }) + '\nnull\n123\n' + line({ n: 2 }));
     const r = new JsonlTail(f, () => [], push);
@@ -67,7 +67,7 @@ function jsonlTests() {
     assert.deepStrictEqual(r.state.map((e) => e.n), [1, 2]);
   });
 
-  test('文件变短（截断/重写）从头来并重建状态', () => {
+  test('file got shorter (truncated/rewritten): restart from the beginning and rebuild state', () => {
     const f = tmpFile('trunc.jsonl');
     fs.writeFileSync(f, line({ n: 1 }) + line({ n: 2 }) + line({ n: 3 }));
     let inits = 0;
@@ -81,7 +81,7 @@ function jsonlTests() {
     assert.strictEqual(r.resets, 1);
   });
 
-  test('文件被换成新文件（inode 变了、没变短）也从头来', () => {
+  test('file replaced by a new one (inode changed, not shorter): also restart from the beginning', () => {
     const f = tmpFile('swap.jsonl');
     fs.writeFileSync(f, line({ n: 1 }));
     const r = new JsonlTail(f, () => [], push);
@@ -93,7 +93,7 @@ function jsonlTests() {
     assert.deepStrictEqual(r.state.map((e) => e.n), [7, 8]);
   });
 
-  test('prefilter：不含子串的行不解码、不解析', () => {
+  test('prefilter: lines without the substring are neither decoded nor parsed', () => {
     const f = tmpFile('pf.jsonl');
     fs.writeFileSync(f, line({ type: 'user', usage: null }) + '{not json but skipped}\n'
       + line({ type: 'assistant', message: { usage: { output_tokens: 3 } } }) + line({ type: 'x' }));
@@ -107,14 +107,14 @@ function jsonlTests() {
     assert.ok(!multi(Buffer.from('{"type":"response_item"}')));
   });
 
-  test('大文件按 1MB 一块读：跨好几块的超长行、块边界落在多字节字符上、末尾半行，结果和逐行解析一样', () => {
+  test('large files are read in 1MB chunks: a very long line spanning several chunks, chunk boundaries inside multibyte characters and a trailing partial line all match line-by-line parsing', () => {
     const f = tmpFile('big.jsonl');
     const rows = [];
     for (let i = 0; i < 3000; i++) rows.push({ i, s: '中文テスト한국어'.repeat(1 + (i % 13)), usage: i % 3 === 0 ? { n: i } : undefined });
-    rows.splice(1500, 0, { i: -1, big: '长'.repeat(1200000), usage: { n: -1 } }); // 约 3.6MB 的一行，横跨 4 块
+    rows.splice(1500, 0, { i: -1, big: '长'.repeat(1200000), usage: { n: -1 } }); // one line of about 3.6MB, spanning 4 chunks
     const text = rows.map((o) => JSON.stringify(o)).join('\n') + '\n';
     fs.writeFileSync(f, text + '{"i":9999,"s":"半');
-    assert.ok(Buffer.byteLength(text) > 3.5 * 1048576, '文件要比几块大');
+    assert.ok(Buffer.byteLength(text) > 3.5 * 1048576, 'file must span several chunks');
     const all = new JsonlTail(f, () => [], push);
     assert.strictEqual(all.poll(), true);
     assert.deepStrictEqual(all.state.map((e) => e.i), rows.map((o) => o.i));
@@ -122,36 +122,36 @@ function jsonlTests() {
     assert.strictEqual(all.bytesRead, fs.statSync(f).size);
     fs.appendFileSync(f, '行"}\n');
     all.poll();
-    assert.deepStrictEqual(all.state[all.state.length - 1], { i: 9999, s: '半行' }, '末尾半行接上');
+    assert.deepStrictEqual(all.state[all.state.length - 1], { i: 9999, s: '半行' }, 'trailing partial line is completed');
     assert.strictEqual(all.carry, null);
-    // 带 prefilter：跳过的行同样按块切
+    // with a prefilter: skipped lines are chunked the same way
     const pf = new JsonlTail(f, () => [], push, { prefilter: substringFilter('"usage"') });
     pf.poll();
     assert.deepStrictEqual(pf.state.map((e) => e.i), rows.filter((o) => o.usage).map((o) => o.i));
     assert.strictEqual(pf.lines + pf.skipped, rows.length + 1);
   });
 
-  test('超长行（超过 maxLine）整行跳过，前后的行照常读；跨两次 poll 也一样', () => {
+  test('an over-long line (beyond maxLine) is skipped whole while the lines around it are read normally, also across two polls', () => {
     const f = tmpFile('huge-line.jsonl');
     const huge = JSON.stringify({ n: 'huge', x: 'y'.repeat(3 * 1048576) });
     fs.writeFileSync(f, line({ n: 1 }) + huge.slice(0, 2500000));
     const r = new JsonlTail(f, () => [], push, { maxLine: 2 * 1048576 });
     r.poll();
     assert.deepStrictEqual(r.state.map((e) => e.n), [1]);
-    assert.strictEqual(r.dropping, true, '已超过上限，丢到下一个换行');
-    assert.strictEqual(r.carry, null, '不再攒这一行');
+    assert.strictEqual(r.dropping, true, 'over the limit: discard up to the next newline');
+    assert.strictEqual(r.carry, null, 'stops buffering this line');
     fs.appendFileSync(f, huge.slice(2500000) + '\n' + line({ n: 2 }));
     r.poll();
     assert.deepStrictEqual(r.state.map((e) => e.n), [1, 2]);
     assert.strictEqual(r.dropping, false);
     assert.strictEqual(r.skipped, 1);
-    // 默认上限够大：同一个文件正常读出超长行
+    // the default limit is large enough: the same file yields the long line normally
     const d = new JsonlTail(f, () => [], push);
     d.poll();
     assert.deepStrictEqual(d.state.map((e) => e.n), [1, 'huge', 2]);
   });
 
-  test('poll(maxBytes)：分片读完结果与一次读完相同（含跨片的多字节字符）', () => {
+  test('poll(maxBytes): reading in slices gives the same result as one full read (including multibyte characters split across slices)', () => {
     const f = tmpFile('budget.jsonl');
     let text = '';
     for (let i = 0; i < 40; i++) text += line({ i, s: '中文テスト한국어' + 'x'.repeat(i % 7) });
@@ -163,14 +163,14 @@ function jsonlTests() {
     while (part.remaining() > 0 || rounds === 0) { part.poll(37); rounds++; if (rounds > 1000) break; }
     assert.ok(rounds > 10);
     const zero = new JsonlTail(f, () => [], push);
-    assert.strictEqual(zero.poll(0), false, '预算为 0 时不读');
+    assert.strictEqual(zero.poll(0), false, 'no read with a budget of 0');
     assert.strictEqual(zero.offset, 0);
     assert.strictEqual(zero.remaining(), fs.statSync(f).size);
     assert.deepStrictEqual(part.state, whole.state);
     assert.strictEqual(part.remaining(), 0);
   });
 
-  test('文件不存在时 poll 返回 false、不抛错；readJsonlSync 读小文件', () => {
+  test('missing file: poll returns false without throwing; readJsonlSync reads a small file', () => {
     const r = new JsonlTail(path.join(TMP, 'nope.jsonl'));
     assert.strictEqual(r.poll(), false);
     const f = tmpFile('idx.jsonl');
@@ -179,12 +179,12 @@ function jsonlTests() {
   });
 }
 
-// ---------- 状态码与灯 ----------
+// ---------- Status codes and lamps ----------
 
 function statusTests() {
   const { STATUS, LAMP } = status;
 
-  test('状态码 → 灯（§3.2）', () => {
+  test('status code → lamp', () => {
     const lamp = (code, extra, opts) => status.lampForStatus(status.makeStatus(code, 0, extra), opts);
     for (const c of ['starting', 'thinking', 'tool', 'retrying', 'idleBackground']) assert.strictEqual(lamp(c), LAMP.WORKING, c);
     for (const c of ['awaitingApproval', 'awaitingInput', 'dialogOpen', 'maybeAwaitingApproval']) assert.strictEqual(lamp(c), LAMP.NEEDS_YOU, c);
@@ -194,15 +194,15 @@ function statusTests() {
     assert.strictEqual(lamp('killed'), LAMP.IDLE);
     assert.strictEqual(lamp('quota'), LAMP.ERROR);
     assert.strictEqual(lamp('apiError'), LAMP.ERROR);
-    // 决定 4 之后 stale 默认 Idle；旧设置 staleAsNeedsYou 仍可让“有未完成调用”的 stale 变 NeedsYou
+    // stale defaults to Idle; the legacy staleAsNeedsYou setting can still turn a stale agent with a pending call into NeedsYou
     assert.strictEqual(lamp('stale', { stalePending: true }), LAMP.IDLE);
     assert.strictEqual(lamp('stale', { stalePending: true }, { staleAsNeedsYou: true }), LAMP.NEEDS_YOU);
     assert.strictEqual(lamp('stale', { stalePending: false }, { staleAsNeedsYou: true }), LAMP.IDLE);
     assert.strictEqual(status.lampForStatus(null), LAMP.IDLE);
-    for (const c of status.STATUS_CODES) assert.ok(c in status.STATUS_LAMP, `STATUS_LAMP 缺 ${c}`);
+    for (const c of status.STATUS_CODES) assert.ok(c in status.STATUS_LAMP, `STATUS_LAMP is missing ${c}`);
   });
 
-  test('确定与推测分开：登记表信号是确定的，快工具推测是 guess', () => {
+  test('certain vs. guessed: registry signals are certain, the fast-tool heuristic is a guess', () => {
     assert.strictEqual(status.makeStatus(STATUS.MAYBE_AWAITING_APPROVAL, 1).certainty, 'guess');
     assert.strictEqual(status.makeStatus(STATUS.AWAITING_APPROVAL, 1).certainty, 'certain');
     assert.ok(status.isGuessCode('maybeAwaitingApproval'));
@@ -218,10 +218,10 @@ function statusTests() {
     assert.strictEqual(reg('busy', null), null);
     assert.strictEqual(reg('idle', null), null);
     assert.strictEqual(status.statusFromRegistry(null), null);
-    assert.strictEqual(status.statusFromRegistry({ status: 'waiting', waitingFor: 'input needed', updatedAt: 1789405200 }).sinceMs, 1789405200000, '秒自动换成毫秒');
+    assert.strictEqual(status.statusFromRegistry({ status: 'waiting', waitingFor: 'input needed', updatedAt: 1789405200 }).sinceMs, 1789405200000, 'seconds are converted to milliseconds');
   });
 
-  test('快工具清单（决定 4）', () => {
+  test('fast-tool list', () => {
     assert.deepStrictEqual([...status.FAST_TOOLS.claude],
       ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'TodoWrite', 'WebFetch']);
     assert.ok(status.isFastTool('codex', 'apply_patch'));
@@ -230,19 +230,19 @@ function statusTests() {
     assert.ok(!status.isFastTool('claude', 'apply_patch'));
   });
 
-  test('“可能在等你批准”推测：fastTools / allTools / off / 有登记表', () => {
+  test('"may be waiting for your approval" heuristic: fastTools / allTools / off / registry present', () => {
     const now = 1_000_000_000;
     const g = (o) => status.guessAwaitingApproval({ provider: 'claude', now, ...o });
     assert.deepStrictEqual(g({ pending: [{ tool: 'Edit', sinceMs: now - 61e3 }] }), { tool: 'Edit', sinceMs: now - 61e3 });
-    assert.strictEqual(g({ pending: [{ tool: 'Edit', sinceMs: now - 59e3 }] }), null, '不到 60 秒');
-    assert.strictEqual(g({ pending: [{ tool: 'Bash', sinceMs: now - 3600e3 }] }), null, 'Bash 不判');
-    assert.strictEqual(g({ pending: [{ tool: 'Edit', sinceMs: now - 61e3 }], hasRegistry: true }), null, '有登记表不推测');
+    assert.strictEqual(g({ pending: [{ tool: 'Edit', sinceMs: now - 59e3 }] }), null, 'under 60 seconds');
+    assert.strictEqual(g({ pending: [{ tool: 'Bash', sinceMs: now - 3600e3 }] }), null, 'Bash is never guessed');
+    assert.strictEqual(g({ pending: [{ tool: 'Edit', sinceMs: now - 61e3 }], hasRegistry: true }), null, 'no guessing when a registry entry exists');
     assert.strictEqual(g({ pending: [{ tool: 'Edit', sinceMs: now - 61e3 }], mode: 'off' }), null);
-    assert.ok(g({ pending: [{ tool: 'Read', sinceMs: now - 20e3 }], seconds: 15 }), '自定义秒数');
-    // 多个未完成调用：取最早命中的那个
+    assert.ok(g({ pending: [{ tool: 'Read', sinceMs: now - 20e3 }], seconds: 15 }), 'custom seconds');
+    // several pending calls: pick the earliest one that matches
     const hit = g({ pending: [{ tool: 'Bash', sinceMs: now - 900e3 }, { tool: 'Grep', sinceMs: now - 70e3 }, { tool: 'Read', sinceMs: now - 90e3 }] });
     assert.strictEqual(hit.tool, 'Read');
-    // allTools 用 staleMinutes
+    // allTools uses staleMinutes
     assert.ok(g({ mode: 'allTools', staleMinutes: 5, pending: [{ tool: 'Bash', sinceMs: now - 301e3 }] }));
     assert.strictEqual(g({ mode: 'allTools', staleMinutes: 5, pending: [{ tool: 'Bash', sinceMs: now - 240e3 }] }), null);
     // Codex
@@ -252,7 +252,7 @@ function statusTests() {
     assert.strictEqual(g({ pending: [] }), null);
   });
 
-  test('会话灯按推导优先级，总灯按显示紧急度（§3.3）', () => {
+  test('session lamp follows derivation priority; overall lamp follows display urgency', () => {
     assert.strictEqual(status.pickDerived(['doneUnseen', 'working']), 'working');
     assert.strictEqual(status.pickSevere(['doneUnseen', 'working']), 'doneUnseen');
     assert.strictEqual(status.pickDerived(['idle', 'error', 'needsYou']), 'needsYou');
@@ -260,7 +260,7 @@ function statusTests() {
     assert.strictEqual(status.pickDerived([]), 'idle');
   });
 
-  test('颜色 id、CSS 变量、配色（决定 5 / §3.5）', () => {
+  test('color ids, CSS variables, palette', () => {
     assert.strictEqual(status.LAMP_CSS_VAR.working, '--vscode-agentMonitor-lampWorking');
     assert.strictEqual(status.LAMP_COLOR_ID.needsYou, 'agentMonitor.lampNeedsYou');
     assert.strictEqual(status.LAMP_COLORS.working.dark, '#00AFFF');
@@ -273,7 +273,7 @@ function statusTests() {
     }
   });
 
-  test('会话 key 与 UUID', () => {
+  test('session key and UUID', () => {
     assert.strictEqual(status.sessionKey('codex', 'abc'), 'codex:abc');
     assert.deepStrictEqual(status.parseSessionKey('claude:1234:x'), { provider: 'claude', id: '1234:x' });
     assert.strictEqual(status.parseSessionKey('bad'), null);
@@ -282,28 +282,28 @@ function statusTests() {
   });
 }
 
-// ---------- 价格 ----------
+// ---------- Pricing ----------
 
 function pricingTests() {
-  test('Claude：5 分钟与 1 小时缓存写分开计价', () => {
+  test('Claude: 5-minute and 1-hour cache writes are priced separately', () => {
     const usage = {
       input_tokens: 1000, cache_creation_input_tokens: 3000,
       cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 2000 },
       cache_read_input_tokens: 10000, output_tokens: 500,
     };
-    // Opus 5：1000×5 + 1000×6.25 + 2000×10 + 10000×0.5 + 500×25 = 48750 / 1e6
+    // Opus 5: 1000×5 + 1000×6.25 + 2000×10 + 10000×0.5 + 500×25 = 48750 / 1e6
     approx(pricing.priceClaude('claude-opus-5', usage), 0.04875);
-    // 同样 3000 全按 5 分钟算会便宜
+    // the same 3000 tokens all at the 5-minute rate is cheaper
     const all5m = { ...usage, cache_creation: { ephemeral_5m_input_tokens: 3000, ephemeral_1h_input_tokens: 0 } };
     approx(pricing.priceClaude('claude-opus-5', all5m), (5000 + 3000 * 6.25 + 5000 + 12500) / 1e6);
-    // cache_creation 缺失 → 整笔按 5 分钟
+    // cache_creation missing → everything at the 5-minute rate
     const noSplit = { input_tokens: 0, cache_creation_input_tokens: 4000, output_tokens: 0 };
     approx(pricing.priceClaude('claude-sonnet-5', noSplit), 4000 * 2.5 / 1e6);
     const t = pricing.claudeUsageTokens(noSplit);
     assert.deepStrictEqual([t.cacheWrite5m, t.cacheWrite1h], [4000, 0]);
   });
 
-  test('Claude：Opus 5.5 与 Fable 5.1 的缓存读特价', () => {
+  test('Claude: special cache-read prices for Opus 5.5 and Fable 5.1', () => {
     const read = { cache_read_input_tokens: 1_000_000 };
     approx(pricing.priceClaude('claude-opus-5-5', read), 0.20);
     approx(pricing.priceClaude('claude-opus-5', read), 0.50);
@@ -313,7 +313,7 @@ function pricingTests() {
     approx(pricing.priceClaude('claude-opus-5-5', { input_tokens: 1e6, output_tokens: 1e6 }), 24);
   });
 
-  test('Claude：模型 id 归一化与最长前缀', () => {
+  test('Claude: model id normalization and longest-prefix match', () => {
     assert.strictEqual(pricing.claudePriceRow('claude-opus-5-5').prefix, 'claude-opus-5-5');
     assert.strictEqual(pricing.claudePriceRow('claude-opus-5').prefix, 'claude-opus-5');
     assert.strictEqual(pricing.claudePriceRow('claude-haiku-4-5-20251001').prefix, 'claude-haiku-4-5');
@@ -325,7 +325,7 @@ function pricingTests() {
     assert.strictEqual(pricing.priceClaude(null, { input_tokens: 10 }), null);
   });
 
-  test('Claude：快速模式按快速价，缓存价推算并标“估”', () => {
+  test('Claude: fast mode uses fast prices; cache prices are derived and marked as estimated', () => {
     const d = pricing.priceClaudeDetail('claude-opus-5-5', { input_tokens: 1e6, output_tokens: 1e6, speed: 'fast' });
     approx(d.usd, 48);
     assert.strictEqual(d.estimated, true);
@@ -334,32 +334,32 @@ function pricingTests() {
     assert.strictEqual(pricing.priceClaudeDetail('claude-opus-5', { input_tokens: 1 }).estimated, false);
   });
 
-  test('OpenAI：输入含缓存，要先减去缓存部分', () => {
+  test('OpenAI: input includes cached tokens, so the cached part is subtracted first', () => {
     const usage = { input_tokens: 100000, cached_input_tokens: 80000, output_tokens: 2000, reasoning_output_tokens: 500, total_tokens: 102000 };
     // (100000−80000)×4 + 80000×0.4 + 2000×20 = 152000 / 1e6
     approx(pricing.priceOpenAI('gpt-5.6-sol', usage), 0.152);
     assert.notStrictEqual(Number(pricing.priceOpenAI('gpt-5.6-sol', usage).toFixed(6)), (100000 * 4 + 80000 * 0.4 + 2000 * 20) / 1e6);
-    // Fast 档（priority 同 fast）
+    // Fast tier (priority is the same as fast)
     approx(pricing.priceOpenAI('gpt-5.6-sol', usage, 'priority'), 0.304);
     approx(pricing.priceOpenAI('gpt-5.6-sol', usage, 'fast'), 0.304);
     approx(pricing.priceOpenAI('gpt-5.6-sol', usage, 'default'), 0.152);
-    // 缓存写
+    // cache write
     approx(pricing.priceOpenAI('gpt-6-astra', { input_tokens: 0, cache_write_input_tokens: 1e6 }), 12.5);
-    // 长上下文（输入 > 272K）
+    // long context (input > 272K)
     approx(pricing.priceOpenAI('gpt-5.6-sol', { input_tokens: 300000 }), 2.4);
     approx(pricing.priceOpenAI('gpt-5.5', { input_tokens: 100000, output_tokens: 1000 }), 0.53);
-    // 未定价
+    // not priced
     assert.strictEqual(pricing.priceOpenAI('codex-auto-review', usage), null);
     assert.strictEqual(pricing.priceOpenAI('gpt-reserve', usage), null);
-    // 分类 token
+    // token breakdown
     assert.deepStrictEqual(pricing.openaiUsageTokens(usage), { input: 100000, cachedInput: 80000, cacheWrite: 0, output: 2000, reasoning: 500 });
   });
 
-  test('价格日期', () => {
+  test('price table date', () => {
     assert.strictEqual(pricing.PRICES_UPDATED, '2026-09-23');
   });
 
-  test('续跑重读代价（§7.3）', () => {
+  test('re-read cost when resuming', () => {
     const c = pricing.rereadCost('claude', 'claude-opus-5', 100000, '1h');
     approx(c.usdIfMiss, 1.0);
     approx(c.usdIfHit, 0.05);
@@ -371,7 +371,7 @@ function pricingTests() {
   });
 }
 
-// ---------- 压缩估价（§11.5） ----------
+// ---------- Compaction cost estimate ----------
 
 function compactTests() {
   const now = T('2026-09-24T12:00:00Z');
@@ -379,24 +379,24 @@ function compactTests() {
   const alive = { ...base, lastActivityMs: now - 10 * 60e3 };
   const expired = { ...base, lastActivityMs: now - 2 * 3600e3 };
 
-  test('§11.5 表格：$0.40；5 分钟档 $2.32 / $1.16；1 小时档 $3.52 / $1.76；Haiku 不可用', () => {
+  test('reference table: $0.40; 5-minute tier $2.32 / $1.16; 1-hour tier $3.52 / $1.76; Haiku unavailable', () => {
     const hit = pricing.estimateCompact(alive);
     assert.strictEqual(hit.outTokens, 16000);
     assert.strictEqual(hit.pricing, 'hit');
     cents(hit.readUsd, 0.08);
     cents(hit.writeUsd, 0.32);
     cents(hit.usd, 0.40);
-    // 5 分钟档（API key）：缓存写按 5m 价
+    // 5-minute tier (API key): cache writes at the 5m rate
     const miss = pricing.estimateCompact({ ...expired, ttl: '5m' });
     assert.strictEqual(miss.cacheLikelyExpired, true);
     cents(miss.readUsd, 2.00);
     cents(miss.usd, 2.32);
     const sonnet = pricing.estimateCompact({ ...alive, ttl: '5m', targetModel: 'claude-sonnet-5' });
-    assert.strictEqual(sonnet.pricing, 'miss', '换模型一律按缓存写');
+    assert.strictEqual(sonnet.pricing, 'miss', 'switching models always pays for a cache write');
     cents(sonnet.readUsd, 1.00);
     cents(sonnet.writeUsd, 0.16);
     cents(sonnet.usd, 1.16);
-    // 1 小时档（订阅主对话）：缓存写按 1h 价（§11.5 右列）
+    // 1-hour tier (subscription main conversation): cache writes at the 1h rate
     cents(pricing.estimateCompact(expired).usd, 3.52);
     cents(pricing.estimateCompact({ ...alive, targetModel: 'claude-sonnet-5' }).usd, 1.76);
     cents(pricing.estimateCompact({ ...alive, ttl: '1h' }).usd, 0.40);
@@ -406,65 +406,65 @@ function compactTests() {
     assert.strictEqual(haiku.usd, null);
   });
 
-  test('输出估计 clamp(round(ctx×0.04), 2000, 20000)', () => {
+  test('output estimate clamp(round(ctx×0.04), 2000, 20000)', () => {
     assert.strictEqual(pricing.compactOutputTokens(31201), 2000);
     assert.strictEqual(pricing.compactOutputTokens(100000), 4000);
     assert.strictEqual(pricing.compactOutputTokens(900000), 20000);
     assert.strictEqual(pricing.compactOutputTokens(0), 2000);
   });
 
-  test('Haiku 只在 contextUsed + 20000 ≤ 200000 时可用', () => {
+  test('Haiku is only available when contextUsed + 20000 ≤ 200000', () => {
     const h = (n) => pricing.estimateCompact({ ...alive, contextUsed: n, targetModel: 'claude-haiku-4-5' }).available;
     assert.strictEqual(h(180000), true);
     assert.strictEqual(h(180001), false);
   });
 
-  test('TTL：5 分钟缓存 6 分钟后算过期；主智能体缺 TTL 按 1 小时', () => {
+  test('TTL: a 5-minute cache counts as expired after 6 minutes; a main agent without a TTL uses 1 hour', () => {
     assert.strictEqual(pricing.estimateCompact({ ...base, ttl: '5m', lastActivityMs: now - 6 * 60e3 }).pricing, 'miss');
     assert.strictEqual(pricing.estimateCompact({ ...base, ttl: null, lastActivityMs: now - 30 * 60e3 }).pricing, 'hit');
     assert.strictEqual(pricing.estimateCompact({ ...base, ttl: null, lastActivityMs: null }).pricing, 'miss');
   });
 
-  test('压缩循环（§11.8 第 2 条）：最近两次相隔 ≤ 10 分钟且之后 10 分钟内没有别的进展', () => {
+  test('compaction loop: the last two compactions are ≤ 10 minutes apart and nothing else happened in the 10 minutes after', () => {
     const M = 60e3;
     const times = [];
     status.noteCompact(times, 0);
-    assert.strictEqual(status.compactLoopOf(times, 0), false, '只有一次');
+    assert.strictEqual(status.compactLoopOf(times, 0), false, 'only one compaction');
     status.noteCompact(times, 9 * M);
     assert.strictEqual(status.compactLoopOf(times, 12 * M), true);
-    assert.strictEqual(status.compactLoopOf(times, 40 * M), false, '之后又干了很久');
+    assert.strictEqual(status.compactLoopOf(times, 40 * M), false, 'plenty of work happened afterwards');
     status.noteCompact(times, 30 * M);
-    assert.strictEqual(status.compactLoopOf(times, 30 * M), false, '相隔 21 分钟');
+    assert.strictEqual(status.compactLoopOf(times, 30 * M), false, '21 minutes apart');
     for (let i = 0; i < 6; i++) status.noteCompact(times, (40 + i) * M);
     assert.strictEqual(times.length, 4);
   });
 
-  test('候选与推荐：缓存在 → 原模型；过期 → Sonnet 5；Haiku 不可用；去重', () => {
+  test('candidates and recommendation: cache alive → original model; expired → Sonnet 5; Haiku unavailable; no duplicates', () => {
     const a = pricing.compactCandidates(alive);
     assert.deepStrictEqual(a.candidates.map((c) => c.id), ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5']);
     assert.strictEqual(a.recommended, 'claude-opus-5-5');
     const b = pricing.compactCandidates(expired);
     assert.strictEqual(b.recommended, 'claude-sonnet-5');
     const s = b.candidates.find((c) => c.id === 'claude-sonnet-5');
-    assert.ok(s.savingVsOriginal > 0.49 && s.savingVsOriginal < 0.51, '缓存过期后 Sonnet 5 大约省一半');
+    assert.ok(s.savingVsOriginal > 0.49 && s.savingVsOriginal < 0.51, 'with an expired cache, Sonnet 5 saves about half');
     assert.strictEqual(b.candidates.find((c) => c.id === 'claude-haiku-4-5').recommended, false);
-    // 小上下文：Haiku 可用且最便宜
+    // small context: Haiku is available and cheapest
     const small = pricing.compactCandidates({ ...expired, contextUsed: 50000 });
     assert.strictEqual(small.recommended, 'claude-haiku-4-5');
-    // 原模型就是 Sonnet 5 时不重复
+    // no duplicate when the original model is already Sonnet 5
     const dup = pricing.compactCandidates({ ...alive, model: 'claude-sonnet-5' });
     assert.deepStrictEqual(dup.candidates.map((c) => c.id), ['claude-sonnet-5', 'claude-haiku-4-5']);
   });
 }
 
-// ---------- 额度 ----------
+// ---------- Quota ----------
 
 function quotaTests() {
-  const ref = T('2026-09-14T10:00:00Z'); // 首尔 19:00（周一）
+  const ref = T('2026-09-14T10:00:00Z'); // 19:00 in Seoul (Monday)
   const parse = (text, at = ref, tz) => quota.parseClaudeLimitText(text, at, tz);
   const iso = (ms) => new Date(ms).toISOString();
 
-  test('文字的四种重置写法与时区', () => {
+  test('the four text formats of the reset time, and time zones', () => {
     const a = parse("You've hit your session limit · resets 3:30am (Asia/Seoul)");
     assert.strictEqual(a.kind, 'session');
     assert.strictEqual(iso(a.resetsAtMs), '2026-09-14T18:30:00.000Z');
@@ -473,24 +473,24 @@ function quotaTests() {
     const c = parse("You've hit your session limit · resets 2am (Asia/Seoul)");
     assert.strictEqual(iso(c.resetsAtMs), '2026-09-14T17:00:00.000Z');
     assert.strictEqual(c.resetsText, 'resets 2am (Asia/Seoul)');
-    // 带星期、没有时区括号 → 用给定（本机）时区；2026-09-16 是周三
+    // weekday without a time zone in parentheses → use the given (local) time zone; 2026-09-16 is a Wednesday
     const d = parse("You've hit your weekly limit · resets Mon 12:00am", T('2026-09-16T12:00:00Z'), 'America/New_York');
     assert.strictEqual(d.kind, 'weekly');
     assert.strictEqual(iso(d.resetsAtMs), '2026-09-21T04:00:00.000Z');
-    // 12pm 是中午
+    // 12pm is noon
     assert.strictEqual(iso(parse('resets 12pm (UTC)', T('2026-09-14T13:00:00Z')).resetsAtMs), '2026-09-15T12:00:00.000Z');
   });
 
-  test('重置时间严格晚于记录时间；夏令时结束当天也对', () => {
-    // 正好 2am 首尔（17:00Z）写的记录 → 下一个 2am 是第二天
+  test('reset time is strictly after the record time, also on the day DST ends', () => {
+    // a record written at exactly 2am Seoul (17:00Z) → the next 2am is the following day
     assert.strictEqual(iso(parse('resets 2am (Asia/Seoul)', T('2026-09-14T17:00:00Z')).resetsAtMs), '2026-09-15T17:00:00.000Z');
-    // 2026-11-01 纽约 2am 夏令时结束 → 2am EST = 07:00Z
+    // 2026-11-01 New York: DST ends at 2am → 2am EST = 07:00Z
     assert.strictEqual(iso(parse('resets 2am (America/New_York)', T('2026-10-31T12:00:00Z')).resetsAtMs), '2026-11-01T07:00:00.000Z');
-    // 无效时区 → 退回给定时区
+    // invalid time zone → fall back to the given time zone
     assert.strictEqual(iso(parse('resets 2am (Mars/Base)', ref, 'Asia/Seoul').resetsAtMs), '2026-09-14T17:00:00.000Z');
   });
 
-  test('额度种类：模型、花费、未知；没有重置时间', () => {
+  test('quota kinds: model, spend, unknown; no reset time', () => {
     const m = parse("You've hit your Opus limit · resets 3:45pm", ref, 'UTC');
     assert.strictEqual(m.kind, 'model');
     assert.strictEqual(m.model, 'Opus');
@@ -509,7 +509,7 @@ function quotaTests() {
     ...extra,
   });
 
-  test('quotaLimits（epoch 秒）优先于文字', () => {
+  test('quotaLimits (epoch seconds) take precedence over the text', () => {
     const e = quotaLine("You've hit your weekly limit · resets 5am (Asia/Seoul)", {
       quotaLimits: { status: 'rejected', rateLimitType: 'seven_day', resetsAt: 1789405200 },
     });
@@ -522,13 +522,13 @@ function quotaTests() {
     const five = quota.parseClaudeQuota(quotaLine('x', { quotaLimits: { rateLimitType: 'five_hour', resetsAt: 1789405200 } }));
     assert.strictEqual(five.kind, 'session');
     const other = quota.parseClaudeQuota(quotaLine("You've hit your session limit", { quotaLimits: { rateLimitType: 'odd', resetsAt: 1789405200 } }));
-    assert.strictEqual(other.kind, 'session', 'rateLimitType 认不出时退回文字的种类');
+    assert.strictEqual(other.kind, 'session', 'an unrecognized rateLimitType falls back to the kind from the text');
     const textOnly = quota.parseClaudeQuota(quotaLine("You've hit your session limit · resets 2am (Asia/Seoul)"));
     assert.strictEqual(textOnly.source, 'text');
     assert.strictEqual(textOnly.resetsAtMs, 1789405200 * 1000);
   });
 
-  test('autoContinue：≥2.1.234 且非 sdk → null；否则 false', () => {
+  test('autoContinue: ≥2.1.234 and not sdk → null; otherwise false', () => {
     assert.strictEqual(quota.parseClaudeQuota(quotaLine('x')).autoContinue, null);
     assert.strictEqual(quota.parseClaudeQuota(quotaLine('x', { version: '2.1.215' })).autoContinue, false);
     assert.strictEqual(quota.parseClaudeQuota(quotaLine('x', { entrypoint: 'sdk-cli' })).autoContinue, false);
@@ -538,7 +538,7 @@ function quotaTests() {
     assert.ok(quota.versionAtLeast('3.0.0', '2.1.234'));
   });
 
-  test('非额度的 API 报错', () => {
+  test('non-quota API errors', () => {
     const e = { isApiErrorMessage: true, error: 'server_error', apiErrorStatus: 529, message: { content: [{ type: 'text', text: '\nAPI Error: 529 Overloaded\nmore' }] } };
     assert.deepStrictEqual(quota.claudeApiError(e), { kind: 'server_error', http: 529, message: 'API Error: 529 Overloaded' });
     assert.ok(!quota.isClaudeQuotaLine({ ...e, type: 'assistant' }));
@@ -553,7 +553,7 @@ function quotaTests() {
     plan_type: 'plus', rate_limit_reached_type: null,
   };
 
-  test('Codex rate_limits 归一化（§4.7）', () => {
+  test('Codex rate_limits normalization', () => {
     const ws = quota.codexWindows(rl, observed);
     assert.deepStrictEqual(ws, [
       { minutes: 300, usedPct: 81, resetsAtMs: 1789871400000, label: '5h' },
@@ -573,7 +573,7 @@ function quotaTests() {
     assert.ok(!quota.isWindowReset(ws[0], 1789871399999));
   });
 
-  test('Codex 撞上限判定与报错枚举', () => {
+  test('Codex limit-hit detection and error enum', () => {
     assert.ok(quota.codexLimitReached(rl));
     assert.ok(!quota.codexLimitReached({ ...rl, secondary: { used_percent: 50, window_minutes: 10080 } }));
     assert.ok(quota.codexLimitReached({ primary: { used_percent: 1 }, rate_limit_reached_type: 'rate_limit_reached' }));
@@ -587,10 +587,10 @@ function quotaTests() {
   });
 }
 
-// ---------- 上下文 ----------
+// ---------- Context ----------
 
 function contextTests() {
-  test('Claude 窗口与默认压缩阈值（§11.9：默认 = 窗口 − 33K；1M → 967K，200K → 167K）', () => {
+  test('Claude window and default compaction threshold (default = window − 33K; 1M → 967K, 200K → 167K)', () => {
     const a = context.claudeContext('claude-opus-5-5', 500000);
     assert.deepStrictEqual([a.contextWindow, a.compactAt, a.toCompact, a.compactAtSource, a.contextWindowSource, a.autoCompactWindow],
       [1000000, 967000, 467000, 'default', 'model-rule', 1000000]);
@@ -601,24 +601,24 @@ function contextTests() {
     assert.strictEqual(context.claudeContext('claude-fable-5-1', 1).contextWindow, 1000000);
     assert.strictEqual(context.claudeContext('claude-opus-4-7', 1).contextWindow, 1000000);
     assert.strictEqual(context.claudeContext('claude-opus-4-6', 1).contextWindow, 200000);
-    // 4.6 开了 [1m] 但没有 cost-state：记录里没有后缀，占用超 200K 后改按 1M
+    // 4.6 with [1m] enabled but no cost-state: the record has no suffix, so switch to 1M once usage exceeds 200K
     assert.strictEqual(context.claudeContext('claude-opus-4-6', 250000).contextWindow, 1000000);
-    assert.strictEqual(context.claudeContext('claude-opus-4-6', 190000).toCompact, 0, '已过压缩点：显示 0');
+    assert.strictEqual(context.claudeContext('claude-opus-4-6', 190000).toCompact, 0, 'past the compaction point: show 0');
     assert.strictEqual(context.claudeContext('claude-opus-4-6', 210000).toCompact, 757000);
-    // 还没有任何回复：不猜窗口
+    // no replies yet: don't guess the window
     const empty = context.claudeContext(null, 0);
     assert.deepStrictEqual([empty.contextWindow, empty.compactAt, empty.contextPct, empty.compactAtSource], [null, null, null, null]);
   });
 
-  test('Claude 设置覆盖：设定值取与窗口的较小值再减 33K；范围 100K–1M；关闭；不读扩展进程的环境变量', () => {
+  test('Claude settings override: min(setting, window) minus 33K; range 100K–1M; disabled; env vars of the extension process are not read', () => {
     const user = (v) => ({ autoCompactWindow: v, windowSource: 'settings-user' });
     const a = context.claudeContext('claude-opus-5', 1, user(500000));
     assert.deepStrictEqual([a.compactAt, a.compactAtSource, a.autoCompactWindow], [467000, 'settings-user', 500000]);
     const small = context.claudeContext('claude-haiku-4-5', 1, user(500000));
-    assert.deepStrictEqual([small.compactAt, small.autoCompactWindow], [167000, 200000], '不超过窗口');
-    assert.strictEqual(context.claudeContext('claude-opus-5', 1, user(5000)).compactAt, 67000, '下限 100K');
-    assert.strictEqual(context.claudeContext('claude-opus-5', 1, user(5000000)).compactAt, 967000, '上限 1M');
-    // 旧写法（readClaudeSettings 的结果，没有来源）按用户设置算
+    assert.deepStrictEqual([small.compactAt, small.autoCompactWindow], [167000, 200000], 'not above the window');
+    assert.strictEqual(context.claudeContext('claude-opus-5', 1, user(5000)).compactAt, 67000, 'lower bound 100K');
+    assert.strictEqual(context.claudeContext('claude-opus-5', 1, user(5000000)).compactAt, 967000, 'upper bound 1M');
+    // legacy shape (readClaudeSettings result without a source) counts as user settings
     assert.strictEqual(context.claudeContext('claude-opus-5', 1, { autoCompactWindow: 400000 }).compactAtSource, 'settings-user');
     const off = context.claudeContext('claude-opus-5', 1, { autoCompactEnabled: false, autoCompactWindow: 400000 });
     assert.deepStrictEqual([off.compactAt, off.toCompact, off.autoCompactOff, off.compactAtSource, off.autoCompactWindow], [null, null, true, 'disabled', null]);
@@ -628,7 +628,7 @@ function contextTests() {
       process.env.DISABLE_AUTO_COMPACT = '1';
       process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '50';
       const e = context.claudeContext('claude-opus-5', 1);
-      assert.deepStrictEqual([e.compactAt, e.compactAtSource], [967000, 'default'], '§11.10：Claude 进程的环境变量插件看不到，不依赖');
+      assert.deepStrictEqual([e.compactAt, e.compactAtSource], [967000, 'default'], 'env vars of the Claude process are invisible to the extension, so they are not used');
     } finally {
       for (const k of ['CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'DISABLE_AUTO_COMPACT', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']) {
         if (k in saved) process.env[k] = saved[k]; else delete process.env[k];
@@ -636,21 +636,21 @@ function contextTests() {
     }
   });
 
-  test('百分比与 Claude Code 的 KJt 一致：round(已用 / 窗口 × 100)，夹在 0–100', () => {
+  test('percentage matches Claude Code: round(used / window × 100), clamped to 0–100', () => {
     assert.strictEqual(context.usedPercent(412000, 1000000), 41);
-    assert.strictEqual(context.usedPercent(4999, 1000000), 0, '0.4999% → 0（“<1%”由 format 判断）');
-    assert.strictEqual(context.usedPercent(5000, 1000000), 1, '0.5% 四舍五入到 1');
+    assert.strictEqual(context.usedPercent(4999, 1000000), 0, '0.4999% → 0 ("<1%" is decided by the formatter)');
+    assert.strictEqual(context.usedPercent(5000, 1000000), 1, '0.5% rounds to 1');
     assert.strictEqual(context.usedPercent(199000, 200000), 100, '99.5% → 100');
-    assert.strictEqual(context.usedPercent(250000, 200000), 100, '夹到 100');
+    assert.strictEqual(context.usedPercent(250000, 200000), 100, 'clamped to 100');
     assert.strictEqual(context.usedPercent(-5, 200000), 0);
     assert.strictEqual(context.usedPercent(0, 200000), 0);
     assert.strictEqual(context.usedPercent(100, null), null);
     assert.strictEqual(context.usedPercent(100, 0), null);
-    assert.strictEqual(context.claudeContext('claude-opus-5-5', 412000).contextPct, 41, '分母是窗口，不是压缩点');
+    assert.strictEqual(context.claudeContext('claude-opus-5-5', 412000).contextPct, 41, 'the denominator is the window, not the compaction point');
     assert.strictEqual(context.claudeContext('claude-haiku-4-5', 150000).contextPct, 75);
   });
 
-  test('cost-state 键匹配（§11.10）：同名带 [1m] → 1M（cost-state）；只有同名键 → 按模型规则；日期后缀、大小写', () => {
+  test('cost-state key matching: same name with [1m] → 1M (cost-state); only the plain key → model rule; date suffixes, letter case', () => {
     const keys = ['claude-haiku-4-5-20251001', 'claude-opus-4-6[1m]', 'claude-opus-5-5', 'Claude-Sonnet-4-6'];
     assert.deepStrictEqual(context.costStateVariant('claude-opus-4-6', keys), { variant: 'claude-opus-4-6[1m]', is1m: true });
     assert.deepStrictEqual(context.costStateVariant('claude-opus-4-6-20260101', keys), { variant: 'claude-opus-4-6[1m]', is1m: true });
@@ -659,11 +659,11 @@ function contextTests() {
     assert.deepStrictEqual(context.costStateVariant('claude-opus-5', keys), { variant: null, is1m: false });
     assert.deepStrictEqual(context.costStateVariant('claude-opus-5', null), { variant: null, is1m: false });
     assert.deepStrictEqual(context.costStateVariant(null, keys), { variant: null, is1m: false });
-    // 窗口
+    // window
     assert.deepStrictEqual(context.resolveClaudeWindow('claude-opus-4-6', 1000, keys),
       { contextWindow: 1000000, contextWindowSource: 'cost-state', modelVariant: 'claude-opus-4-6[1m]' });
     assert.deepStrictEqual(context.resolveClaudeWindow('claude-opus-5-5', 1000, keys),
-      { contextWindow: 1000000, contextWindowSource: 'model-rule', modelVariant: 'claude-opus-5-5' }, '原生 1M，不带后缀也是 1M');
+      { contextWindow: 1000000, contextWindowSource: 'model-rule', modelVariant: 'claude-opus-5-5' }, 'natively 1M: 1M even without the suffix');
     assert.deepStrictEqual(context.resolveClaudeWindow('claude-sonnet-4-6', 1000, keys),
       { contextWindow: 200000, contextWindowSource: 'model-rule', modelVariant: 'Claude-Sonnet-4-6' });
     assert.deepStrictEqual(context.resolveClaudeWindow('claude-haiku-4-5-20251001', 1000, keys),
@@ -672,28 +672,28 @@ function contextTests() {
     assert.deepStrictEqual([c.contextWindow, c.contextWindowSource, c.modelVariant, c.compactAt, c.contextPct], [1000000, 'cost-state', 'claude-opus-4-6[1m]', 967000, 15]);
   });
 
-  test('压缩点来源顺序（§11.10）：设置 → 实测 → 默认；实测直接用 preTokens；关闭时实测也不用', () => {
+  test('compaction point source order: settings → observed → default; observed uses preTokens as is; when disabled, observed is ignored too', () => {
     const r = (o) => context.resolveClaudeCompact(o);
     assert.deepStrictEqual(r({ contextWindow: 1000000, settings: { autoCompactWindow: 400000, windowSource: 'settings-local' }, observed: 955000 }),
       { compactAt: 367000, compactAtSource: 'settings-local', autoCompactWindow: 400000 });
     assert.deepStrictEqual(r({ contextWindow: 1000000, settings: {}, observed: 955000 }),
       { compactAt: 955000, compactAtSource: 'observed', autoCompactWindow: null });
-    assert.deepStrictEqual(r({ contextWindow: 200000, observed: 250000 }).compactAt, 200000, '实测值不超过窗口');
+    assert.deepStrictEqual(r({ contextWindow: 200000, observed: 250000 }).compactAt, 200000, 'observed value is capped at the window');
     assert.deepStrictEqual(r({ contextWindow: 1000000 }), { compactAt: 967000, compactAtSource: 'default', autoCompactWindow: 1000000 });
     assert.deepStrictEqual(r({ contextWindow: 200000 }), { compactAt: 167000, compactAtSource: 'default', autoCompactWindow: 200000 });
     assert.deepStrictEqual(r({ contextWindow: 1000000, settings: { autoCompactEnabled: false }, observed: 955000 }),
       { compactAt: null, compactAtSource: 'disabled', autoCompactWindow: null });
     assert.deepStrictEqual(r({ contextWindow: null }), { compactAt: null, compactAtSource: null, autoCompactWindow: null });
-    // 实测表按 `${model}|${contextWindow}` 查
+    // the observed table is keyed by `${model}|${contextWindow}`
     assert.strictEqual(context.observedKey('claude-opus-5-5', 1000000), 'claude-opus-5-5|1000000');
     const obs = { 'claude-opus-5-5|1000000': 958000, 'claude-opus-5-5|200000': 1 };
     const c = context.claudeContext('claude-opus-5-5', 100000, {}, { observed: obs });
     assert.deepStrictEqual([c.compactAt, c.compactAtSource, c.toCompact], [958000, 'observed', 858000]);
     const s = context.claudeContext('claude-opus-5-5', 100000, { autoCompactWindow: 600000, windowSource: 'settings-project' }, { observed: obs });
-    assert.deepStrictEqual([s.compactAt, s.compactAtSource], [567000, 'settings-project'], '设置优先于实测');
+    assert.deepStrictEqual([s.compactAt, s.compactAtSource], [567000, 'settings-project'], 'settings take precedence over observed');
   });
 
-  test('三层设置：每个键取优先级最高、写了它的那一层；会话目录就是主目录时不重复算项目设置', () => {
+  test('three settings layers: each key comes from the highest-priority layer that sets it; project settings are not counted twice when the session dir is the home dir', () => {
     const m = context.mergeCompactSettings([
       { source: 'settings-local', value: { autoCompactEnabled: true } },
       { source: 'settings-project', value: { autoCompactWindow: 300000 } },
@@ -711,34 +711,34 @@ function contextTests() {
     assert.deepStrictEqual(context.claudeSettingsFiles(null, user).map((x) => x.source), ['settings-user']);
   });
 
-  test('设置文件缓存：检查间隔内不 stat；mtime / 大小变了才重读；没有文件、坏 JSON 都当没设', () => {
+  test('settings file cache: no stat within the check interval; re-read only when mtime / size changes; a missing file or bad JSON counts as unset', () => {
     const f = tmpFile('settings.local.json');
     const cache = new context.SettingsCache({ checkMs: 5000 });
-    assert.deepStrictEqual(cache.get(f, 1000), {}, '没有文件');
+    assert.deepStrictEqual(cache.get(f, 1000), {}, 'no file');
     fs.writeFileSync(f, JSON.stringify({ autoCompactWindow: 400000 }));
-    assert.deepStrictEqual(cache.get(f, 2000), {}, '5 秒内用缓存');
+    assert.deepStrictEqual(cache.get(f, 2000), {}, 'cached within 5 seconds');
     assert.deepStrictEqual(cache.get(f, 6000), { autoCompactWindow: 400000 });
     assert.strictEqual(cache.reads, 1);
     assert.deepStrictEqual(cache.get(f, 12000), { autoCompactWindow: 400000 });
-    assert.strictEqual(cache.reads, 1, '没变不重读');
+    assert.strictEqual(cache.reads, 1, 'unchanged: not re-read');
     fs.writeFileSync(f, JSON.stringify({ autoCompactWindow: 450000, autoCompactEnabled: false, x: 1 }));
     assert.deepStrictEqual(cache.get(f, 18000), { autoCompactWindow: 450000, autoCompactEnabled: false });
     fs.writeFileSync(f, '{ broken');
-    assert.deepStrictEqual(cache.get(f, 24000), {}, '坏 JSON');
+    assert.deepStrictEqual(cache.get(f, 24000), {}, 'bad JSON');
     fs.writeFileSync(f, '[1, 2]');
-    assert.deepStrictEqual(cache.get(f, 30000), {}, '不是对象');
+    assert.deepStrictEqual(cache.get(f, 30000), {}, 'not an object');
     fs.rmSync(f);
-    assert.deepStrictEqual(cache.get(f, 36000), {}, '删掉了');
+    assert.deepStrictEqual(cache.get(f, 36000), {}, 'deleted');
   });
 
-  test('读 settings.json（只取两个键）', () => {
+  test('read settings.json (only two keys)', () => {
     const f = tmpFile('settings.json');
     fs.writeFileSync(f, JSON.stringify({ autoCompactWindow: 400000, autoCompactEnabled: true, other: 1 }));
     assert.deepStrictEqual(context.readClaudeSettings(f), { autoCompactWindow: 400000, autoCompactEnabled: true });
     assert.deepStrictEqual(context.readClaudeSettings(path.join(TMP, 'missing.json')), {});
   });
 
-  test('Codex：models_cache × 0.9、配置取小、找不到模型按 95% 反推、body_after_prefix', () => {
+  test('Codex: models_cache × 0.9, the smaller config value wins, unknown models are back-computed at 95%, body_after_prefix', () => {
     const models = context.codexModelsIndex({ models: [{ slug: 'gpt-5.6-sol', context_window: 272000, max_context_window: 872000, effective_context_window_percent: 95 }] });
     const th = { model: 'gpt-5.6-sol', contextUsed: 100000, modelContextWindow: 258400 };
     const a = context.codexContext(th, models, {});
@@ -748,19 +748,19 @@ function contextTests() {
     const u = context.codexContext({ model: 'unknown', contextUsed: 1, modelContextWindow: 258400 }, models, {});
     assert.strictEqual(u.compactAt, 244800);
     const noWin = context.codexContext({ model: 'gpt-5.6-sol', contextUsed: 1 }, models, {});
-    assert.strictEqual(noWin.contextWindow, 258400, '没有 model_context_window 时按 cw × 有效比例');
+    assert.strictEqual(noWin.contextWindow, 258400, 'without model_context_window: cw × effective percent');
     const rel = context.codexContext(th, models, { autoCompactScope: 'body_after_prefix' });
     assert.strictEqual(rel.toCompact, null);
     assert.strictEqual(rel.scopeRelative, true);
   });
 
-  test('Codex 来源（§11.10）：记录里的窗口 → codex-record；按模型目录推 → model-rule；config 取小 → settings-user；百分比同公式', () => {
+  test('Codex sources: window from the record → codex-record; derived from the model catalog → model-rule; smaller config value → settings-user; same percentage formula', () => {
     const models = context.codexModelsIndex({ models: [{ slug: 'gpt-5.6-sol', context_window: 272000, effective_context_window_percent: 95 }] });
     const th = { model: 'gpt-5.6-sol', contextUsed: 100000, modelContextWindow: 258400 };
     const a = context.codexContext(th, models, {});
     assert.deepStrictEqual([a.contextWindowSource, a.compactAtSource, a.contextPct], ['codex-record', 'default', 39]);
     assert.strictEqual(context.codexContext(th, models, { modelAutoCompactTokenLimit: 200000 }).compactAtSource, 'settings-user');
-    assert.strictEqual(context.codexContext(th, models, { modelAutoCompactTokenLimit: 250000 }).compactAtSource, 'default', '配置更大时不起作用');
+    assert.strictEqual(context.codexContext(th, models, { modelAutoCompactTokenLimit: 250000 }).compactAtSource, 'default', 'a larger config value has no effect');
     const derived = context.codexContext({ model: 'gpt-5.6-sol', contextUsed: 1 }, models, {});
     assert.deepStrictEqual([derived.contextWindow, derived.contextWindowSource], [258400, 'model-rule']);
     const none = context.codexContext({ model: 'unknown', contextUsed: 1 }, models, {});
@@ -769,7 +769,7 @@ function contextTests() {
     assert.deepStrictEqual([onlyLimit.compactAt, onlyLimit.compactAtSource], [100000, 'settings-user']);
   });
 
-  test('config.toml 只读顶层键', () => {
+  test('config.toml: only top-level keys are read', () => {
     const c = context.parseCodexConfig([
       'model = "gpt-5.6-sol"',
       'model_auto_compact_token_limit = 200_000 # 注释',
@@ -782,7 +782,7 @@ function contextTests() {
   });
 }
 
-// ---------- 续跑 ----------
+// ---------- Resume ----------
 
 function resumeTests() {
   const now = T('2026-09-24T12:00:00Z');
@@ -792,14 +792,14 @@ function resumeTests() {
     cacheTtl: null, lastActivityMs: now - 60e3, ...o,
   });
 
-  test('缓存 TTL 推断', () => {
+  test('cache TTL inference', () => {
     assert.deepStrictEqual(resume.cacheTtlFromUsage({ cache_creation: { ephemeral_1h_input_tokens: 5, ephemeral_5m_input_tokens: 0 } }, false), { ttl: '1h', inferred: false });
     assert.deepStrictEqual(resume.cacheTtlFromUsage({ cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 5 } }, true), { ttl: '5m', inferred: false });
     assert.deepStrictEqual(resume.cacheTtlFromUsage({}, true), { ttl: '1h', inferred: true });
     assert.deepStrictEqual(resume.cacheTtlFromUsage(null, false), { ttl: '5m', inferred: true });
   });
 
-  test('续跑代价：撞额度时按重置时刻判缓存过期', () => {
+  test('resume cost: after hitting a quota, cache expiry is judged at the reset time', () => {
     const e = resume.resumeEstimate({ provider: 'claude', model: 'claude-opus-5', contextTokens: 100000, ttl: '1h', lastActivityMs: now - 60e3, now });
     assert.deepStrictEqual([e.ttl, e.cacheLikelyExpired], ['1h', false]);
     approx(e.usdIfMiss, 1.0);
@@ -811,7 +811,7 @@ function resumeTests() {
     approx(c.usdIfMiss, 0.4);
   });
 
-  test('按会话生成提示（§7.1）', () => {
+  test('hints generated per session', () => {
     const qh = { kind: 'session', model: null, resetsAtMs: now + 3600e3, resetsText: null, source: 'text', autoContinue: null };
     const session = {
       provider: 'claude', id: 'sess-1', cwd: '/tmp/p', entry: 'vscode',
@@ -835,18 +835,18 @@ function resumeTests() {
     assert.deepStrictEqual(hints.map((h) => h.kind), ['claudeSession', 'claudeSubagent', 'claudeSubagent', 'claudeWorkflow', 'claudeWorkflow']);
     assert.strictEqual(hints[0].autoContinue, null);
     assert.strictEqual(hints[0].quota, qh);
-    assert.strictEqual(hints[1].resumable, false, 'Explore 续不了');
+    assert.strictEqual(hints[1].resumable, false, 'Explore cannot be resumed');
     assert.strictEqual(hints[2].resumable, true);
-    assert.strictEqual(hints[3].estimate.contextTokens, 50000, '只算要重跑的智能体');
+    assert.strictEqual(hints[3].estimate.contextTokens, 50000, 'only counts agents that need to rerun');
     assert.strictEqual(hints[3].paused, false);
     assert.strictEqual(hints[4].paused, true);
     assert.deepStrictEqual(resume.resumeVariants(hints[0]), ['prompt']);
-    assert.deepStrictEqual(resume.resumeVariants(hints[4]), [], '撞额度暂停中不给复制');
+    assert.deepStrictEqual(resume.resumeVariants(hints[4]), [], 'no copy action while paused on a quota');
     assert.deepStrictEqual(resume.resumeVariants(hints[1]), ['prompt']);
     assert.strictEqual(resume.resumeHints({ ...session, main: agent({}), agents: [], workflows: [] }, { now }).length, 0);
   });
 
-  test('Codex 会话：主线程 stale 给提示，审阅线程不给', () => {
+  test('Codex session: a stale main thread gets a hint, reviewer threads do not', () => {
     const s = {
       provider: 'codex', id: 'th-1', cwd: '/w', entry: 'cli',
       main: agent({ model: 'gpt-5.6-sol', status: status.makeStatus('stale', now) }),
@@ -863,7 +863,7 @@ function resumeTests() {
     assert.strictEqual(h[0].estimate.ttl, 'unknown');
   });
 
-  test('提示词键都在英文词典里', () => {
+  test('all prompt keys exist in the English dictionary', () => {
     const en = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'core.en.json'), 'utf8'));
     const hints = [
       { kind: 'claudeSession' }, { kind: 'codexThread' },
@@ -874,11 +874,11 @@ function resumeTests() {
     for (const h of hints) {
       const p = resume.resumePrompt(h);
       assert.ok(en[p.key], p.key);
-      for (const m of en[p.key].matchAll(/\{(\w+)\}/g)) assert.ok(m[1] in p.vars, `${p.key} 缺 ${m[1]}`);
+      for (const m of en[p.key].matchAll(/\{(\w+)\}/g)) assert.ok(m[1] in p.vars, `${p.key} is missing ${m[1]}`);
     }
   });
 
-  test('终端命令：POSIX 转义、PowerShell、id 校验', () => {
+  test('terminal commands: POSIX escaping, PowerShell, id validation', () => {
     const h = { kind: 'claudeSession', sessionId: '0b7c1f7e-2a4d-4c3b-9f11-0123456789ab', cwd: "/Users/me/My Proj's" };
     assert.strictEqual(resume.resumeCommand(h, 'Say "hi" $HOME `x` \\', { platform: 'darwin' }),
       "cd '/Users/me/My Proj'\\''s' && claude --resume 0b7c1f7e-2a4d-4c3b-9f11-0123456789ab \"Say \\\"hi\\\" \\$HOME \\`x\\` \\\\\"");
@@ -892,10 +892,10 @@ function resumeTests() {
   });
 }
 
-// ---------- 多语言与格式化 ----------
+// ---------- i18n and formatting ----------
 
 function i18nTests() {
-  test('locale 归一化（§9.2）', () => {
+  test('locale normalization', () => {
     const cases = {
       'zh-hk': 'zh-tw', 'zh-hant-tw': 'zh-tw', 'zh-Hant': 'zh-tw', 'zh-mo': 'zh-tw', 'zh-TW': 'zh-tw',
       'zh-cn': 'zh-cn', 'zh_CN.UTF-8': 'zh-cn', 'zh-sg': 'zh-cn', zh: 'zh-cn', 'zh-hans': 'zh-cn',
@@ -908,7 +908,7 @@ function i18nTests() {
     assert.strictEqual(i18n.intlLocaleOf('ko'), 'ko-KR');
   });
 
-  test('终端版语言来源：--lang → LC_ALL → LC_MESSAGES → LANG', () => {
+  test('CLI locale sources: --lang → LC_ALL → LC_MESSAGES → LANG', () => {
     assert.strictEqual(i18n.resolveCliLocale(['--lang', 'ko'], {}), 'ko');
     assert.strictEqual(i18n.resolveCliLocale(['--watch', '--lang=ja'], { LANG: 'zh_CN.UTF-8' }), 'ja');
     assert.strictEqual(i18n.resolveCliLocale([], { LC_ALL: 'C', LANG: 'zh_TW.UTF-8' }), 'zh_TW.UTF-8');
@@ -916,7 +916,7 @@ function i18nTests() {
     assert.ok(typeof i18n.resolveCliLocale([], {}) === 'string');
   });
 
-  test('按区合并词典，缺键回退英文，再缺回退键名', () => {
+  test('dictionaries are merged per region; missing keys fall back to English, then to the key name', () => {
     const dir = path.join(TMP, 'l10n');
     fs.mkdirSync(dir, { recursive: true });
     const w = (f, o) => fs.writeFileSync(path.join(dir, f), typeof o === 'string' ? o : JSON.stringify(o));
@@ -930,24 +930,24 @@ function i18nTests() {
     const zh = i18n.createI18n('zh-CN', { dir });
     assert.strictEqual(zh.locale, 'zh-cn');
     assert.strictEqual(zh.t('a'), '甲');
-    assert.strictEqual(zh.t('b', { x: 1 }), 'B 1', '回退英文');
-    assert.strictEqual(zh.t('c'), '丙', '其它区的文件也合并');
+    assert.strictEqual(zh.t('b', { x: 1 }), 'B 1', 'falls back to English');
+    assert.strictEqual(zh.t('c'), '丙', 'files from other regions are merged too');
     assert.strictEqual(zh.t('d'), 'D');
     assert.strictEqual(zh.t('nope.key'), 'nope.key');
     assert.ok(zh.has('d') && !zh.has('nope.key'));
     assert.strictEqual(zh.fmtDur(63000), '1分03秒');
-    assert.ok(i18n.loadErrors.some((e) => e.file.endsWith('webview.zh-cn.json')), '坏文件记下来、不抛错');
+    assert.ok(i18n.loadErrors.some((e) => e.file.endsWith('webview.zh-cn.json')), 'a bad file is recorded instead of throwing');
     const ja = i18n.createI18n('ja-JP', { dir });
-    assert.strictEqual(ja.t('a'), 'A', '没有该语言文件时整份回退英文');
+    assert.strictEqual(ja.t('a'), 'A', 'no files for this language: everything falls back to English');
     assert.deepStrictEqual(Object.keys(zh.dict(['a', 'b'])).sort(), ['a', 'b']);
   });
 
-  test('插值：缺的占位符保留，null 变空串', () => {
+  test('interpolation: missing placeholders are kept, null becomes an empty string', () => {
     assert.strictEqual(i18n.interpolate('{a}-{b}-{c}', { a: 1, b: null }), '1--{c}');
     assert.strictEqual(i18n.interpolate('x {a}', undefined), 'x {a}');
   });
 
-  test('英文运行时词典：状态、灯、额度、入口等键齐全', () => {
+  test('English runtime dictionary has all status, lamp, quota, entry, etc. keys', () => {
     i18n.clearCache();
     const en = i18n.createI18n('en');
     for (const c of status.STATUS_CODES) assert.ok(en.has('status.' + c), 'status.' + c);
@@ -959,25 +959,25 @@ function i18nTests() {
     assert.strictEqual(en.t('status.awaitingApproval'), 'Waiting for your approval');
     assert.strictEqual(en.t('status.maybeAwaitingApproval'), 'May be waiting for your approval');
     assert.strictEqual(en.t('cost.label'), 'API-equivalent cost');
-    // 全部词条都是字符串、占位符只用 {word}
+    // every entry is a string and placeholders only use {word}
     const all = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'core.en.json'), 'utf8'));
     for (const [k, v] of Object.entries(all)) {
       assert.strictEqual(typeof v, 'string', k);
-      for (const m of v.matchAll(/\{([^{}]*)\}/g)) assert.ok(/^\w+$/.test(m[1]), `${k} 占位符写法 {${m[1]}}`);
+      for (const m of v.matchAll(/\{([^{}]*)\}/g)) assert.ok(/^\w+$/.test(m[1]), `${k} malformed placeholder {${m[1]}}`);
     }
-    // 没有中日韩硬编码
+    // no hard-coded CJK text
     assert.ok(!/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(JSON.stringify(all)));
   });
 
-  test('§11.12.7 六个区 × 五种语言：键集合与英文一致，每个键的占位符集合一致；package.nls 同样', () => {
+  test('six regions × five languages: key sets match English and each key has the same placeholders; same for package.nls', () => {
     const ph = (s) => (String(s).match(/\{\w+\}/g) || []).slice().sort().join(',');
-    // §11.13 新加的键翻译阶段已补齐，不再有暂缺豁免：任何键缺了都失败
+    // no exemptions for untranslated keys: any missing key fails
     const same = (en, loc, label) => {
       const missing = Object.keys(en).filter((k) => !(k in loc));
       const extra = Object.keys(loc).filter((k) => !(k in en));
-      assert.deepStrictEqual([missing, extra], [[], []], `${label}：缺 ${missing.length}、多 ${extra.length}`);
+      assert.deepStrictEqual([missing, extra], [[], []], `${label}: ${missing.length} missing, ${extra.length} extra`);
       const bad = Object.keys(en).filter((k) => k in loc && ph(en[k]) !== ph(loc[k]));
-      assert.deepStrictEqual(bad, [], `${label}：占位符不一致`);
+      assert.deepStrictEqual(bad, [], `${label}: placeholders differ`);
     };
     const read = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
     assert.deepStrictEqual([...i18n.REGIONS], ['core', 'views', 'webview', 'cli', 'compact', 'storage']);
@@ -989,19 +989,19 @@ function i18nTests() {
     for (const loc of ['zh-cn', 'zh-tw', 'ko', 'ja']) same(nls, read(`package.nls.${loc}.json`), `package.nls.${loc}`);
   });
 
-  test('§11.13 会话列表在哪边可设（默认跟随终端，在右）：扩展描述和“选一个会话”的提示不写死左右', () => {
+  test('session list side is configurable (default follows the terminal, on the right): the extension description and the "pick a session" hint do not hard-code left/right', () => {
     const read = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
-    // 各语言里“左 / 右”的写法（设置 sessionListPosition 的 left / right 选项本身就是讲左右，不在检查之列）
+    // how "left / right" is written in each language (the left / right options of the sessionListPosition setting are about sides by definition, so they are not checked)
     const side = /\b(left|right)\b|左|右|왼쪽|오른쪽/i;
     for (const loc of ['en', 'zh-cn', 'zh-tw', 'ko', 'ja']) {
       const nls = read(loc === 'en' ? 'package.nls.json' : `package.nls.${loc}.json`);
-      assert.ok(!side.test(nls.description), `package.nls.${loc} description 写死了左右：${nls.description}`);
+      assert.ok(!side.test(nls.description), `package.nls.${loc} description hard-codes left/right: ${nls.description}`);
       const views = read(`l10n/views.${loc}.json`);
-      assert.ok(!side.test(views['session.none']), `views.${loc} session.none 写死了左右：${views['session.none']}`);
+      assert.ok(!side.test(views['session.none']), `views.${loc} session.none hard-codes left/right: ${views['session.none']}`);
     }
   });
 
-  test('格式化：时长', () => {
+  test('formatting: durations', () => {
     const en = i18n.createI18n('en', { dicts: { en: { 'dur.s': 's', 'dur.m': 'm', 'dur.h': 'h', 'dur.d': 'd' } } });
     assert.strictEqual(en.fmtDur(5000), '5s');
     assert.strictEqual(en.fmtDur(63000), '1m03s');
@@ -1012,7 +1012,7 @@ function i18nTests() {
     assert.strictEqual(en.fmtDur(NaN), '');
   });
 
-  test('格式化：token、百分比、金额（Intl）', () => {
+  test('formatting: tokens, percentages, money (Intl)', () => {
     const en = i18n.createI18n('en', { dicts: { en: {} } });
     const zh = i18n.createI18n('zh-cn', { dicts: { en: {} } });
     const ko = i18n.createI18n('ko', { dicts: { en: {} } });
@@ -1032,14 +1032,14 @@ function i18nTests() {
     assert.strictEqual(en.fmtNum(1234567), '1,234,567');
   });
 
-  test('格式化：时刻与相对时间（固定时区）', () => {
-    const now = T('2026-09-14T03:00:00Z'); // 首尔 12:00
+  test('formatting: clock times and relative times (fixed time zone)', () => {
+    const now = T('2026-09-14T03:00:00Z'); // 12:00 in Seoul
     const en = i18n.createI18n('en', { dicts: { en: {} }, timeZone: 'Asia/Seoul' });
     const zh = i18n.createI18n('zh-cn', { dicts: { en: {} }, timeZone: 'Asia/Seoul' });
     assert.match(en.fmtClock(T('2026-09-14T05:30:00Z'), now), /^2:30\sPM$/u);
     assert.strictEqual(zh.fmtClock(T('2026-09-14T05:30:00Z'), now), '14:30');
-    assert.match(en.fmtClock(T('2026-09-15T17:00:00Z'), now), /^Wed/, '不同天带星期');
-    assert.match(en.fmtClock(T('2026-10-20T17:00:00Z'), now), /Oct/, '更远带月日');
+    assert.match(en.fmtClock(T('2026-09-15T17:00:00Z'), now), /^Wed/, 'a different day includes the weekday');
+    assert.match(en.fmtClock(T('2026-10-20T17:00:00Z'), now), /Oct/, 'further away includes month and day');
     assert.strictEqual(en.fmtAgo(now - 3000, now), 'now');
     assert.strictEqual(zh.fmtAgo(now - 3 * 60e3, now), '3分钟前');
     assert.match(en.fmtAgo(now - 2 * 3600e3, now), /2/);
@@ -1048,14 +1048,14 @@ function i18nTests() {
     assert.strictEqual(en.fmtClock(null, now), '');
   });
 
-  test('注入 webview：JSON 安全转义，浏览器环境能还原', () => {
+  test('injection into the webview: JSON is safely escaped and can be restored in a browser environment', () => {
     const inst = i18n.createI18n('ko', { dicts: { en: { 'wv.a': 'A', 'wv.b': 'B', other: 'x' }, ko: { 'wv.a': '</script><b>가' } } });
     const json = inst.webviewJson(['wv.']);
     assert.ok(!json.includes('</script>'));
     assert.ok(!json.includes('<'));
     const p = JSON.parse(json);
     assert.deepStrictEqual(p, { locale: 'ko', intlLocale: 'ko-KR', dict: { 'wv.a': '</script><b>가', 'wv.b': 'B' } });
-    // 模拟 webview：没有 require / module，直接执行文件
+    // simulate the webview: no require / module, run the file directly
     const sandbox = { Intl, console };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
@@ -1070,28 +1070,28 @@ function i18nTests() {
   });
 }
 
-// ---------- 运行 ----------
+// ---------- Run ----------
 
 try {
   console.log('JsonlTail');
   jsonlTests();
-  console.log('\n状态码与灯');
+  console.log('\nStatus codes and lamps');
   statusTests();
-  console.log('\n价格');
+  console.log('\nPricing');
   pricingTests();
-  console.log('\n压缩估价');
+  console.log('\nCompaction estimate');
   compactTests();
-  console.log('\n额度');
+  console.log('\nQuota');
   quotaTests();
-  console.log('\n上下文');
+  console.log('\nContext');
   contextTests();
-  console.log('\n续跑');
+  console.log('\nResume');
   resumeTests();
-  console.log('\n多语言与格式化');
+  console.log('\ni18n and formatting');
   i18nTests();
 } finally {
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 const failed = results.filter((x) => !x).length;
-console.log(`\n${results.length - failed}/${results.length} 通过`);
+console.log(`\n${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);

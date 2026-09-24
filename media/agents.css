@@ -1,7 +1,7 @@
-/* 底部面板（DESIGN §11.13 做成终端面板那样）：一个整体，一侧是窄的会话列表（仿终端标签列表），
-   另一块是内容区（会话条 + 贴近原生表格的智能体表），中间一条可拖动的竖分隔线。沿用 v0.2 已验证的清晰度规范：
-   字号一律跟随界面（不小于 --vscode-font-size），不用 opacity 调暗文字，行高 22px，codicon 图标，
-   高对比主题有描边，窄内容区换两行排法（按内容区宽度的容器查询），不出现横向滚动。状态色用 contributes.colors 的 lamp 颜色。 */
+/* Bottom panel, laid out like VS Code's terminal panel: one layout with a narrow session list on one side (modeled on the terminal tab list),
+   the content area on the other (session bar + an agent table styled close to a native table), and a draggable vertical sash between them. Legibility rules:
+   font size always follows the UI (never smaller than --vscode-font-size), no opacity for dimming text, 22px row height, codicon icons,
+   outlines in high-contrast themes, a two-line layout in a narrow content area (container query on the content area's width), no horizontal scrolling. Status colors use the lamp colors from contributes.colors. */
 
 :root {
   --row-h: 22px;
@@ -11,25 +11,25 @@
   --c-err-text: var(--vscode-list-errorForeground, var(--vscode-errorForeground));
   --c-warn: var(--vscode-list-warningForeground, var(--vscode-editorWarning-foreground, #cca700));
   --c-info: var(--vscode-editorInfo-foreground, var(--vscode-charts-blue, #3794ff));
-  /* 高对比主题才有值，其它主题下是透明 */
+  /* Only set in high-contrast themes; transparent in other themes */
   --hc-border: var(--vscode-contrastBorder, transparent);
   --hc-hover: var(--vscode-contrastActiveBorder, transparent);
-  /* 会话列表与内容之间的分隔线：和终端面板里看到的那条竖线同色（终端右侧概览标尺的边框 editorOverviewRuler.border，
-     比 panel-border 深一档）；高对比主题用 contrastBorder；都没有时退回面板边框色。拖动时的高亮同 VS Code 的 sash */
+  /* Sash between the session list and the content: same color as the vertical line in the terminal panel (the border of the terminal's overview ruler, editorOverviewRuler.border,
+     one step darker than panel-border); high-contrast themes use contrastBorder; falls back to the panel border color. The drag highlight matches VS Code's sash */
   --list-line: var(--vscode-contrastBorder, var(--vscode-editorOverviewRuler-border, var(--vscode-panel-border, rgba(128, 128, 128, .35))));
   --sash-hover: var(--vscode-sash-hoverBorder, var(--vscode-focusBorder));
-  /* 层级缩进：主对话 / 子智能体与工作流 / 工作流里的智能体 */
+  /* Indent levels: main conversation / subagents and workflows / agents inside a workflow */
   --in0: 4px;
   --in1: 20px;
   --in2: 36px;
-  /* 列宽：固定宽度，内容变化时列不跳 */
+  /* Column widths: fixed, so columns don't jump when content changes */
   --w-name: minmax(150px, 26%);
-  /* 状态列最少放得下“Waiting for your approval”+ 铃铛（中等宽度下最关键的一句不被截断） */
+  /* Status column fits at least "Waiting for your approval" + bell (so the most important sentence isn't truncated at medium widths) */
   --w-status: minmax(14.5em, 20%);
   --w-tok: 5em;
   --w-cost: 5.5em;
   --w-time: 5.5em;
-  /* 灯色（扩展没注册颜色时的兜底 = 深色默认值） */
+  /* Lamp colors (fallback when the extension hasn't registered colors = dark theme defaults) */
   --lamp-working: var(--vscode-agentMonitor-lampWorking, #00AFFF);
   --lamp-needsYou: var(--vscode-agentMonitor-lampNeedsYou, #EE2B7B);
   --lamp-doneUnseen: var(--vscode-agentMonitor-lampDoneUnseen, #5FFF00);
@@ -38,7 +38,7 @@
   --lamp-idle: var(--vscode-agentMonitor-lampIdle, #808080);
 }
 
-/* 中日韩的用时写成“2小时17分 / 29分01秒”，比英文“2h17m”宽 */
+/* In Chinese / Japanese / Korean, durations are written with CJK unit characters (hours / minutes / seconds), wider than English "2h17m" */
 :root { --w-time-n: 5em; }
 :root:lang(zh), :root:lang(ja), :root:lang(ko) { --w-time: 7em; --w-time-n: 6.5em; }
 
@@ -53,11 +53,11 @@ body {
   line-height: var(--row-h);
   font-variant-numeric: tabular-nums;
   background: transparent;
-  /* 列表和内容各自滚动，整页不滚 */
+  /* The list and the content scroll independently; the page itself doesn't scroll */
   overflow: hidden;
 }
 
-/* ---------- 整体：内容区 + 分隔线 + 会话列表（列表在哪边由扩展推来，页面调换 DOM 顺序） ---------- */
+/* ---------- Layout: content area + sash + session list (the extension says which side the list is on; the page reorders the DOM) ---------- */
 
 .app { display: flex; height: 100%; min-width: 0; }
 .content {
@@ -67,28 +67,28 @@ body {
   overflow-y: auto;
   padding-bottom: 8px;
   box-sizing: border-box;
-  /* 窄排法按内容区的宽度切换（列表占去的宽度不算） */
+  /* The narrow layout switches on the content area's width (the width taken by the list doesn't count) */
   container: content / inline-size;
 }
 .content:focus { outline: none; }
 .content:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 
 .slist {
-  position: relative; /* 行的 offsetTop 相对列表，露出选中行时只滚列表 */
+  position: relative; /* row offsetTop is relative to the list, so scrolling the selected row into view only scrolls the list */
   flex: none;
   width: 200px;
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: auto;
 }
-/* 分隔线：平时 1px（颜色见 --list-line）。终端面板里那条线和标签行之间隔着 10px 的概览标尺，
-   这里在线和行之间也空出 10px（窄条不空，46px 里只放图标） */
+/* Sash: normally 1px (color from --list-line). In the terminal panel there is a 10px overview ruler between that line and the tab rows,
+   so leave 10px between the line and the rows here too (not in the narrow strip, where 46px holds only icons) */
 .list-right .slist { border-left: 1px solid var(--list-line); }
 .list-left .slist { border-right: 1px solid var(--list-line); }
 .list-right .slist:not(.narrow) { padding-left: 10px; }
 .list-left .slist:not(.narrow) { padding-right: 10px; }
 
-/* 可拖动的热区 4px，压在分隔线上；悬停（稍等一下，和 VS Code 一样）或拖动时显示 sash.hoverBorder */
+/* Draggable 4px hot zone over the sash; shows sash.hoverBorder on hover (after a short delay, like VS Code) or while dragging */
 .sash { position: relative; flex: none; width: 0; z-index: 2; }
 .sash::before {
   content: '';
@@ -104,12 +104,12 @@ body {
 .sash:hover::before { background: var(--sash-hover); transition-delay: .3s; }
 .resizing .sash::before { background: var(--sash-hover); transition: none; }
 .resizing, .resizing * { cursor: ew-resize !important; user-select: none; }
-/* 面板太窄自动用窄条时不能拖 */
+/* Not draggable when the panel is too narrow and the narrow strip is used automatically */
 .auto-narrow .sash { display: none; }
 
 .sl-box { min-height: 100%; padding: 4px 0; box-sizing: border-box; outline: none; }
 
-/* 组标签：“打开中 2 / 最近 5”，同字号，次要文字色；只有一组时扩展不发 */
+/* Group labels such as "Open 2 / Recent 5", same font size, secondary text color; the extension doesn't send them when there is only one group */
 .sl-group {
   display: flex;
   align-items: center;
@@ -123,8 +123,8 @@ body {
 .sl-group > .sl-gtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sl-group > .sl-count { flex: none; }
 
-/* 行：高 22px，左内边距 8px；灯 + 标题（单行省略号） + 上下文区标记；圆角高亮左右各让 4px（同终端标签列表）。
-   图标和文字之间 4px：终端标签是“图标 + 空格 + 名字”，量出来也是 4px */
+/* Row: 22px high, 8px left padding; lamp + title (single line with ellipsis) + context zone marker; the rounded highlight is inset 4px on each side (like the terminal tab list).
+   4px between icon and text: terminal tabs are "icon + space + name", which also comes to 4px */
 .sl-row {
   position: relative;
   display: flex;
@@ -139,13 +139,13 @@ body {
   cursor: pointer;
 }
 .sl-row > .lamp { flex: none; width: 16px; }
-/* 标题放不下时省略，区标记始终留着 */
+/* Truncate the title when it doesn't fit; the zone marker always stays */
 .sl-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* 标题后只剩上下文区标记（◔ / ◕，一个字）；状态和上下文百分比在内容区的会话条里 */
+/* After the title comes only the context zone marker (◔ / ◕, one character); status and context percent are in the session bar of the content area */
 .sl-desc { flex: none; margin-left: 2px; color: var(--vscode-descriptionForeground); }
 .sl-desc:empty { display: none; }
 .sl-row:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-list-hoverForeground, var(--vscode-foreground)); outline: 1px dashed var(--hc-hover); outline-offset: -1px; }
-/* 选中但列表没有焦点 / 选中且列表有焦点 */
+/* Selected while the list is unfocused / selected while the list is focused */
 .sl-row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
   color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground));
@@ -156,14 +156,14 @@ body {
   background: var(--vscode-list-activeSelectionBackground);
   color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
 }
-/* 选中行的区标记跟行的文字色走（次要文字色压在选中底色上，深色主题只有 4.4:1，不够清楚） */
+/* The zone marker on the selected row uses the row's text color (secondary text on the selection background is only 4.4:1 in dark themes, not clear enough) */
 .sl-row.selected .sl-desc { color: inherit; }
-/* 键盘焦点描边（列表有焦点时）；焦点就在选中行上时用 focusAndSelectionOutline */
+/* Keyboard focus outline (when the list is focused); uses focusAndSelectionOutline when focus is on the selected row */
 .sl-box:focus .sl-row.focused { outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder)); outline-offset: -1px; }
 .sl-box:focus .sl-row.focused.selected { outline-color: var(--vscode-list-focusAndSelectionOutline, var(--vscode-list-focusOutline, var(--vscode-focusBorder))); }
 
-/* 行内按钮（像终端行悬停时出现的按钮）：悬停时、以及列表有焦点时的选中行显示在行尾；窄条不显示。
-   列表没有焦点时选中行不带按钮，和终端标签列表一样，标题也不被挤短 */
+/* Inline buttons (like the ones that appear on hover in terminal rows): shown at the row end on hover and on the selected row while the list is focused; hidden in the narrow strip.
+   When the list is unfocused the selected row has no buttons, like the terminal tab list, so the title isn't squeezed */
 .sl-acts { display: none; flex: none; align-items: center; gap: 2px; margin-left: auto; }
 .sl-row:hover .sl-acts, .sl-box:focus .sl-row.selected .sl-acts { display: inline-flex; }
 .sl-act {
@@ -184,7 +184,7 @@ body {
 .sl-box:focus .sl-row.selected .sl-act > .codicon { color: inherit; }
 .sl-act:hover { background: var(--vscode-toolbar-hoverBackground); outline: 1px dashed var(--hc-hover); outline-offset: -1px; }
 
-/* 窄条（46px）：只有灯，名字在悬停提示里；组之间一条 1px 分隔线 */
+/* Narrow strip (46px): lamps only, names in the hover tooltip; a 1px divider between groups */
 .slist.narrow .sl-row { justify-content: center; padding: 0; }
 .slist.narrow .sl-title, .slist.narrow .sl-desc, .slist.narrow .sl-acts { display: none !important; }
 .slist.narrow .sl-group { height: 0; margin: 4px 8px; padding: 0; border-top: 1px solid var(--list-line); }
@@ -204,7 +204,7 @@ body {
 [hidden] { display: none !important; }
 h2, h3, h4 { margin: 0; font-size: inherit; font-weight: 600; }
 
-/* 灯：只给图标上色；形状 filled / outline 也区分 */
+/* Lamp: color only the icon; filled / outline shapes also distinguish states */
 .lamp-working { --lamp: var(--lamp-working); }
 .lamp-needsYou { --lamp: var(--lamp-needsYou); }
 .lamp-doneUnseen { --lamp: var(--lamp-doneUnseen); }
@@ -215,7 +215,7 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 .codicon { vertical-align: middle; }
 .tone-error { color: var(--c-err-text); }
 
-/* ---------- 按钮与链接 ---------- */
+/* ---------- Buttons and links ---------- */
 
 .btn {
   display: inline-flex;
@@ -264,7 +264,7 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 .link:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); text-decoration: underline; }
 .link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 键盘焦点：和原生一样 1px focusBorder */
+/* Keyboard focus: 1px focusBorder, like native controls */
 .btn:focus-visible,
 .link:focus-visible,
 .twisty:focus-visible,
@@ -277,7 +277,7 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 .empty { margin: 0; padding: 8px 10px 8px calc(var(--in0) + 20px); }
 .empty-act { margin: 0; padding: 0 10px 8px calc(var(--in0) + 20px); }
 
-/* ---------- 顶部会话条 ---------- */
+/* ---------- Session bar at the top ---------- */
 
 .sbar {
   padding: 4px 10px 6px var(--in0);
@@ -289,61 +289,61 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
   align-items: center;
   column-gap: 12px;
   min-width: 0;
-  padding-left: 20px; /* 与标题文字对齐（让开前面的灯） */
+  padding-left: 20px; /* align with the title text (clear the lamp in front) */
 }
 .s-line > * { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .s-head { flex-wrap: nowrap; column-gap: 4px; padding-left: 0; }
-/* 来源 · 入口 · 模型 · 目录：放不下时至少留几个字加省略号（如“Clau…”），不剩一个孤零零的字母 */
+/* Source · entry point · model · directory: when it doesn't fit, keep at least a few characters plus an ellipsis (e.g. "Clau…"), never a lone letter */
 .s-head .s-meta { margin-left: 8px; min-width: 4em; }
 .s-head .lamp { width: 16px; margin-left: 0; }
 .s-title { flex: 0 1 auto; }
 .s-meta { flex: 0 10 auto; }
 .s-head .spacer { flex: 1 1 0; min-width: 0; }
 .s-head .btn { overflow: visible; }
-/* 「压缩…」左边的“上下文 41%”：始终完整显示（放不下先省略目录和标题） */
+/* "41% context" to the left of "Compact…": always shown in full (the directory and title are truncated first) */
 .s-line.s-head > .s-headctx { flex: none; margin-right: 8px; font-variant-numeric: tabular-nums; }
-/* 摘要行（§11.14）：状态 · 上下文 · 分区 · 缓存 · 本会话费用 …… [续跑 ▸] [详情 ▸]。
-   只占一行、放不下就省略（不折行）：它每次刷新都可能变长变短，折行会让下面的表格上下跳 */
+/* Summary line: status · context · zone · cache · this session's cost …… [Resume ▸] [Details ▸].
+   One line only, truncated when it doesn't fit (no wrapping): its length can change on every refresh, and wrapping would make the table below jump up and down */
 .s-sum { flex-wrap: nowrap; column-gap: 12px; }
-.s-sum .badge { width: 16px; margin-left: -20px; margin-right: -8px; }  /* 与标题的灯同一列 */
-/* 放不下时先缩状态句和本会话费用；上下文、分区、缓存倒计时和两个按钮保持完整（完整状态在悬停提示里） */
+.s-sum .badge { width: 16px; margin-left: -20px; margin-right: -8px; }  /* same column as the title's lamp */
+/* When space runs out, shrink the status sentence and this session's cost first; context, zone, cache countdown and the two buttons stay intact (full status in the hover tooltip) */
 .s-line.s-sum > #s-status { flex: 0 1 auto; min-width: 8em; }
 .s-line.s-sum > .sum-ctx, .s-line.s-sum > .sum-cache, .s-line.s-sum > .chip { flex: none; }
 .s-line.s-sum > .sum-cost { flex: 0 5 auto; min-width: 4em; }
 .s-line.s-sum > .spacer { flex: 1 1 0; min-width: 0; }
 .s-line.s-sum > .sum-btn { flex: none; overflow: visible; column-gap: 2px; }
-/* 紧急横幅：一行，图标上色，文字保持前景色 */
+/* Urgent banner: one line, colored icon, text keeps the foreground color */
 .s-urgent { flex-wrap: nowrap; column-gap: 6px; }
 .s-urgent > .codicon { flex: none; width: 16px; margin-left: -20px; margin-right: -2px; }
 .s-urgent > .u-text { flex: 0 1 auto; }
 .s-urgent.u-error > .codicon { color: var(--c-err-text); }
 .s-urgent.u-warning > .codicon { color: var(--c-warn); }
-/* 详情折叠区：默认收起 */
+/* Details section: collapsed by default */
 .s-details { margin-top: 2px; }
 .s-label { font-weight: 600; }
 .s-cache.expired { color: var(--vscode-descriptionForeground); }
 
-/* 自动压缩入口（§11.9）：像链接的按钮，文字 + 来源 + ▾ */
+/* Auto-compact entry: a link-style button with text + source + ▾ */
 .s-line > .link { flex: 0 1 auto; }
-/* 放不下时只省略后面的“≈ 367K · 来源”，“自动压缩：值”保持完整 */
+/* When it doesn't fit, truncate only the trailing "≈ 367K · source"; "Auto-compact: value" stays intact */
 .ac .ac-text { flex: none; }
 .ac .ac-src { flex: 0 1 auto; margin-left: .5em; color: var(--vscode-descriptionForeground); }
 .ac:hover .ac-src { color: inherit; }
 .ac > .codicon { flex: none; }
 
-/* 记录位置（§11.11）：标签和路径放在同一块里，路径太长时在块内省略（完整路径在悬停提示里） */
+/* Storage location: label and path in one block; a long path is truncated within the block (full path in the hover tooltip) */
 .s-store .s-pathbox { display: inline-flex; align-items: baseline; column-gap: 6px; flex: 0 1 auto; }
 .s-pathbox > .s-label { flex: none; }
 .s-pathbox > .s-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 上下文进度条：已用 / 自动压缩阈值 */
+/* Context progress bar: used / auto-compact threshold */
 .meter {
   position: relative;
   flex: 0 0 auto;
   width: 120px;
   height: 8px;
   box-sizing: border-box;
-  /* 空槽只画边框：边框用次要文字色，保证对背景 ≥ 3:1（WCAG 1.4.11） */
+  /* The empty track has only a border, in the secondary text color, to keep ≥ 3:1 contrast against the background (WCAG 1.4.11) */
   border: 1px solid var(--vscode-descriptionForeground);
   border-radius: 2px;
   background: transparent;
@@ -358,7 +358,7 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
   background: var(--vscode-progressBar-background, #0078d4);
 }
 
-/* 分区小标签（§11.8）：图标上色，文字保持前景色 */
+/* Zone chip: colored icon, text keeps the foreground color */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -375,7 +375,7 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 .chip > span { color: var(--vscode-foreground); }
 #s-compacts.tone-error { font-weight: 600; }
 
-/* 额度、报错、提示横幅：左边一条色带 + 图标上色，文字保持前景色、可以换行 */
+/* Usage-limit, error and hint banners: a color stripe on the left + colored icon; text keeps the foreground color and may wrap */
 .banners { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
 .banner {
   display: flex;
@@ -396,17 +396,17 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 .banner.b-info .codicon { color: var(--c-info); }
 .b-detail { color: var(--vscode-descriptionForeground); }
 
-/* 续跑提示：一条一行，放不下时代价说明折到下一行 */
+/* Resume hints: one per line; the cost note wraps to the next line when it doesn't fit */
 .r-list { margin: 2px 0 0; padding: 0; list-style: none; }
 .r-item { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 8px; row-gap: 2px; min-width: 0; padding: 1px 0 1px 20px; }
 .r-item > * { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r-item > .codicon { flex: none; width: 16px; margin-left: -20px; margin-right: -4px; color: var(--c-icon); }
 .r-label { flex: 0 1 auto; }
 .r-btns { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; flex: none; overflow: visible; }
-/* 代价说明可以折行：费用在句末，省略号会把它截掉 */
+/* The cost note may wrap: the cost is at the end of the sentence and an ellipsis would cut it off */
 .r-info { flex: 1 1 24em; white-space: normal; color: var(--vscode-descriptionForeground); }
 
-/* ---------- 智能体表格（div + CSS grid；窄面板靠 CSS 换排法，DOM 不变） ---------- */
+/* ---------- Agent table (div + CSS grid; narrow panels change layout via CSS, the DOM stays the same) ---------- */
 
 .grid { width: 100%; }
 .row {
@@ -418,7 +418,7 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 }
 body.no-cost .row { grid-template-columns: var(--w-name) var(--w-status) minmax(0, 1fr) var(--w-tok) var(--w-time); }
 body.no-cost .c-cost { display: none; }
-/* DOM 顺序是 名字、状态、[步骤、token、费用、用时]；宽面板里 c-line2 不占格，各格按列号排成一行 */
+/* DOM order is name, status, [step, tokens, cost, time]; in a wide panel c-line2 takes no cell and the cells line up in one row by column number */
 .c-line2 { display: contents; }
 .row > .c-name { grid-column: 1; grid-row: 1; }
 .row > .c-status { grid-column: 2; grid-row: 1; }
@@ -427,7 +427,7 @@ body.no-cost .c-cost { display: none; }
 .c-cost { grid-column: 5; grid-row: 1; }
 .c-time { grid-column: 6; grid-row: 1; }
 body.no-cost .c-time { grid-column: 5; }
-/* 面板矮（< 400px）：藏起费用、用时两列（§11.14） */
+/* Short panel (< 400px): hide the cost and time columns */
 body.short .row { grid-template-columns: var(--w-name) var(--w-status) minmax(0, 1fr) var(--w-tok); }
 body.short .c-cost, body.short .c-time { display: none; }
 .cell {
@@ -453,7 +453,7 @@ body.short .c-cost, body.short .c-time { display: none; }
 }
 .row.head .c-name { padding-left: calc(var(--in0) + 40px); }
 
-/* 名字格：折叠按钮 + 灯 + 名字 + 模型/类型 */
+/* Name cell: toggle button + lamp + name + model/type */
 .c-name, .c-status { display: flex; align-items: center; gap: 4px; }
 .c-name > *, .c-status > * { flex: none; }
 .lv0 .c-name { padding-left: var(--in0); }
@@ -490,11 +490,11 @@ body.short .c-cost, body.short .c-time { display: none; }
 .unit > .row { cursor: pointer; }
 .unit > .row:hover { background: var(--vscode-list-hoverBackground); outline: 1px dashed var(--hc-hover); outline-offset: -1px; }
 
-/* ---------- 展开后的细节 ---------- */
+/* ---------- Expanded details ---------- */
 
 .detail { border-bottom: 1px solid var(--line); }
 .d-inner { padding: 2px 10px 6px calc(var(--in0) + 40px); }
-/* 细节和名字文字对齐（让开折叠按钮和灯） */
+/* Details align with the name text (clearing the toggle button and lamp) */
 .lv1 + .detail .d-inner { padding-left: calc(var(--in1) + 40px); }
 .lv2 + .detail .d-inner { padding-left: calc(var(--in2) + 40px); }
 .d-head { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; min-width: 0; }
@@ -525,7 +525,7 @@ body.short .c-cost, body.short .c-time { display: none; }
 .errs .e-text { flex: 1 1 auto; }
 .e-tool { font-weight: 600; }
 .files > li { display: flex; align-items: center; gap: 8px; min-width: 0; }
-/* 文件名是主文字：用前景色（对比度 ≥ 7:1），悬停加下划线表示可点 */
+/* File names are primary text: foreground color (contrast ≥ 7:1), underlined on hover to show they are clickable */
 .files .link { flex: 0 1 auto; min-width: 4em; color: var(--vscode-foreground); }
 .files .link:hover { color: var(--vscode-foreground); }
 .files .link > .codicon { color: var(--c-icon); }
@@ -554,14 +554,14 @@ body.short .c-cost, body.short .c-time { display: none; }
 .note { margin: 0; padding: 2px 10px 0 calc(var(--in1) + 20px); }
 footer { padding: 8px 10px 0 calc(var(--in0) + 20px); }
 
-/* ---------- 窄内容区：每个智能体两行（第一行名字 / 状态，第二行当前步骤 / token / 费用 / 用时） ----------
-   按内容区自己的宽度切换（容器查询）：旁边的会话列表占去的宽度不算 */
+/* ---------- Narrow content area: two lines per agent (line 1: name / status; line 2: current step / tokens / cost / time) ----------
+   Switches on the content area's own width (container query): the width taken by the session list next to it doesn't count */
 
 @container content (max-width: 699px) {
-  /* 第一行只分名字和状态两列：状态列最多放得下“Waiting for your approval”+ 铃铛，最少 9em，
-     其余给名字（原来状态列固定 9em，500–700px 宽时状态句也被截断，名字列却空着一大块） */
+  /* Line 1 has just two columns, name and status: the status column fits at most "Waiting for your approval" + bell and at least 9em,
+     the rest goes to the name (a fixed 9em status column would truncate the status sentence at 500–700px while the name column sat half empty) */
   .row, body.no-cost .row, body.short .row { grid-template-columns: minmax(0, 1fr) clamp(9em, 50%, 14.5em); }
-  /* 第二行：步骤占满剩下的宽度，token、费用、用时靠右，各自固定宽度，上下行对齐 */
+  /* Line 2: the step fills the remaining width; tokens, cost and time are right-aligned with fixed widths so the lines stay aligned */
   .c-line2 {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -572,17 +572,17 @@ footer { padding: 8px 10px 0 calc(var(--in0) + 20px); }
   }
   .c-line2 > .cell { flex: none; }
   .c-line2 > .c-step { flex: 1 1 auto; min-width: 0; }
-  /* 数字格比宽面板窄一些，给当前步骤多留地方；仍是固定宽度，上下行对齐 */
+  /* Number cells are a bit narrower than in the wide panel, leaving more room for the current step; still fixed widths so the lines stay aligned */
   .c-line2 > .c-tok, .c-line2 > .c-cost { width: 4.5em; padding: 0 4px; }
   .c-line2 > .c-time { width: var(--w-time-n); padding: 0 10px 0 4px; }
-  /* 第二行和名字对齐（让开折叠按钮和灯） */
+  /* Line 2 aligns with the name (clearing the toggle button and lamp) */
   .lv0 .c-step { padding-left: calc(var(--in0) + 40px); }
   .lv1 .c-step { padding-left: calc(var(--in1) + 40px); }
   .lv2 .c-step { padding-left: calc(var(--in2) + 40px); }
   .row.head .c-line2 { display: none; }
-  /* 窄内容区先保标题：来源 · 入口 · 模型 · 目录这段不显示（悬停列表里这一行，提示里有同样的信息） */
+  /* A narrow content area keeps the title first: hide the source · entry point · model · directory part (the same info is in the list row's hover tooltip) */
   .s-head .s-meta { display: none; }
-  /* 摘要行先保状态、上下文和两个按钮：缓存、本会话费用放进悬停提示和详情；上下文也可以缩；“继续”只留图标 */
+  /* The summary line keeps status, context and the two buttons first: cache and this session's cost move to the hover tooltip and details; context can shrink too; "Resume" shows only its icon */
   .s-sum .sum-cache, .s-sum .sum-cost { display: none; }
   .s-line.s-sum > #s-status { min-width: 6em; }
   .s-line.s-sum > .sum-ctx { flex: 0 2 auto; min-width: 5em; }

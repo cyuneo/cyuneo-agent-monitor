@@ -1,8 +1,8 @@
 'use strict';
-// 自动压缩容量设置的测试：lib/autocompact.js、lib/compact-presets.js、l10n/compact.en.json 里的 autocompact.* 键（DESIGN §11.9、§11.12.7）。
-// 纯 node 运行：node test/autocompact.test.js
-// 绝不读写 ~/.claude、~/.codex，也不运行 claude：设置文件、登记表、config.toml 全是临时目录里的合成品。
-// 临时目录取 AGENT_MONITOR_TEST_TMP，没设就用系统临时目录。
+// Tests for the auto-compact window setting: lib/autocompact.js, lib/compact-presets.js, and the autocompact.* keys in l10n/compact.en.json.
+// Run with plain node: node test/autocompact.test.js
+// Never reads or writes ~/.claude or ~/.codex, and never runs claude: settings files, the registry and config.toml are all synthetic, in a temp dir.
+// The temp dir is AGENT_MONITOR_TEST_TMP, or the system temp dir if unset.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -15,7 +15,7 @@ const TMP_BASE = process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir();
 fs.mkdirSync(TMP_BASE, { recursive: true });
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(TMP_BASE, 'am-autocompact-')));
 
-// ---------- vscode 桩 ----------
+// ---------- vscode stub ----------
 
 class Emitter {
   constructor() {
@@ -105,7 +105,7 @@ const i18n = i18nLib.createI18n('en', { timeZone: 'UTC' });
 const EN = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'compact.en.json'), 'utf8'));
 const t = (k, v) => i18n.t(k, v);
 
-// ---------- 小工具 ----------
+// ---------- helpers ----------
 
 const tests = [];
 const results = [];
@@ -117,12 +117,12 @@ const CODEX_ID = '0c0de000-0000-4000-8000-0000000000bb';
 const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg || ''} ${a} ≈ ${b}`);
 const mkdirp = (p) => { fs.mkdirSync(p, { recursive: true }); return p; };
 const read = (p) => fs.readFileSync(p, 'utf8');
-// 提示里的路径把主目录缩写成 ~（临时目录一般不在主目录下，这里照同样规则算，免得环境不同就失败）
+// Paths in messages abbreviate the home dir to ~ (the temp dir is usually outside home; apply the same rule here so the tests pass in any environment)
 const shown = (p) => (p.startsWith(os.homedir() + path.sep) ? '~' + p.slice(os.homedir().length) : p);
 let seq = 0;
 const freshDir = (name) => mkdirp(path.join(TMP, `${name}-${++seq}`));
 
-/** 合成的 Claude 会话（字段同 §11.12.2） */
+/** Synthetic Claude session (same fields as a provider session) */
 function claudeSession(o = {}) {
   return {
     key: 'claude:' + (o.id || SID), provider: 'claude', id: o.id || SID, title: o.title || 'Synthetic refactor task',
@@ -158,7 +158,7 @@ function writeRegistry(home, pid, sid, o = {}) {
   }));
 }
 
-/** 一套场景：临时 claudeHome（登记表只有一个死进程条目，说明登记表可用）、项目目录、globalStorage、codexHome */
+/** A scenario: temp claudeHome (registry with a single dead-process entry, so the registry counts as readable), project dir, globalStorage, codexHome */
 function scenario(name, o = {}) {
   const dir = freshDir(name);
   const home = mkdirp(path.join(dir, 'claude-home'));
@@ -186,7 +186,7 @@ function scenario(name, o = {}) {
 
 const byPreset = (id) => (qp) => qp.accept(qp.find((it) => it.action && it.action.type === 'preset' && it.action.id === id));
 const byScope = (scope) => (qp) => qp.accept(qp.find((it) => it.action && it.action.scope === scope));
-/** 先选档位、再选范围 */
+/** Pick a preset first, then a scope */
 function choose(presetId, scope) {
   ui.onQuickPick = (qp) => {
     if (qp.items.some((it) => it.action && it.action.type === 'scope')) {
@@ -198,10 +198,10 @@ const isSep = (it) => it.kind === -1;
 const listBackups = (sc) => (fs.existsSync(sc.backups) ? fs.readdirSync(sc.backups) : []);
 
 // ===========================================================================
-// 预设数据与成本模型（§11.9）
+// Preset data and cost model
 // ===========================================================================
 
-test('预设：五档、数值与依据强弱照 §11.9 表', () => {
+test('presets: five presets; values and evidence strength match the reference table', () => {
   assert.deepStrictEqual(P.PRESETS.map((p) => p.id), ['auto', 'coding', 'research', 'long', 'budget']);
   const row = (id) => P.presetById(id);
   assert.deepStrictEqual([row('auto').value1m, row('coding').value1m, row('research').value1m, row('long').value1m, row('budget').value1m],
@@ -215,13 +215,13 @@ test('预设：五档、数值与依据强弱照 §11.9 表', () => {
   assert.strictEqual(P.GUIDE_URL, 'https://github.com/cyuneo/cyuneo-agent-monitor/blob/main/docs/compaction-threshold-guide.md');
 });
 
-test('成本模型：Opus 5.5、1M 窗口复现 §11.9 表的“每次调用 / 相对默认”', () => {
+test('cost model: Opus 5.5 with a 1M window reproduces the reference table "per call / vs default" columns', () => {
   const opts = AC.presetOptions(claudeSession());
   for (const o of opts) {
     near(o.usdPerCall, o.preset.reference.usdPerCall, 0.0006, `${o.id} usd`);
     near(o.ratio, o.preset.reference.ratio, 0.011, `${o.id} ratio`);
   }
-  // 参考说明第 6 节的中间量：967K 一轮 312 次、平均 497K；单次压缩约 $0.83
+  // Intermediate values from the cost model in docs/compaction-threshold-guide.md (section 6): 312 calls per 967K cycle, 497K average; one compaction ≈ $0.83
   const c = AC.costPerCall(967000, AC.ratesFor(claudeSession()));
   assert.strictEqual(c.calls, 312);
   near(c.avgContext, 496500, 1);
@@ -232,17 +232,17 @@ test('成本模型：Opus 5.5、1M 窗口复现 §11.9 表的“每次调用 / �
   near(c200.perCallUsd, 0.055, 0.0006);
 });
 
-test('成本模型：按会话模型的价格算（不写死 Opus 5.5）；5 分钟档用 5 分钟写价；没有价格 → 金额为空、频率照算', () => {
+test('cost model: uses the session model prices (not hard-coded to Opus 5.5); 5-minute tier uses the 5-minute write price; no price → no amount, frequency still computed', () => {
   const opus = AC.presetOptions(claudeSession());
   const sonnet = AC.presetOptions(claudeSession({ model: 'claude-sonnet-5' }));
-  // Sonnet 5：读 $0.20、1h 写 $4、输出 $10（§6.3），默认档与 Opus 5.5 不同
+  // Sonnet 5: read $0.20, 1h write $4, output $10; its default preset differs from Opus 5.5
   const r = AC.ratesFor(claudeSession({ model: 'claude-sonnet-5' }));
   assert.deepStrictEqual([r.read, r.write, r.output], [0.2, 4, 10]);
   assert.notStrictEqual(sonnet[0].usdPerCall.toFixed(4), opus[0].usdPerCall.toFixed(4));
   near(sonnet[0].usdPerCall, AC.costPerCall(967000, r).perCallUsd, 1e-12);
   const r5 = AC.ratesFor(claudeSession({ cacheTtl: '5m' }));
-  assert.strictEqual(r5.write, 5, 'Opus 5.5 的 5 分钟缓存写价');
-  // [1m] 变体名照样能定价
+  assert.strictEqual(r5.write, 5, 'Opus 5.5 5-minute cache write price');
+  // [1m] variant names can be priced too
   assert.ok(AC.ratesFor(claudeSession({ modelVariant: 'claude-opus-5-5[1m]' })));
   const unknown = AC.presetOptions(claudeSession({ model: 'claude-future-9' }));
   for (const o of unknown) assert.strictEqual(o.usdPerCall, null);
@@ -251,7 +251,7 @@ test('成本模型：按会话模型的价格算（不写死 Opus 5.5）；5 分
   assert.ok(items.find((it) => it.action && it.action.id === 'coding').detail.startsWith(t('autocompact.cost.unpriced', { model: 'claude-future-9' })));
 });
 
-test('选项：1M 窗口 → 设定值、约在哪压缩（设定值 − 33K）、百分比；默认档标“当前”', () => {
+test('items: 1M window → setting value, approximate compaction point (value − 33K), percentage; default preset marked "Current"', () => {
   const opts = AC.presetOptions(claudeSession());
   const m = Object.fromEntries(opts.map((o) => [o.id, o]));
   assert.deepStrictEqual([m.auto.value, m.auto.point], [null, 967000]);
@@ -261,7 +261,7 @@ test('选项：1M 窗口 → 设定值、约在哪压缩（设定值 − 33K）�
   assert.deepStrictEqual([m.budget.value, m.budget.point], [200000, 167000]);
   assert.ok(opts.every((o) => o.available));
   assert.deepStrictEqual(opts.filter((o) => o.current).map((o) => o.id), ['auto']);
-  // 用户设置里是 400K（compactAt = 367K）→ “写代码”是当前档
+  // User settings have 400K (compactAt = 367K) → "Coding" is the current preset
   const cur = AC.presetOptions(claudeSession({ compactAt: 367000, compactAtSource: 'settings-user' }));
   assert.deepStrictEqual(cur.filter((o) => o.current).map((o) => o.id), ['coding']);
 
@@ -274,18 +274,18 @@ test('选项：1M 窗口 → 设定值、约在哪压缩（设定值 − 33K）�
   const auto = built.items.find((it) => it.action && it.action.id === 'auto');
   assert.strictEqual(auto.description, 'Not set → ≈ 967K · Current');
   assert.strictEqual(built.active, auto);
-  // 每档 detail 末尾都是 §11.9 那句提醒
+  // Every preset detail ends with the same reminder sentence
   for (const it of built.items.filter((x) => x.action && x.action.type === 'preset')) {
     assert.ok(it.detail.endsWith(t('autocompact.reminder')), it.label);
   }
-  // 最后两项：自定义、查看参考说明；顶部有官方原话与提醒
+  // Last two items: Custom and View the reference guide; the top shows the official quote and the reminder
   assert.deepStrictEqual(built.items.slice(-2).map((it) => it.action.type), ['custom', 'guide']);
   assert.strictEqual(built.items[0].action.text, t('autocompact.info.official'));
   assert.strictEqual(built.items[1].action.text, t('autocompact.info.reminder'));
   assert.ok(built.placeholder.includes('200K'));
 });
 
-test('选项：200K 窗口 → 低于 50% 的档位不可选并说明原因；“长时间自主运行”等于默认也不可选；只有“调研”可设 160K', () => {
+test('items: 200K window → presets below 50% are disabled with a reason; "Long autonomous runs" equals the default so it is disabled too; only "Research" can set 160K', () => {
   const s = claudeSession({ model: 'claude-sonnet-4-6', contextWindow: 200000, compactAt: 167000, contextUsed: 90000 });
   const m = Object.fromEntries(AC.presetOptions(s).map((o) => [o.id, o]));
   assert.deepStrictEqual([m.auto.available, m.auto.point], [true, 167000]);
@@ -293,7 +293,7 @@ test('选项：200K 窗口 → 低于 50% 的档位不可选并说明原因；�
   assert.deepStrictEqual([m.budget.available, m.budget.reason], [false, 'below50']);
   assert.deepStrictEqual([m.long.available, m.long.reason], [false, 'sameAsDefault']);
   assert.deepStrictEqual([m.research.available, m.research.value, m.research.point, m.research.pct], [true, 160000, 127000, 0.8]);
-  // 200K 上调低省得很少：按会话模型价格算，Sonnet 4.6 约 8%；参考说明按 Opus 5.5 价算的约 3%
+  // Lowering it on 200K saves little: about 8% at Sonnet 4.6 prices (the session model); the reference guide, priced for Opus 5.5, says about 3%
   near(1 - m.research.ratio, 0.079, 0.005);
   const opusSmall = AC.presetOptions(claudeSession({ contextWindow: 200000, compactAt: 167000 })).find((o) => o.id === 'research');
   near(1 - opusSmall.ratio, 0.03, 0.005);
@@ -308,49 +308,49 @@ test('选项：200K 窗口 → 低于 50% 的档位不可选并说明原因；�
   const unpriced = AC.buildPresetItems({ ...s, model: 'claude-future-1' }, { i18n });
   assert.ok(unpriced.items.some((it) => it.action && it.action.text === t('autocompact.info.small.noPrice')));
   assert.strictEqual(unpriced.items.findIndex(isSep), unpriced.items.findIndex((it) => it.action && it.action.text === t('autocompact.info.small.noPrice')) + 1,
-    '说明项在分隔线上方');
-  // 模型窗口未知时按模型规则推：Haiku 4.5 → 200K
+    'info item sits above the separator');
+  // Unknown model window is inferred from model rules: Haiku 4.5 → 200K
   const h = claudeSession({ model: 'claude-haiku-4-5', contextWindow: null, compactAt: null, contextUsed: 50000 });
   assert.strictEqual(AC.windowOf(h), 200000);
 });
 
-test('选项：Codex → 比例 × 完整窗口（258400 / 0.95 = 272000）；0.9 档同默认，0.8 档 217600', () => {
+test('items: Codex → ratio × full window (258400 / 0.95 = 272000); 0.9 preset equals the default, 0.8 preset gives 217600', () => {
   const s = codexSession();
   assert.strictEqual(AC.codexFullWindow(s), 272000);
   const m = Object.fromEntries(AC.presetOptions(s).map((o) => [o.id, o]));
   assert.deepStrictEqual([m.auto.value, m.auto.point], [null, 244800]);
   assert.deepStrictEqual([m.coding.value, m.coding.sameAsDefault, m.long.value], [null, true, null]);
   assert.deepStrictEqual([m.research.value, m.budget.value], [217600, 217600]);
-  assert.ok(m.research.ratio < 1 && m.research.ratio > 0.85, '粗算只省约 7%');
+  assert.ok(m.research.ratio < 1 && m.research.ratio > 0.85, 'rough estimate saves only about 7%');
   const built = AC.buildPresetItems(s, { i18n });
   assert.strictEqual(built.items.find((it) => it.action && it.action.id === 'research').description, '80% → ≈ 217.6K');
   assert.strictEqual(built.items.find((it) => it.action && it.action.id === 'coding').description, '90% → ≈ 244.8K (default)');
   assert.ok(built.items.find((it) => it.action && it.action.id === 'research').detail.endsWith(t('autocompact.reminder.codex')));
-  assert.ok(!built.items.some((it) => it.action && it.action.type === 'info'), 'Codex 没有 Claude 的说明项');
-  // 没有记录时按默认 272K
+  assert.ok(!built.items.some((it) => it.action && it.action.type === 'info'), 'Codex has none of the Claude info items');
+  // Without a recorded window, default to 272K
   assert.strictEqual(AC.codexFullWindow(codexSession({ contextWindow: null })), 272000);
 });
 
-test('当前设置：Codex 有来源就以来源为准（default 且压缩点偏小也不算 config.toml）', () => {
+test('current setting: for Codex a known source wins (source default with a low compaction point is still not config.toml)', () => {
   const base = { provider: 'codex', contextWindow: 272000, main: { tokens: {} } };
   assert.strictEqual(AC.currentSetting({ ...base, compactAt: 232560, compactAtSource: 'default' }).source, 'codexDefault');
   assert.strictEqual(AC.currentSetting({ ...base, compactAt: 200000, compactAtSource: 'settings-user' }).source, 'codexConfig');
-  // 来源缺失时才按“比默认点小”推断
+  // Only when the source is missing, infer it from "lower than the default point"
   assert.strictEqual(AC.currentSetting({ ...base, compactAt: 200000, compactAtSource: null }).source, 'codexConfig');
 });
 
 // ===========================================================================
-// 输入解析
+// Input parsing
 // ===========================================================================
 
-test('自定义输入：300k / 300K / 300000 / 300（简写）/ 1m / 0.5m / 300,000 / auto；范围 100K–1M', () => {
+test('custom input: 300k / 300K / 300000 / 300 (shorthand) / 1m / 0.5m / 300,000 / auto; range 100K–1M', () => {
   const v = (s) => AC.parseWindowInput(s);
   assert.deepStrictEqual(v('300k'), { value: 300000 });
   assert.deepStrictEqual(v(' 300K '), { value: 300000 });
   assert.deepStrictEqual(v('300000'), { value: 300000 });
   assert.deepStrictEqual(v('300'), { value: 300000 });
   assert.deepStrictEqual(v('100'), { value: 100000 });
-  assert.deepStrictEqual(v('1000'), { value: 1000000 }, '与 Claude Code 一致：100–1000 是 K 的简写');
+  assert.deepStrictEqual(v('1000'), { value: 1000000 }, 'same as Claude Code: 100–1000 is shorthand for K');
   assert.deepStrictEqual(v('1m'), { value: 1000000 });
   assert.deepStrictEqual(v('1M'), { value: 1000000 });
   assert.deepStrictEqual(v('0.5m'), { value: 500000 });
@@ -361,7 +361,7 @@ test('自定义输入：300k / 300K / 300000 / 300（简写）/ 1m / 0.5m / 300,
   assert.strictEqual(v('99999').error, 'range');
   assert.strictEqual(v('1001k').error, 'range');
   assert.strictEqual(v('2m').error, 'range');
-  assert.strictEqual(v('50').error, 'range', '100 以下不是简写');
+  assert.strictEqual(v('50').error, 'range', 'below 100 is not shorthand');
   assert.strictEqual(v('abc').error, 'format');
   assert.strictEqual(v('300kb').error, 'format');
   assert.strictEqual(v('-300k').error, 'format');
@@ -371,12 +371,12 @@ test('自定义输入：300k / 300K / 300000 / 300（简写）/ 1m / 0.5m / 300,
   assert.strictEqual(AC.autocompactArg(1000000), '1000k');
   assert.strictEqual(AC.autocompactArg(250500), '250500');
   assert.strictEqual(AC.autocompactArg(null), 'auto');
-  // 生成的参数再解析回来是同一个值
+  // A generated argument parses back to the same value
   for (const n of [100000, 160000, 250500, 400000, 1000000]) assert.deepStrictEqual(v(AC.autocompactArg(n)), { value: n });
 });
 
 // ===========================================================================
-// JSON 编辑：只改一个键、保留缩进与键顺序
+// JSON editing: change only one key, keep indentation and key order
 // ===========================================================================
 
 const SAMPLE = [
@@ -393,16 +393,16 @@ const SAMPLE = [
   '',
 ].join('\n');
 
-test('JSON：已有键 → 只替换数值，其余字节完全不变', () => {
+test('JSON: existing key → only the number is replaced, every other byte unchanged', () => {
   const r = AC.editSettingsText(SAMPLE, 400000);
   assert.strictEqual(r.changed, true);
   assert.strictEqual(r.text, SAMPLE.replace('"autoCompactWindow": 500000', '"autoCompactWindow": 400000'));
   assert.deepStrictEqual(Object.keys(JSON.parse(r.text)), ['model', 'permissions', 'note', 'autoCompactWindow', 'statusLine']);
-  // 值相同 → 不改
+  // Same value → no change
   assert.deepStrictEqual(AC.editSettingsText(SAMPLE, 500000), { text: SAMPLE, changed: false, existed: true });
 });
 
-test('JSON：没有这个键 → 按原缩进追加在最后一个成员后面（2 空格、4 空格、Tab、CRLF、单行、空对象、BOM）', () => {
+test('JSON: key missing → appended after the last member using the existing indentation (2 spaces, 4 spaces, tab, CRLF, single line, empty object, BOM)', () => {
   const two = '{\n  "a": 1,\n  "b": {\n    "c": [1, 2]\n  }\n}\n';
   assert.strictEqual(AC.editSettingsText(two, 300000).text, '{\n  "a": 1,\n  "b": {\n    "c": [1, 2]\n  },\n  "autoCompactWindow": 300000\n}\n');
   const four = '{\n    "a": 1,\n    "b": 2\n}';
@@ -415,33 +415,33 @@ test('JSON：没有这个键 → 按原缩进追加在最后一个成员后面�
   assert.strictEqual(AC.editSettingsText('{ "a": 1 }', 300000).text, '{ "a": 1, "autoCompactWindow": 300000 }');
   assert.strictEqual(AC.editSettingsText('{}\n', 300000).text, '{\n  "autoCompactWindow": 300000\n}\n');
   assert.strictEqual(AC.editSettingsText('﻿{\n  "a": 1\n}\n', 300000).text, '﻿{\n  "a": 1,\n  "autoCompactWindow": 300000\n}\n');
-  assert.strictEqual(AC.editSettingsText('', 300000).text, '{\n  "autoCompactWindow": 300000\n}\n', '空文件当作 {}');
+  assert.strictEqual(AC.editSettingsText('', 300000).text, '{\n  "autoCompactWindow": 300000\n}\n', 'empty file is treated as {}');
   assert.strictEqual(AC.editSettingsText('  \n', null).changed, false);
 });
 
-test('JSON：auto → 删除该键（首个、中间、最后、唯一、重复），其余不变', () => {
+test('JSON: auto → removes the key (first, middle, last, only, duplicated), the rest unchanged', () => {
   assert.strictEqual(AC.editSettingsText(SAMPLE, null).text, SAMPLE.replace('  "autoCompactWindow": 500000,\n', ''));
   assert.strictEqual(AC.editSettingsText('{\n  "autoCompactWindow": 1,\n  "b": 2\n}\n', null).text, '{\n  "b": 2\n}\n');
   assert.strictEqual(AC.editSettingsText('{\n  "a": 1,\n  "autoCompactWindow": 3\n}\n', null).text, '{\n  "a": 1\n}\n');
   assert.strictEqual(AC.editSettingsText('{\n  "autoCompactWindow": 3\n}\n', null).text, '{}\n');
   assert.strictEqual(AC.editSettingsText('{"a":1,"autoCompactWindow":2,"b":3,"autoCompactWindow":4}', null).text, '{"a":1,"b":3}');
   assert.strictEqual(AC.editSettingsText('{"autoCompactWindow":2,"autoCompactWindow":2}', 300000).text, '{"autoCompactWindow":300000,"autoCompactWindow":300000}');
-  // 没有这个键 → 不改
+  // Key missing → no change
   assert.deepStrictEqual(AC.editSettingsText('{"a":1}', null), { text: '{"a":1}', changed: false, existed: false });
-  // 嵌套对象里的同名键不算
+  // A key with the same name inside a nested object does not count
   const nested = '{\n  "env": { "autoCompactWindow": 1 }\n}\n';
   assert.strictEqual(AC.editSettingsText(nested, null).changed, false);
   assert.strictEqual(AC.editSettingsText(nested, 300000).text, '{\n  "env": { "autoCompactWindow": 1 },\n  "autoCompactWindow": 300000\n}\n');
 });
 
-test('JSON：解析失败、顶层不是对象 → 报错，不给新文本', () => {
+test('JSON: parse failure or non-object top level → error, no new text', () => {
   assert.strictEqual(AC.editSettingsText('{ "a": 1, }', 300000).error, 'parse');
   assert.strictEqual(AC.editSettingsText('// comment\n{}', 300000).error, 'parse');
   assert.strictEqual(AC.editSettingsText('[1, 2]', 300000).error, 'notObject');
   assert.strictEqual(AC.editSettingsText('null', null).error, 'notObject');
 });
 
-test('JSON：随机成员顺序、各种值 → 结果只差这一个键，键顺序不变', () => {
+test('JSON: random member order and assorted values → result differs only in this one key, key order kept', () => {
   const vals = [1, -2.5e3, 'str "q" }', true, false, null, [1, { x: '}' }], { deep: { k: ['a', 'b'] } }, ''];
   for (let n = 0; n < 60; n++) {
     const obj = {};
@@ -456,17 +456,17 @@ test('JSON：随机成员顺序、各种值 → 结果只差这一个键，键�
       const expected = { ...obj };
       if (value == null) delete expected.autoCompactWindow; else expected.autoCompactWindow = value;
       assert.deepStrictEqual(out, expected);
-      assert.deepStrictEqual(Object.keys(out), Object.keys(expected), `顺序 ${n}`);
-      if (indent) assert.ok(!r.text.includes('\n') || r.text.split('\n')[1].startsWith(indent === '\t' ? '\t' : ' '.repeat(indent)) || Object.keys(expected).length === 0, `缩进 ${n}`);
+      assert.deepStrictEqual(Object.keys(out), Object.keys(expected), `key order ${n}`);
+      if (indent) assert.ok(!r.text.includes('\n') || r.text.split('\n')[1].startsWith(indent === '\t' ? '\t' : ' '.repeat(indent)) || Object.keys(expected).length === 0, `indent ${n}`);
     }
   }
 });
 
 // ===========================================================================
-// 写文件：备份、坏 JSON 不写、auto 删键、新建 .claude/、软链接
+// Writing files: backups, no write on bad JSON, auto removes the key, creating .claude/, symlinks
 // ===========================================================================
 
-test('写文件：只改一个键、其它键与缩进不变；先写备份（内容是原文）', () => {
+test('write file: changes only one key, other keys and indentation unchanged; writes a backup (original content) first', () => {
   const dir = freshDir('write');
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, SAMPLE);
@@ -479,15 +479,15 @@ test('写文件：只改一个键、其它键与缩进不变；先写备份（�
   assert.strictEqual(read(r.backup), SAMPLE);
   assert.ok(path.basename(r.backup).startsWith('2026-09-24T10-00-00-000Z-'));
   assert.ok(path.basename(r.backup).endsWith('-settings.json'));
-  // 没有临时文件残留
+  // No temp files left behind
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['backups', 'settings.json']);
-  // 值相同 → 不写、不备份
+  // Same value → no write, no backup
   const r2 = AC.writeAutoCompactSetting({ file, value: 400000, backupDir: backups });
   assert.deepStrictEqual([r2.ok, r2.changed, r2.backup], [true, false, null]);
   assert.strictEqual(fs.readdirSync(backups).length, 1);
 });
 
-test('写文件：JSON 解析失败 → 不写、不备份、报 parse', () => {
+test('write file: JSON parse failure → no write, no backup, reports parse', () => {
   const dir = freshDir('badjson');
   const file = path.join(dir, 'settings.json');
   const bad = '{\n  "model": "opus",\n}\n';
@@ -498,7 +498,7 @@ test('写文件：JSON 解析失败 → 不写、不备份、报 parse', () => {
   assert.ok(!fs.existsSync(path.join(dir, 'b')));
 });
 
-test('写文件：auto 删键；文件不存在时 auto 什么都不做；设值时新建 .claude/ 和文件', () => {
+test('write file: auto removes the key; auto does nothing when the file is missing; setting a value creates .claude/ and the file', () => {
   const dir = freshDir('auto');
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, '{\n  "model": "opus",\n  "autoCompactWindow": 300000\n}\n');
@@ -510,13 +510,13 @@ test('写文件：auto 删键；文件不存在时 auto 什么都不做；设值
   const local = path.join(proj, '.claude', 'settings.local.json');
   const r0 = AC.writeAutoCompactSetting({ file: local, value: null, backupDir: path.join(dir, 'b') });
   assert.deepStrictEqual([r0.ok, r0.changed], [true, false]);
-  assert.ok(!fs.existsSync(path.join(proj, '.claude')), 'auto 不新建目录');
+  assert.ok(!fs.existsSync(path.join(proj, '.claude')), 'auto does not create the directory');
   const r1 = AC.writeAutoCompactSetting({ file: local, value: 160000, backupDir: path.join(dir, 'b') });
   assert.deepStrictEqual([r1.ok, r1.changed, r1.created, r1.backup], [true, true, true, null]);
   assert.deepStrictEqual(JSON.parse(read(local)), { autoCompactWindow: 160000 });
 });
 
-test('写文件：取值范围 100000–1000000 之外、没有备份目录 → 不写', () => {
+test('write file: value outside 100000–1000000 or no backup dir → no write', () => {
   const dir = freshDir('range');
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, '{}\n');
@@ -529,7 +529,7 @@ test('写文件：取值范围 100000–1000000 之外、没有备份目录 → 
   assert.strictEqual(read(file), '{}\n');
 });
 
-test('写文件：settings.json 是软链接 → 写到它指向的真实文件，链接保留；备份留最新 30 份', () => {
+test('write file: settings.json is a symlink → writes the real target file and keeps the link; keeps the newest 30 backups', () => {
   const dir = freshDir('symlink');
   const real = path.join(dir, 'dotfiles', 'claude-settings.json');
   mkdirp(path.dirname(real));
@@ -548,16 +548,16 @@ test('写文件：settings.json 是软链接 → 写到它指向的真实文件�
 });
 
 // ===========================================================================
-// describeCompactSetting（agents-view / tree 用）
+// describeCompactSetting (used by agents-view / tree)
 // ===========================================================================
 
-test('describeCompactSetting：用户设置 400K / 默认 / 实测 / 关闭 / 项目本地（200K 封顶）/ 环境变量 / Codex', () => {
+test('describeCompactSetting: user setting 400K / default / observed / off / project local (capped at 200K) / env var / Codex', () => {
   const d1 = AC.describeCompactSetting(claudeSession({ compactAt: 367000, compactAtSource: 'settings-user' }), i18n);
   assert.deepStrictEqual([d1.valueText, d1.effectiveText, d1.sourceText], ['400K (40%)', '≈ 367K', 'Source: user settings']);
   assert.strictEqual(d1.text, '400K (40%) → ≈ 367K · Source: user settings');
   assert.strictEqual(d1.value, 400000);
   assert.strictEqual(d1.tooltip, t('autocompact.tooltip'));
-  // providers 直接给原始设定值时优先用它
+  // When providers supply the raw setting value directly, it takes precedence
   const d1b = AC.describeCompactSetting(claudeSession({ compactAt: 367000, compactAtSource: 'settings-user', autoCompactWindow: 400000 }), i18n);
   assert.strictEqual(d1b.value, 400000);
 
@@ -572,9 +572,9 @@ test('describeCompactSetting：用户设置 400K / 默认 / 实测 / 关闭 / �
   assert.strictEqual(AC.describeCompactSetting(capped, i18n).valueText, '400K (capped at 200K)');
   assert.strictEqual(AC.describeCompactSetting(claudeSession({ compactAt: 467000, compactAtSource: 'env' }), i18n).sourceText,
     'Source: CLAUDE_CODE_AUTO_COMPACT_WINDOW');
-  // 来源缺失、compactAt 缺失：按窗口推默认
+  // Source and compactAt both missing: infer the default from the window
   assert.strictEqual(AC.describeCompactSetting(claudeSession({ compactAt: null, compactAtSource: null }), i18n).effectiveText, '≈ 967K');
-  // 设置来源在 main.tokens 上也认
+  // A setting source on main.tokens is also recognized
   const onMain = claudeSession({ compactAt: null, compactAtSource: 'settings-project' });
   onMain.main.tokens.compactAt = 267000;
   assert.strictEqual(AC.describeCompactSetting(onMain, i18n).valueText, '300K (30%)');
@@ -583,9 +583,9 @@ test('describeCompactSetting：用户设置 400K / 默认 / 实测 / 关闭 / �
   assert.strictEqual(AC.describeCompactSetting(codexSession({ compactAt: 217600, compactAtSource: 'settings-user' }), i18n).text,
     '217.6K (80%) · Source: config.toml');
   assert.strictEqual(AC.describeCompactSetting(codexSession(), i18n).tooltip, t('autocompact.tooltip.codex'));
-  // 没传 i18n → 英文
+  // No i18n passed → English
   assert.strictEqual(AC.describeCompactSetting(claudeSession()).valueText, 'Auto');
-  // 其它语言：词典还没翻译时回退英文，不出现键名
+  // Other languages: fall back to English while untranslated, never show raw keys
   for (const loc of ['zh-cn', 'zh-tw', 'ko', 'ja']) {
     const d = AC.describeCompactSetting(claudeSession({ compactAt: 367000, compactAtSource: 'settings-user' }), i18nLib.createI18n(loc));
     assert.ok(!/autocompact\./.test(d.text + d.tooltip), loc);
@@ -593,10 +593,10 @@ test('describeCompactSetting：用户设置 400K / 默认 / 实测 / 关闭 / �
 });
 
 // ===========================================================================
-// 命令流程（vscode 桩）
+// Command flows (vscode stub)
 // ===========================================================================
 
-test('流程：会话打开中 + 所有项目 → 预填 /autocompact 400k（claude-vscode.editor.open）并复制，不写任何文件', async () => {
+test('flow: session open + all projects → prefill /autocompact 400k (claude-vscode.editor.open) and copy it, no files written', async () => {
   resetUi();
   const sc = scenario('live-all', { live: true });
   ui.onExecute = () => undefined;
@@ -617,7 +617,7 @@ test('流程：会话打开中 + 所有项目 → 预填 /autocompact 400k（cla
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：预填失败（Claude 扩展命令不存在）→ 剪贴板退路；终端入口 → 只复制并提示去那个窗口', async () => {
+test('flow: prefill fails (Claude extension command missing) → clipboard fallback; terminal entry point → copy only and tell the user to switch to that window', async () => {
   resetUi();
   const sc = scenario('live-fallback', { live: true });
   choose('research', 'all');
@@ -639,7 +639,7 @@ test('流程：预填失败（Claude 扩展命令不存在）→ 剪贴板退路
   } finally { sc2.handle.dispose(); }
 });
 
-test('流程：会话没打开 + 所有项目 → 插件写 ~/.claude/settings.json（只改一个键），备份在 globalStorage', async () => {
+test('flow: session not open + all projects → the extension writes ~/.claude/settings.json (one key only), backup in globalStorage', async () => {
   resetUi();
   const sc = scenario('closed-all');
   const user = path.join(sc.home, 'settings.json');
@@ -657,13 +657,13 @@ test('流程：会话没打开 + 所有项目 → 插件写 ~/.claude/settings.j
     const m = log.messages.pop();
     assert.ok(m.msg.startsWith(t('autocompact.done.set', { path: shown(user), value: '400K (40%)' })), m.msg);
     assert.ok(m.msg.includes(t('autocompact.done.reopenUser')));
-    assert.ok(log.executed.some((e) => e[0] === 'vscode.open' && e[1].fsPath === user), '“打开文件”按钮');
+    assert.ok(log.executed.some((e) => e[0] === 'vscode.open' && e[1].fsPath === user), '"Open file" button');
     assert.ok(!log.executed.some((e) => e[0] === 'claude-vscode.editor.open'));
     assert.deepStrictEqual(log.clipboard, []);
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：仅这个项目 → 新建 <cwd>/.claude/settings.local.json；提示“新开的会话生效；已打开的会话需要重开”', async () => {
+test('flow: only this project → creates <cwd>/.claude/settings.local.json; message says new sessions use it and open sessions need a reopen', async () => {
   resetUi();
   const sc = scenario('project', { live: true });
   choose('research', 'project');
@@ -673,12 +673,12 @@ test('流程：仅这个项目 → 新建 <cwd>/.claude/settings.local.json；�
     assert.deepStrictEqual(JSON.parse(read(local)), { autoCompactWindow: 250000 });
     const m = log.messages.pop();
     assert.strictEqual(m.msg, `${t('autocompact.done.created', { path: shown(local), value: '250K (25%)' })} ${t('autocompact.done.reopen')}`);
-    assert.ok(!log.executed.some((e) => e[0] === 'claude-vscode.editor.open'), '项目范围不预填');
-    assert.ok(!fs.existsSync(path.join(sc.home, 'settings.json')), '用户设置不动');
+    assert.ok(!log.executed.some((e) => e[0] === 'claude-vscode.editor.open'), 'project scope does not prefill');
+    assert.ok(!fs.existsSync(path.join(sc.home, 'settings.json')), 'user settings untouched');
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：保持默认 + 仅这个项目 → 删除键，其它键保留；再做一次提示“没有可删的”', async () => {
+test('flow: keep the default + only this project → removes the key, other keys kept; running again says there is nothing to remove', async () => {
   resetUi();
   const sc = scenario('project-auto');
   const local = path.join(mkdirp(path.join(sc.cwd, '.claude')), 'settings.local.json');
@@ -694,7 +694,7 @@ test('流程：保持默认 + 仅这个项目 → 删除键，其它键保留；
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：用户设置是坏 JSON → 报错（可打开文件），文件不变、不备份', async () => {
+test('flow: user settings are invalid JSON → error (with an option to open the file), file unchanged, no backup', async () => {
   resetUi();
   const sc = scenario('bad-user');
   const user = path.join(sc.home, 'settings.json');
@@ -712,7 +712,7 @@ test('流程：用户设置是坏 JSON → 报错（可打开文件），文件�
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：自定义… → InputBox 校验（格式、范围），“300” 按 300K 写入', async () => {
+test('flow: Custom… → InputBox validation (format, range); "300" is written as 300K', async () => {
   resetUi();
   const sc = scenario('custom');
   ui.onQuickPick = (qp) => {
@@ -728,12 +728,12 @@ test('流程：自定义… → InputBox 校验（格式、范围），“300”
     assert.strictEqual(box.validateInput('12'), t('autocompact.input.range'));
     assert.strictEqual(box.validateInput('2m'), t('autocompact.input.range'));
     assert.strictEqual(box.validateInput('lots'), t('autocompact.input.format'));
-    assert.strictEqual(box.value, '', '当前是 auto，输入框为空');
+    assert.strictEqual(box.value, '', 'current value is auto, so the input box is empty');
     assert.deepStrictEqual(JSON.parse(read(path.join(sc.home, 'settings.json'))), { autoCompactWindow: 300000 });
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：查看参考说明 → openExternal 打开 GitHub 上的参考说明，不写文件', async () => {
+test('flow: View the reference guide → openExternal opens the guide on GitHub, no files written', async () => {
   resetUi();
   const sc = scenario('guide');
   ui.onQuickPick = (qp) => qp.accept(qp.find((it) => it.action && it.action.type === 'guide'));
@@ -745,7 +745,7 @@ test('流程：查看参考说明 → openExternal 打开 GitHub 上的参考说
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：200K 模型选不可用的档位 → 只弹原因，QuickPick 不关；再选“调研”写 160K', async () => {
+test('flow: 200K model picks a disabled preset → only shows the reason and keeps the QuickPick open; then "Research" writes 160K', async () => {
   resetUi();
   const sc = scenario('small', { sessionOpts: { model: 'claude-sonnet-4-6', contextWindow: 200000, compactAt: 167000 } });
   ui.onQuickPick = (qp) => {
@@ -761,7 +761,7 @@ test('流程：200K 模型选不可用的档位 → 只弹原因，QuickPick 不
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：Codex → 复制 model_auto_compact_token_limit 行并打开 config.toml（不改文件）；已有该行提示替换；默认档不复制', async () => {
+test('flow: Codex → copy the model_auto_compact_token_limit line and open config.toml (file not modified); if the line exists, say to replace it; default preset copies nothing', async () => {
   resetUi();
   const cx = codexSession();
   const sc = scenario('codex', { session: cx });
@@ -771,11 +771,11 @@ test('流程：Codex → 复制 model_auto_compact_token_limit 行并打开 conf
   choose('research');
   try {
     await sc.handle.run(cx.key);
-    assert.strictEqual(log.quickPicks.length, 1, 'Codex 不选范围');
+    assert.strictEqual(log.quickPicks.length, 1, 'Codex has no scope step');
     assert.deepStrictEqual(log.clipboard, ['model_auto_compact_token_limit = 217600']);
     assert.ok(log.executed.some((e) => e[0] === 'vscode.open' && e[1].fsPath === toml));
     assert.strictEqual(log.messages.pop().msg, t('autocompact.codex.copied', { line: 'model_auto_compact_token_limit = 217600', path: shown(toml) }));
-    assert.strictEqual(read(toml), original, 'config.toml 不改');
+    assert.strictEqual(read(toml), original, 'config.toml unchanged');
 
     resetUi();
     fs.writeFileSync(toml, 'model_auto_compact_token_limit = 200000\n' + original);
@@ -784,7 +784,7 @@ test('流程：Codex → 复制 model_auto_compact_token_limit 行并打开 conf
     assert.strictEqual(log.messages.pop().msg, t('autocompact.codex.replace', { line: 'model_auto_compact_token_limit = 217600', path: shown(toml), old: 200000 }));
 
     resetUi();
-    choose('coding'); // 0.9 = 默认
+    choose('coding'); // 0.9 = default
     await sc.handle.run(cx.key);
     assert.deepStrictEqual(log.clipboard, []);
     assert.strictEqual(log.messages.pop().msg, t('autocompact.codex.remove', { path: shown(toml), old: 200000 }));
@@ -795,11 +795,11 @@ test('流程：Codex → 复制 model_auto_compact_token_limit 行并打开 conf
     await sc.handle.run(cx.key);
     assert.deepStrictEqual(log.clipboard, ['model_auto_compact_token_limit = 217600']);
     assert.strictEqual(log.messages.pop().msg, t('autocompact.codex.missing', { line: 'model_auto_compact_token_limit = 217600', path: shown(toml) }));
-    assert.ok(!fs.existsSync(toml), '不替用户新建 config.toml');
+    assert.ok(!fs.existsSync(toml), 'does not create config.toml for the user');
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：没有参数 → 先选会话（当前选中的排第一）；会话不在列表 → 报错', async () => {
+test('flow: no argument → pick a session first (the selected one first); session not listed → error', async () => {
   resetUi();
   const sc = scenario('pick', { selected: 'codex:' + CODEX_ID });
   const cx = codexSession();
@@ -816,7 +816,7 @@ test('流程：没有参数 → 先选会话（当前选中的排第一）；会
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：会话目录不存在 → “仅这个项目”不可选（只弹原因）；设了环境变量 → 提示它优先', async () => {
+test('flow: session dir missing → "Only this project" is disabled (only shows the reason); env var set → note that it takes precedence', async () => {
   resetUi();
   const sc = scenario('nocwd', { sessionOpts: { cwd: '/nonexistent/am-autocompact' }, env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500000' } });
   let scopeItems = null;
@@ -840,7 +840,7 @@ test('流程：会话目录不存在 → “仅这个项目”不可选（只弹
   } finally { sc.handle.dispose(); }
 });
 
-test('流程：写用户设置时项目里另有值 → 提示项目的值优先', async () => {
+test('flow: writing user settings while the project has its own value → note that the project value takes precedence', async () => {
   resetUi();
   const sc = scenario('override');
   const proj = path.join(mkdirp(path.join(sc.cwd, '.claude')), 'settings.json');
@@ -849,11 +849,11 @@ test('流程：写用户设置时项目里另有值 → 提示项目的值优先
   try {
     await sc.handle.run(sc.session.key);
     assert.ok(log.messages.pop().msg.includes(t('autocompact.note.project', { path: shown(proj) })));
-    assert.strictEqual(read(proj), '{ "autoCompactWindow": 300000 }\n', '项目文件不动');
+    assert.strictEqual(read(proj), '{ "autoCompactWindow": 300000 }\n', 'project file untouched');
   } finally { sc.handle.dispose(); }
 });
 
-test('项目范围：会话开在 Claude 数据目录的上一级（主目录）→ 不可用', () => {
+test('project scope: session started in the parent of the Claude data dir (the home dir) → unavailable', () => {
   const dir = freshDir('home');
   const home = mkdirp(path.join(dir, '.claude'));
   assert.deepStrictEqual(AC.projectSettingsFile({ cwd: dir }, home), { file: null, reason: 'home' });
@@ -863,33 +863,33 @@ test('项目范围：会话开在 Claude 数据目录的上一级（主目录）
 });
 
 // ===========================================================================
-// 词典与安全
+// Dictionary and safety
 // ===========================================================================
 
-test('词典：autocompact.* 键只在英文词典里写英文；占位符都是 {word}；预设与来源的键齐全', () => {
+test('dictionary: autocompact.* keys hold English only in the English dictionary; placeholders are all {word}; preset and source keys are complete', () => {
   const keys = Object.keys(EN).filter((k) => k.startsWith('autocompact.'));
   assert.ok(keys.length > 80);
   for (const k of keys) {
     assert.ok(!/[぀-ヿ㐀-鿿가-힯]/.test(EN[k]), `CJK in ${k}`);
-    for (const m of EN[k].matchAll(/\{([^{}]*)\}/g)) assert.ok(/^\w+$/.test(m[1]), `${k} 占位符 {${m[1]}}`);
+    for (const m of EN[k].matchAll(/\{([^{}]*)\}/g)) assert.ok(/^\w+$/.test(m[1]), `${k} placeholder {${m[1]}}`);
   }
   for (const p of P.PRESETS) for (const k of [p.nameKey, p.summaryKey, p.basisKey]) assert.ok(k in EN, k);
   for (const k of Object.values(P.EVIDENCE_KEYS)) assert.ok(k in EN, k);
   for (const k of Object.values(AC.SOURCE_KEYS)) assert.ok(k in EN, k);
-  // 官方原话原样保留
+  // The official quote is kept verbatim
   assert.ok(EN['autocompact.info.official'].includes('Overriding auto may result in high token usage, especially when resuming long sessions.'));
 });
 
-test('安全：autocompact.js 不起子进程、不联网、不读 *.key', () => {
+test('safety: autocompact.js spawns no child processes, makes no network calls, reads no *.key files', () => {
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'autocompact.js'), 'utf8');
   assert.ok(!/require\(['"](child_process|http|https|net|tls|dns)['"]\)/.test(src));
   assert.ok(!/\bfetch\(|WebSocket/.test(src));
   assert.ok(!/\.key\b['"]/.test(src));
   const presets = fs.readFileSync(path.join(ROOT, 'lib', 'compact-presets.js'), 'utf8');
-  assert.ok(!/require\(/.test(presets), 'compact-presets.js 只有数据');
+  assert.ok(!/require\(/.test(presets), 'compact-presets.js contains only data');
 });
 
-// ---------- 运行 ----------
+// ---------- run ----------
 
 (async () => {
   for (const [name, fn] of tests) {
@@ -902,7 +902,7 @@ test('安全：autocompact.js 不起子进程、不联网、不读 *.key', () =>
       console.log(`  FAIL  ${name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
     }
   }
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);
   process.exitCode = passed === results.length ? 0 : 1;

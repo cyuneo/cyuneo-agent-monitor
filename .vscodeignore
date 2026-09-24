@@ -1,8 +1,8 @@
-# 打包时排除运行时不需要的文件。
-# 必须保留：extension.js、lib/、l10n/、media/（含 codicons 的 LICENSE）、package.json、package.nls*.json、
-#          LICENSE、README.md、CHANGELOG.md、THIRD_PARTY_NOTICES.md
+# Exclude files not needed at runtime from the packaged extension.
+# Must keep: extension.js, lib/, l10n/, media/ (including the codicons LICENSE), package.json, package.nls*.json,
+#            LICENSE, README.md, CHANGELOG.md, THIRD_PARTY_NOTICES.md
 
-# 版本控制与仓库配置
+# Version control and repository config
 .git/**
 .github/**
 .gitignore
@@ -15,7 +15,7 @@
 jsconfig.json
 tsconfig.json
 
-# 开发文件
+# Development files
 test/**
 docs/**
 bin/**

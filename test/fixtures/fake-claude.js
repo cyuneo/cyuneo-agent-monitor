@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 'use strict';
-// 假的 Claude Code 命令行，只给 test/compact.test.js 用（绝不调用真实的 claude，也不碰 ~/.claude）。
-// 模拟：claude -p --resume <id> --model <model> --output-format json "<prompt>"
-// - 往合成的会话记录里追加一条 system/compact_boundary，并在 stdout 打印结果 JSON；
-// - 行为由环境变量控制：
-//   FAKE_CLAUDE_PROJECTS  在这个目录（及其下一层）里找 <id>.jsonl；必须设（或设 FAKE_CLAUDE_TRANSCRIPT）
-//   FAKE_CLAUDE_TRANSCRIPT 直接指定记录文件
-//   FAKE_CLAUDE_LOG       把收到的参数、cwd、stdin 类型写成 JSON
-//   FAKE_CLAUDE_PIDFILE   启动后写入自己的 pid
-//   FAKE_CLAUDE_MODE      ok（默认）| error（stderr 8 行、退出码 1）| isError（结果 JSON 带 is_error）
-//                         | hang（一直等，直到被结束；最多 FAKE_CLAUDE_HANG_MAX_MS，默认 60 秒）
-//                         | noBoundary（成功但不写 compact_boundary）
-//   FAKE_CLAUDE_COST      total_cost_usd（默认 0.0123）
-//   FAKE_CLAUDE_POST      压缩后的 token 数（默认 preTokens 的 3%）
+// Fake Claude Code CLI, used only by test/compact.test.js (never calls the real claude and never touches ~/.claude).
+// Simulates: claude -p --resume <id> --model <model> --output-format json "<prompt>"
+// - appends a system/compact_boundary entry to the synthetic transcript and prints a result JSON to stdout;
+// - behavior is controlled by environment variables:
+//   FAKE_CLAUDE_PROJECTS  look for <id>.jsonl in this directory (and one level below); required (unless FAKE_CLAUDE_TRANSCRIPT is set)
+//   FAKE_CLAUDE_TRANSCRIPT path of the transcript file to use directly
+//   FAKE_CLAUDE_LOG       write the received arguments, cwd and stdin kind here as JSON
+//   FAKE_CLAUDE_PIDFILE   write own pid here after startup
+//   FAKE_CLAUDE_MODE      ok (default) | error (8 lines on stderr, exit code 1) | isError (result JSON has is_error)
+//                         | hang (wait until killed; at most FAKE_CLAUDE_HANG_MAX_MS, default 60 s)
+//                         | noBoundary (succeed but do not write compact_boundary)
+//   FAKE_CLAUDE_COST      total_cost_usd (default 0.0123)
+//   FAKE_CLAUDE_POST      token count after compaction (default 3% of preTokens)
 
 const fs = require('fs');
 const path = require('path');
@@ -29,7 +29,7 @@ function stdinKind() {
       try {
         const dn = fs.statSync(process.platform === 'win32' ? 'NUL' : '/dev/null');
         if (dn.rdev === st.rdev) return 'devnull';
-      } catch { /* 忽略 */ }
+      } catch { /* ignore */ }
       return 'tty';
     }
     return 'other';
@@ -43,7 +43,7 @@ if (env.FAKE_CLAUDE_LOG) {
   fs.writeFileSync(env.FAKE_CLAUDE_LOG, JSON.stringify({ argv, cwd: process.cwd(), stdin: stdinKind(), pid: process.pid }));
 }
 
-// 参数形状必须和扩展约定的一致
+// Argument shape must match what the extension sends
 const ok = argv.length === 8 && argv[0] === '-p' && argv[1] === '--resume' && argv[3] === '--model'
   && argv[5] === '--output-format' && argv[6] === 'json' && /^\/compact\b/.test(argv[7]);
 if (!ok) {
@@ -54,7 +54,7 @@ const sessionId = argv[2];
 const model = argv[4];
 
 if (mode === 'hang') {
-  // 一直等到被结束；万一测试进程先没了，最多等 60 秒自己退出，不留孤儿进程
+  // Wait until killed; if the test process dies first, exit on our own after at most 60 s so no orphan is left behind
   setInterval(() => {}, 1000);
   setTimeout(() => process.exit(3), Number(env.FAKE_CLAUDE_HANG_MAX_MS) || 60000);
   return;
@@ -87,7 +87,7 @@ if (!file) {
   process.exit(1);
 }
 
-// preTokens：记录里最后一条 assistant 的输入侧 token
+// preTokens: input-side tokens of the last assistant entry in the transcript
 let pre = 0;
 for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
   if (!line.includes('"assistant"')) continue;
@@ -95,7 +95,7 @@ for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     const e = JSON.parse(line);
     const u = e && e.message && e.message.usage;
     if (e.type === 'assistant' && u) pre = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-  } catch { /* 忽略 */ }
+  } catch { /* ignore */ }
 }
 const post = env.FAKE_CLAUDE_POST ? Number(env.FAKE_CLAUDE_POST) : Math.round(pre * 0.03);
 const ts = new Date().toISOString();

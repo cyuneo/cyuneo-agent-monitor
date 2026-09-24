@@ -1,8 +1,8 @@
 'use strict';
-// 生成合成的 Claude Code 记录样例（全部虚构，不含任何真实对话）。
-// 用法：node test/fixtures/claude/make-fixtures.js  → 覆盖写 test/fixtures/claude/projects/**
-// 结构照 Claude Code 2.1.2xx 的本机记录格式（只取键名与取值形状）。
-// 测试会把 projects/ 复制到临时目录，再按每个文件最后一行的时间改 mtime。
+// Generates synthetic Claude Code transcript samples (entirely made up; no real conversations).
+// Usage: node test/fixtures/claude/make-fixtures.js  → overwrites test/fixtures/claude/projects/**
+// The structure follows the Claude Code 2.1.2xx transcript format (key names and value shapes only).
+// Tests copy projects/ to a temp directory, then set each file's mtime from the timestamp of its last line.
 
 const fs = require('fs');
 const path = require('path');
@@ -12,20 +12,20 @@ const CWD = '/tmp/am-fixture';
 const PROJ = CWD.replace(/[^a-zA-Z0-9]/g, '-');
 const DAY = '2026-09-20';
 
-// 时间：分:秒（UTC 10 点起）
+// Time: minutes:seconds (starting at 10:00 UTC)
 const T = (mm, ss = 0) => `${DAY}T10:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}.000Z`;
 
 const SID = {
-  A: 'aaaaaaaa-0000-4000-8000-000000000001', // 主会话完成 + 子智能体 + 工作流（有一个智能体挂着 Read）
-  B: 'bbbbbbbb-0000-4000-8000-000000000002', // 撞额度 429（quotaLimits）
-  C: 'cccccccc-0000-4000-8000-000000000003', // 用户打断（前台子智能体随之停下）
-  D: 'dddddddd-0000-4000-8000-000000000004', // /compact 之后
-  E: 'eeeeeeee-0000-4000-8000-000000000005', // 正在重试
-  F: 'ffffffff-0000-4000-8000-000000000006', // 529 过载
-  G: '99999999-0000-4000-8000-000000000007', // AskUserQuestion 等回答
-  H: '88888888-0000-4000-8000-000000000008', // 在线会话（登记表），挂着 Edit
-  I: '77777777-0000-4000-8000-000000000009', // 老版本、挂着 Read（没有登记表信号 → 推测）
-  J: '66666666-0000-4000-8000-00000000000a', // 撞额度文字版（无 quotaLimits）+ synthetic “No response requested.”
+  A: 'aaaaaaaa-0000-4000-8000-000000000001', // main session done + subagent + workflow (one agent has a pending Read)
+  B: 'bbbbbbbb-0000-4000-8000-000000000002', // hit usage limit, 429 (quotaLimits)
+  C: 'cccccccc-0000-4000-8000-000000000003', // interrupted by user (foreground subagent stops with it)
+  D: 'dddddddd-0000-4000-8000-000000000004', // after /compact
+  E: 'eeeeeeee-0000-4000-8000-000000000005', // retrying
+  F: 'ffffffff-0000-4000-8000-000000000006', // 529 overloaded
+  G: '99999999-0000-4000-8000-000000000007', // AskUserQuestion waiting for an answer
+  H: '88888888-0000-4000-8000-000000000008', // live session (in the session registry), pending Edit
+  I: '77777777-0000-4000-8000-000000000009', // older version, pending Read (no registry signal → inferred)
+  J: '66666666-0000-4000-8000-00000000000a', // usage limit as plain text (no quotaLimits) + synthetic “No response requested.”
 };
 
 let uuidN = 0;
@@ -87,13 +87,13 @@ function writeJson(rel, obj) {
 
 fs.rmSync(OUT, { recursive: true, force: true });
 
-// ---------- A：主会话 + 子智能体 + 工作流 ----------
+// ---------- A: main session + subagent + workflow ----------
 {
   const s = SID.A;
   write(`${s}.jsonl`, [
     { type: 'ai-title', sessionId: s, aiTitle: 'Synthetic session A' },
     prompt(s, T(0, 0), 'Please run the synthetic task'),
-    // 同一条消息分两行写，usage 逐行更新（按 message.id 去重，取最后一次）
+    // One message written as two lines; usage updates per line (dedupe by message.id, keep the last)
     asst(s, T(0, 5), 'msg_a1', [thinking()], null, usage({ input: 10, w1: 1000, out: 5 })),
     asst(s, T(0, 6), 'msg_a1', [toolUse('toolu_agent1', 'Agent', { description: 'Synthetic helper', prompt: 'help', subagent_type: 'general-purpose' })], 'tool_use', usage({ input: 10, w1: 1000, out: 50 })),
     result(s, T(2, 0), 'toolu_agent1', 'helper finished'),
@@ -108,7 +108,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
     asst(s, T(2, 30), 'msg_a6', [text('All done. Synthetic summary line.')], 'end_turn', usage({ input: 3, w1: 200, read: 1100, out: 40 })),
     { type: 'last-prompt', sessionId: s, lastPrompt: 'Please run the synthetic task' },
   ]);
-  // 前台子智能体：已完成
+  // Foreground subagent: finished
   write(`${s}/subagents/agent-sub1.jsonl`, [
     prompt(s, T(0, 7), 'help', { isSidechain: true, agentId: 'sub1' }),
     asst(s, T(0, 10), 'msg_s1', [toolUse('toolu_s1r', 'Read', { file_path: '/tmp/am-fixture/README.md' })], 'tool_use', usage({ input: 20, w5: 500, out: 10 }), 'claude-sonnet-5', { isSidechain: true, agentId: 'sub1' }),
@@ -116,7 +116,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
     asst(s, T(1, 50), 'msg_s2', [text('Helper result text.')], 'end_turn', usage({ input: 5, read: 520, out: 15 }), 'claude-sonnet-5', { isSidechain: true, agentId: 'sub1' }),
   ]);
   writeJson(`${s}/subagents/agent-sub1.meta.json`, { agentType: 'general-purpose', description: 'Synthetic helper', toolUseId: 'toolu_agent1', requestShape: 'foreground' });
-  // 工作流：w1 交了结果；w2 挂着 Read 没结果
+  // Workflow: w1 returned a result; w2 has a pending Read with no result
   const wf = `${s}/subagents/workflows/wf_abc123-def456`;
   write(`${wf}/journal.jsonl`, [
     { type: 'launched' },
@@ -137,7 +137,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   writeJson(`${wf}/agent-w2.meta.json`, { agentType: 'workflow-agent', description: 'Phase two worker', workflowPhase: 'build' });
 }
 
-// ---------- B：撞额度（2.1.270，带 quotaLimits） ----------
+// ---------- B: usage limit hit (2.1.270, with quotaLimits) ----------
 {
   const s = SID.B;
   const ex = { entrypoint: 'cli', version: '2.1.270' };
@@ -157,7 +157,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- C：用户打断，前台子智能体挂着 Read ----------
+// ---------- C: interrupted by user, foreground subagent has a pending Read ----------
 {
   const s = SID.C;
   write(`${s}.jsonl`, [
@@ -177,7 +177,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   writeJson(`${s}/subagents/agent-subc.meta.json`, { agentType: 'Explore', description: 'Synthetic explorer', toolUseId: 'toolu_agent_c', requestShape: 'foreground' });
 }
 
-// ---------- D：手动 /compact 之后（本地命令行不改变状态） ----------
+// ---------- D: after a manual /compact (local CLI commands do not change the state) ----------
 {
   const s = SID.D;
   write(`${s}.jsonl`, [
@@ -191,7 +191,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- E：API 重试中 ----------
+// ---------- E: API retry in progress ----------
 {
   const s = SID.E;
   write(`${s}.jsonl`, [
@@ -202,7 +202,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- F：529 过载报错 ----------
+// ---------- F: 529 overloaded error ----------
 {
   const s = SID.F;
   write(`${s}.jsonl`, [
@@ -216,7 +216,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- G：AskUserQuestion 等回答 ----------
+// ---------- G: AskUserQuestion waiting for an answer ----------
 {
   const s = SID.G;
   write(`${s}.jsonl`, [
@@ -225,7 +225,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- H：在线会话，挂着 Edit ----------
+// ---------- H: live session, pending Edit ----------
 {
   const s = SID.H;
   write(`${s}.jsonl`, [
@@ -235,7 +235,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- I：老版本（2.1.200）会话，挂着 Read ----------
+// ---------- I: older version (2.1.200) session, pending Read ----------
 {
   const s = SID.I;
   const ex = { version: '2.1.200' };
@@ -245,7 +245,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
   ]);
 }
 
-// ---------- J：撞额度文字版 + synthetic “No response requested.” ----------
+// ---------- J: usage limit as plain text + synthetic “No response requested.” ----------
 {
   const s = SID.J;
   const ex = { version: '2.1.215', entrypoint: 'cli' };

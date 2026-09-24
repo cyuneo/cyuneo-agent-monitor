@@ -1,17 +1,20 @@
 'use strict';
-// VS Code 入口（DESIGN §1.1、§8、§11）：装配各模块。
-// - 底部面板做成终端面板那样（§11.13）：只有一个 webview 视图 agentMonitor.agents（lib/agents-view.js），
-//   一侧是会话列表（仿终端标签列表），另一块是选中会话的智能体。列表在哪边跟随终端标签列表的位置（可设置），
-//   宽度可拖动并存进 globalState。选中状态由扩展持有、推给页面；点哪个会话，内容区就显示它，
-//   选中一直保持，直到用户点别的（或切到别的对话标签，followActiveChat）。
-// - 侧边栏总览树 agentMonitor.tree（lib/tree.js）保留；状态栏总灯；查看范围两档（all / workspace）。
-// - 扫描放在 worker 线程（lib/worker.js，消息协议 §1.4 v2 + §11.12.3：config / focus / refresh / storage）。
-// - 压缩按钮由 lib/compact.js 自己注册命令 agentMonitor.compact；这里只在激活时调用 activateCompact 并每份快照转给它。
-//   交接笔记 agentMonitor.handoff 在这里注册，调用 compact.js 导出的 runHandoff。
-// - 自动压缩容量 agentMonitor.setAutoCompact 由 lib/autocompact.js 自己注册（§11.9）。
-// - 存储位置与占用 agentMonitor.storage 打开 lib/storage-view.js 的页面；统计在 worker 里做（§11.11）。
-// - 实测压缩点（§11.10、§11.12.2）：快照里出现新的自动压缩就按“模型|窗口”记进 globalState，下一次 config 带给 worker。
-// 界面文字一律走 lib/i18n.js + lib/format.js，不在这里拼中文或英文句子。
+// VS Code entry point: wires the modules together.
+// - The bottom panel works like the terminal panel: a single webview view agentMonitor.agents (lib/agents-view.js),
+//   with a session list on one side (like the terminal tab list) and the selected session's agents in the other part.
+//   The list's side follows the terminal tab list's position (configurable); its width is draggable and saved in
+//   globalState. The extension owns the selection and pushes it to the page; clicking a session shows it in the
+//   content area, and the selection sticks until the user clicks another one (or switches to another chat tab, followActiveChat).
+// - Sidebar overview tree agentMonitor.tree (lib/tree.js); overall lamp in the status bar; two viewing scopes (all / workspace).
+// - Scanning runs on a worker thread (lib/worker.js; messages: config / focus / refresh / storage).
+// - lib/compact.js registers the compact command agentMonitor.compact itself; here we only call activateCompact on
+//   activation and forward every snapshot to it. The handoff-note command agentMonitor.handoff is registered here and
+//   calls runHandoff exported by compact.js.
+// - lib/autocompact.js registers the auto-compact capacity command agentMonitor.setAutoCompact itself.
+// - Storage locations and usage: agentMonitor.storage opens the page in lib/storage-view.js; the scan runs in the worker.
+// - Observed compaction points: whenever a snapshot shows a new auto-compaction, record it in globalState under
+//   "model|window" and pass it to the worker with the next config.
+// All UI text goes through lib/i18n.js + lib/format.js; no sentences in any language are built here.
 
 const vscode = require('vscode');
 const fs = require('fs');
@@ -32,24 +35,26 @@ const VERSION = PKG.version;
 const EXT_ID = 'cyuneo.cyuneo-agent-monitor';
 const AGENTS_VIEW = 'agentMonitor.agents';
 const TREE_VIEW = 'agentMonitor.tree';
-const INTRO_KEY = 'agentMonitor.panelIntro.v1';     // globalState：第一次激活时聚焦过底部面板
-const LIST_WIDTH_KEY = 'agentMonitor.sessionListWidth';   // globalState：底部面板会话列表的宽度（§11.13）
-const OBSERVED_KEY = 'agentMonitor.observedCompact';       // globalState：{ '模型|窗口': 实测自动压缩点 }
-const OBSERVED_AT_KEY = 'agentMonitor.observedCompactAt';  // globalState：{ '模型|窗口': 那次压缩的时间 }，只让更新的实测覆盖旧的
+const INTRO_KEY = 'agentMonitor.panelIntro.v1';     // globalState: the bottom panel was focused on first activation
+const LIST_WIDTH_KEY = 'agentMonitor.sessionListWidth';   // globalState: width of the session list in the bottom panel
+const OBSERVED_KEY = 'agentMonitor.observedCompact';       // globalState: { 'model|window': observed auto-compaction point }
+const OBSERVED_AT_KEY = 'agentMonitor.observedCompactAt';  // globalState: { 'model|window': time of that compaction }, so only newer observations replace older ones
 const COMPACT_CMD = 'agentMonitor.compact';
 const AUTOCOMPACT_CMD = 'agentMonitor.setAutoCompact';
 const HANDOFF_CMD = 'agentMonitor.handoff';
 const STORAGE_CMD = 'agentMonitor.storage';
-const STORAGE_WAIT_MS = 120000; // 存储统计要递归 stat，大目录可能要几十秒
-// 需要重建 worker 的设置（§8.6）；其余设置只在主线程用上一份快照重算
+const STORAGE_WAIT_MS = 120000; // the storage scan stats recursively; large dirs can take tens of seconds
+// Settings that require rebuilding the worker; other settings just recompute from the last snapshot on the main thread
 const MONITOR_KEYS = [
   'refreshSeconds', 'activeWindowMinutes', 'staleMinutes',
   'claude.enabled', 'claude.projectsDir', 'codex.enabled', 'codex.home',
   'approvalGuess', 'approvalGuessSeconds',
 ];
 const WORKER_RETRIES = 3;
-// 后台线程的内存限制：解析记录产生的几乎都是马上就扔的临时对象，新生代压到 6MB，堆就不会被撑大
-// （实测扫描时整个进程少占十几 MB，速度不变）；老生代 512MB 只是保险（正常十几 MB），超了由 V8 结束线程、按上面的次数重起
+// Memory limits for the worker thread: parsing transcripts creates almost only short-lived temporary objects, so capping
+// the young generation at 6MB keeps the heap from ballooning during scans without slowing them down; the 512MB old
+// generation is only a safety net (normal use is far below it); if exceeded, V8 terminates the thread and it is
+// restarted up to WORKER_RETRIES times
 const WORKER_LIMITS = Object.freeze({ maxYoungGenerationSizeMb: 6, maxOldGenerationSizeMb: 512 });
 const REFRESH_WAIT_MS = 10000;
 const noop = () => {};
@@ -73,24 +78,24 @@ class Controller {
     this.i18n = createI18n(vscode.env.language);
     this.output = null;
     this.worker = null;
-    this.last = null;            // 最近一次快照消息（v2）
-    this.byKey = new Map();      // 全部会话（未按范围过滤）key → Session
-    this.scoped = [];            // 当前范围内的会话
-    this.lamps = null;           // computeLamps 的结果（按范围）
-    this.sessionOrder = createSessionOrder(); // 会话列表的顺序（§11.3，锁定后不跳）
-    this.arranged = null;        // 最近一次排好的会话（分组 + 顺序）
-    this.leftKeys = [];          // 会话列表按显示顺序的 key
-    this.selectedKey = null;     // 列表里选中的会话（用户点的，或按规则自动选的）；扩展持有，推给页面
-    this.shownKey = null;        // 内容区正在显示的会话
-    this.listWidth = null;       // 会话列表宽度（globalState，页面拖动后发回来）
-    this.cmdTitles = null;       // 命令标题（package.nls，“…”弹出的 QuickPick 用，和右键菜单一致）
+    this.last = null;            // latest snapshot message (v2)
+    this.byKey = new Map();      // all sessions (not scope-filtered) key -> Session
+    this.scoped = [];            // sessions in the current scope
+    this.lamps = null;           // result of computeLamps (scoped)
+    this.sessionOrder = createSessionOrder(); // session list order (locked once assigned, never jumps)
+    this.arranged = null;        // last arranged sessions (groups + order)
+    this.leftKeys = [];          // session list keys in display order
+    this.selectedKey = null;     // selected session in the list (clicked by the user or auto-selected by the rules); owned by the extension, pushed to the page
+    this.shownKey = null;        // session currently shown in the content area
+    this.listWidth = null;       // session list width (globalState; sent back by the page after dragging)
+    this.cmdTitles = null;       // command titles (package.nls; used by the "..." QuickPick, matching the context menu)
     this.focusSig = null;
     this.waiters = [];
     this.compactApi = null;
     this.compactMod = null;
-    this.storageWaiters = [];    // requestStorage 等 worker 回 storage 消息
+    this.storageWaiters = [];    // requestStorage callers waiting for the worker's storage message
     this.storageForce = false;
-    this.observed = {};          // 实测压缩点（与 globalState 同步）
+    this.observed = {};          // observed compaction points (kept in sync with globalState)
     this.observedAt = {};
     this.agentsView = null;
     this.agentsMod = null;
@@ -103,7 +108,7 @@ class Controller {
   cfg() { return vscode.workspace.getConfiguration('agentMonitor'); }
 
   log(line) {
-    try { this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`); } catch { /* 输出面板已关 */ }
+    try { this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`); } catch { /* output channel already closed */ }
   }
 
   guard(what, fn) {
@@ -113,7 +118,7 @@ class Controller {
     }
   }
 
-  // ---------- 激活 ----------
+  // ---------- Activation ----------
 
   activate() {
     const context = this.context;
@@ -121,7 +126,7 @@ class Controller {
     this.output = vscode.window.createOutputChannel(this.t('bar.title'));
     sub(this.output);
 
-    // 已看过（§3.4）：globalState，激活时清理一次
+    // Seen state: globalState, pruned once on activation
     this.seen = seenLib.createSeenStore(context.globalState);
     Promise.resolve(this.seen.prune()).catch(noop);
     this.dwell = seenLib.createDwellTracker(this.seen, { onMarked: () => this.render() });
@@ -131,21 +136,21 @@ class Controller {
     this.loadObserved();
     this.listWidth = this.loadListWidth();
 
-    // 侧边栏总览
+    // Sidebar overview
     this.overview = new AgentTreeProvider({ i18n: this.i18n, hideCompleted: this.cfg().get('hideCompleted', false) });
     this.treeView = vscode.window.createTreeView(TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
     sub(this.overview, this.treeView);
 
-    // 底部面板：会话列表 + 智能体（一个 webview）
+    // Bottom panel: session list + agents (one webview)
     this.setupAgentsView();
 
-    // 状态栏总灯
+    // Status-bar overall lamp
     this.statusItem = vscode.window.createStatusBarItem('agentMonitor.status', vscode.StatusBarAlignment.Left, 50);
     this.statusItem.name = this.t('bar.title');
     this.statusItem.command = 'agentMonitor.show';
     sub(this.statusItem);
 
-    // 当前对话跟随（§8.4）：只在标签切换事件里移动选中
+    // Follow the current conversation: the selection moves only on tab-switch events
     this.follower = scopeLib.createChatFollower({ types: this.tabTypes });
 
     this.registerCommands();
@@ -205,10 +210,10 @@ class Controller {
           getSession: (key) => this.byKey.get(key) || null,
           listSessions: () => this.scoped.slice(),
           i18n: this.i18n,
-          claudeHome: () => this.workerConfig().claude.configDir, // 登记表 sessions/ 所在（§11.11 第 4 条）
+          claudeHome: () => this.workerConfig().claude.configDir, // parent of the session registry sessions/
           output: this.output,
           inWorkspace: (s) => scopeLib.inWorkspace(s, this.ws()),
-          getSelectedKey: () => this.selectedKey || this.shownKey || null, // 无参数调用时当前选中的会话排第一
+          getSelectedKey: () => this.selectedKey || this.shownKey || null, // when invoked without arguments, list the currently selected session first
         });
         this.compactApi = api || null;
         if (api && typeof api.dispose === 'function') this.context.subscriptions.push(api);
@@ -217,12 +222,12 @@ class Controller {
         this.log(this.t('ext.log.moduleFailed', { module: 'compact', error: errText(err) }));
       }
     }
-    // 压缩模块加载失败：命令照样存在，点了给出说明，不让按钮“点了没反应”
+    // The compact module failed to load: keep the command and show an explanation, so the button never silently does nothing
     this.context.subscriptions.push(vscode.commands.registerCommand(COMPACT_CMD,
       () => vscode.window.showErrorMessage(this.t('ext.compactUnavailable'))));
   }
 
-  // 自动压缩容量（§11.9）：lib/autocompact.js 自己注册 agentMonitor.setAutoCompact；加载失败时占位
+  // Auto-compact capacity: lib/autocompact.js registers agentMonitor.setAutoCompact itself; register a placeholder if loading fails
   setupAutoCompact() {
     const self = this;
     let mod = null;
@@ -237,7 +242,7 @@ class Controller {
           getSession: (key) => this.byKey.get(key) || null,
           getSessions: () => this.scoped.slice(),
           i18n: this.i18n,
-          // Claude 的配置目录（settings.json 所在）、Codex 目录（config.toml 所在），都按当前设置现算
+          // Claude's config dir (holds settings.json) and the Codex dir (holds config.toml), both resolved from current settings
           get claudeHome() { return self.workerConfig().claude.configDir; },
           get codexHome() { return self.workerConfig().codex.home; },
           output: this.output,
@@ -249,12 +254,12 @@ class Controller {
         this.log(this.t('ext.log.moduleFailed', { module: 'autocompact', error: errText(err) }));
       }
     }
-    // 模块出错时占位（模块若已注册了命令再出错，这里注册会重名，guard 住不让激活失败）
+    // Placeholder when the module fails (if it had already registered the command, registering again would clash; guarded so activation doesn't fail)
     this.guard('autocompact', () => this.context.subscriptions.push(vscode.commands.registerCommand(AUTOCOMPACT_CMD,
       () => vscode.window.showErrorMessage(this.t('ext.autoCompactUnavailable')))));
   }
 
-  // 存储位置与占用（§11.11）：页面在 lib/storage-view.js，统计由 worker 做
+  // Storage locations and usage: the page lives in lib/storage-view.js, the scan runs in the worker
   setupStorage() {
     const cmd = (fn) => this.context.subscriptions.push(vscode.commands.registerCommand(STORAGE_CMD, fn));
     let mod = null;
@@ -310,7 +315,7 @@ class Controller {
     }
   }
 
-  // 第一次激活时聚焦一次底部面板（§11.2），让用户知道它在哪；之后不再打扰
+  // On first activation, focus the bottom panel once so users know where it is; never again after that
   introFocus() {
     const gs = this.context.globalState;
     if (!gs || gs.get(INTRO_KEY)) return;
@@ -321,9 +326,9 @@ class Controller {
       .catch(noop);
   }
 
-  // ---------- 设置 ----------
+  // ---------- Settings ----------
 
-  // 旧设置迁移（§8.3、§11.2）：scope 的旧档 conversation / pinned，onlyWorkspace → scope
+  // Legacy settings migration: old scope values conversation / pinned, and onlyWorkspace -> scope
   migrateScope() {
     const c = this.cfg();
     let plan = [];
@@ -331,12 +336,12 @@ class Controller {
     const targets = { global: vscode.ConfigurationTarget.Global, workspace: vscode.ConfigurationTarget.Workspace };
     for (const p of plan) {
       const target = targets[p.target];
-      if (target === undefined) continue; // 文件夹层没有资源参数写不了（不带资源的 inspect 也读不到这一层）
+      if (target === undefined) continue; // the folder level can't be written without a resource (and inspect without a resource can't read it either)
       Promise.resolve(c.update(p.key, p.value, target)).catch((err) => this.log(errText(err)));
     }
   }
 
-  // 写到当前生效的那一层：工作区里设过就改工作区，否则改用户设置
+  // Write to the effective level: the workspace if set there, otherwise user settings
   setFlag(key, value) {
     const c = this.cfg();
     const i = c.inspect(key);
@@ -359,14 +364,14 @@ class Controller {
     };
   }
 
-  /** WorkerConfig（§1.4、§11.12.3）：路径默认值在主线程算好传进去 */
+  /** WorkerConfig: default paths are resolved on the main thread and passed in */
   workerConfig() {
     const c = this.cfg();
     const env = process.env;
     const home = os.homedir();
     const projectsSetting = expandHome(c.get('claude.projectsDir', ''), home);
-    // Claude 配置目录（§11.11 第 4 条）：CLAUDE_CONFIG_DIR 优先，其次按 claude.projectsDir 反推，再次 ~/.claude；
-    // 也是登记表 sessions/ 与 settings.json 的父目录
+    // Claude config dir: CLAUDE_CONFIG_DIR first, then derived from claude.projectsDir, then ~/.claude;
+    // it is also the parent of the session registry sessions/ and of settings.json
     const configDir = env.CLAUDE_CONFIG_DIR ? expandHome(env.CLAUDE_CONFIG_DIR, home)
       : projectsSetting ? path.dirname(projectsSetting) : path.join(home, '.claude');
     const configDirSource = env.CLAUDE_CONFIG_DIR ? 'env' : projectsSetting ? 'setting' : 'default';
@@ -395,7 +400,7 @@ class Controller {
   }
 
   onConfig(e) {
-    // 会话列表在哪边：auto 跟随终端标签列表的位置（§11.13），终端这个设置变了也要推给页面
+    // Which side the session list is on: auto follows the terminal tab list position, so changes to that terminal setting are pushed to the page too
     if (!e.affectsConfiguration('agentMonitor')) {
       if (e.affectsConfiguration('terminal.integrated.tabs.location')) this.updateAgents(Date.now());
       return;
@@ -403,7 +408,7 @@ class Controller {
     const hit = (keys) => keys.some((k) => e.affectsConfiguration(`agentMonitor.${k}`));
     if (hit(MONITOR_KEYS) && this.worker) this.worker.postMessage({ type: 'config', cfg: this.workerConfig() });
     if (e.affectsConfiguration('agentMonitor.onlyWorkspace')) this.migrateScope();
-    this.render(); // 范围、隐藏已完成、费用、状态栏等：用上一份快照立即重算，不等下次扫描
+    this.render(); // scope, hide-completed, cost, status bar, etc.: recompute from the last snapshot now instead of waiting for the next scan
   }
 
   // ---------- worker ----------
@@ -411,7 +416,7 @@ class Controller {
   startWorker(retries = 0) {
     const w = new Worker(path.join(this.context.extensionPath, 'lib', 'worker.js'), { workerData: this.workerConfig(), resourceLimits: WORKER_LIMITS });
     this.worker = w;
-    this.focusSig = null; // 新 worker：重新告诉它要细节的会话
+    this.focusSig = null; // new worker: tell it again which sessions need details
     w.on('message', (m) => {
       if (!m || typeof m !== 'object') return;
       if (m.type === 'snapshot') {
@@ -422,7 +427,7 @@ class Controller {
     });
     w.on('error', (err) => this.log(this.t('ext.log.workerError', { error: errText(err) })));
     w.on('exit', (code) => {
-      if (w !== this.worker) return; // 主动停掉或已被替换
+      if (w !== this.worker) return; // stopped on purpose or already replaced
       this.worker = null;
       if (code !== 0 && retries < WORKER_RETRIES) {
         this.log(this.t('ext.log.workerExit', { code }));
@@ -430,7 +435,7 @@ class Controller {
       }
     });
     this.sendFocus();
-    // 换了 worker 时还有人在等存储统计：向新 worker 再要一次
+    // If someone is still waiting for a storage scan when the worker was replaced, ask the new worker again
     if (this.storageWaiters.length) w.postMessage({ type: 'storage', force: this.storageForce });
   }
 
@@ -440,12 +445,12 @@ class Controller {
     if (w) w.terminate();
   }
 
-  // 让 worker 立即再扫一遍；worker 挂了就重新起一个。进度条转到下一份快照到来
+  // Ask the worker to rescan now; restart it if it died. The progress indicator spins until the next snapshot arrives
   refresh() {
     if (this.worker) this.worker.postMessage({ type: 'refresh' });
     else this.startWorker();
     const next = new Promise((resolve) => {
-      const timer = setTimeout(resolve, REFRESH_WAIT_MS); // worker 一直没回也别让进度条转个不停
+      const timer = setTimeout(resolve, REFRESH_WAIT_MS); // don't let the progress indicator spin forever if the worker never answers
       if (timer && typeof timer.unref === 'function') timer.unref();
       this.waiters.push(() => { clearTimeout(timer); resolve(); });
     });
@@ -466,10 +471,10 @@ class Controller {
     const first = !this.last;
     this.last = { ...m, sessions: Array.isArray(m.sessions) ? m.sessions : [] };
     this.byKey = new Map(this.last.sessions.filter((s) => s && typeof s.key === 'string').map((s) => [s.key, s]));
-    // 跟随：第一份快照时按当前标签匹配一次；之后只处理“切标签时会话还没出现”的补跟随
+    // Following: match against the current tab once on the first snapshot; afterwards only handle the late follow for a session that didn't exist yet at tab switch
     if (first) this.onTabs(true);
     else this.followOnSnapshot();
-    // 一直盯着看的会话里新出的结果也算看过（先记再算灯）
+    // New results in a session you keep watching also count as seen (mark first, then compute lamps)
     const doneAfterSeen = (k) => {
       const s = this.byKey.get(k);
       return !!s && (s.doneAtMs || 0) > this.seen.get(k);
@@ -482,7 +487,7 @@ class Controller {
     this.guard('observedCompact', () => this.learnObservedCompact(this.last.sessions));
   }
 
-  // ---------- 实测压缩点（§11.10 第 2 条、§11.12.2） ----------
+  // ---------- Observed compaction points ----------
 
   loadObserved() {
     const gs = this.context.globalState;
@@ -496,10 +501,11 @@ class Controller {
   }
 
   /**
-   * 快照里出现新的自动压缩（主对话 lastCompact.trigger === 'auto'）就按“模型|窗口”记下 preTokens。
-   * 只学没有被设置覆盖的会话（有设置时压缩点反映的是设置，不是模型默认）；只让更晚的实测覆盖旧值。
-   * 值变了就写 globalState，并马上发一次 config，让 worker 用上。
-   * @returns {boolean} 有没有更新
+   * When a snapshot shows a new auto-compaction (main conversation lastCompact.trigger === 'auto'), record preTokens under "model|window".
+   * Learn only from sessions not overridden by settings (with an override, the compaction point reflects the setting, not the
+   * model default); only a later observation replaces an older value.
+   * If a value changed, write globalState and send a config right away so the worker uses it.
+   * @returns {boolean} whether anything was updated
    */
   learnObservedCompact(sessions) {
     const found = observedCompactsOf(sessions);
@@ -516,7 +522,7 @@ class Controller {
         this.log(this.t('ext.log.learnedCompact', { model: v.model, window: this.i18n.fmtTokens(v.window), tokens: this.i18n.fmtTokens(v.tokens) }));
       }
     }
-    // 没有更新的实测就不写 globalState（每 2 秒一份快照，不能每次都写）
+    // Skip writing globalState when there is no newer observation (a snapshot arrives every 2 s; can't write every time)
     if (!newer) return false;
     const gs = this.context.globalState;
     if (gs) {
@@ -527,9 +533,9 @@ class Controller {
     return changed;
   }
 
-  // ---------- 存储位置与占用（§11.11、§11.12.3） ----------
+  // ---------- Storage locations and usage ----------
 
-  /** 向 worker 要存储统计（非 force 时 worker 10 分钟内返回缓存）；worker 不在就先起一个 */
+  /** Request a storage scan from the worker (without force, the worker returns a cache under 10 minutes old); starts a worker if none is running */
   requestStorage(force) {
     return new Promise((resolve, reject) => {
       const waiter = { resolve, reject, timer: null };
@@ -540,7 +546,7 @@ class Controller {
       if (waiter.timer && typeof waiter.timer.unref === 'function') waiter.timer.unref();
       this.storageWaiters.push(waiter);
       this.storageForce = this.storageForce || !!force;
-      if (!this.worker) this.startWorker(); // 新 worker 会把等着的请求发出去
+      if (!this.worker) this.startWorker(); // the new worker will send the pending requests
       else this.worker.postMessage({ type: 'storage', force: !!force });
     });
   }
@@ -554,7 +560,7 @@ class Controller {
     }
   }
 
-  /** 打开中的会话（迁移前检查用）：Claude 看登记表存活，Codex 看有没有进行中的回合 */
+  /** Open sessions (checked before migrating): Claude by liveness in the registry, Codex by a turn in progress */
   liveSessions() {
     const out = [];
     for (const s of this.byKey.values()) {
@@ -563,7 +569,7 @@ class Controller {
     return out;
   }
 
-  // ---------- 渲染 ----------
+  // ---------- Rendering ----------
 
   currentScoped() {
     return this.last ? scopeLib.filterByScope(this.last.sessions, this.scope(), this.ws()) : [];
@@ -577,7 +583,7 @@ class Controller {
     this.lamps = lampLib.computeLamps(this.scoped, { seen: this.seen.reader() });
     const bySession = this.lamps.bySession;
     const hints = { start: st.contextHintStart, act: st.contextHintAct };
-    // 会话列表的顺序：分“打开中 / 最近”，组内按开始时间倒序，锁定后不因活动换位（§11.3）
+    // Session list order: "open" / "recent" groups, newest start first within each; once locked, activity never reorders it
     const arranged = this.guard('sessions', () => this.sessionOrder.arrange(this.scoped));
     this.arranged = arranged || null;
     this.leftKeys = arranged ? arranged.keys : [];
@@ -593,23 +599,23 @@ class Controller {
     this.updateViewDwell();
   }
 
-  // 内容区显示哪个（§11.2）：选中的 → 当前对话 → 第一行。从没选过时按同样的规则“选上”，之后一直保持
+  // What the content area shows: the selection -> current conversation -> first row. If nothing was ever selected, select by the same rules and keep it
   resolveShown() {
     const keys = this.leftKeys;
-    if (this.selectedKey && !keys.includes(this.selectedKey)) this.selectedKey = null; // 被范围滤掉或已消失
+    if (this.selectedKey && !keys.includes(this.selectedKey)) this.selectedKey = null; // filtered out by scope or gone
     const r = scopeLib.resolveSelection({ selectedKey: this.selectedKey, conversationKey: this.follower.key, keys });
     if (!this.selectedKey && r.key) this.select(r.key);
     this.shownKey = r.key;
   }
 
-  /** 程序触发的选中（跟随、自动选第一行）：不立即记已看过（交给 1.5 秒停留计时），下次渲染推给页面 */
+  /** Programmatic selection (following, auto-selecting the first row): not marked seen right away (left to the 1.5 s dwell timer); pushed to the page on the next render */
   select(key) {
     this.selectedKey = key;
   }
 
   /**
-   * 用户在列表里选中（页面发来 select：点行、Enter、空格）→ 记为看过（§3.4 第 1 条）、换内容区、发 focus。
-   * 只认当前列表里有的会话。
+   * User selection in the list (the page sends select: row click, Enter, Space) -> mark as seen, switch the content area, send focus.
+   * Only sessions currently in the list are accepted.
    */
   userSelect(key) {
     if (typeof key !== 'string' || !this.byKey.has(key) || !this.leftKeys.includes(key)) return;
@@ -618,9 +624,9 @@ class Controller {
     this.render();
   }
 
-  // ---------- 会话列表的位置与宽度（§11.13） ----------
+  // ---------- Session list position and width ----------
 
-  /** 列表在哪边：设置 sessionListPosition；auto 跟随 terminal.integrated.tabs.location（缺省 right） */
+  /** Which side the list is on: setting sessionListPosition; auto follows terminal.integrated.tabs.location (default right) */
   listPosition() {
     const setting = String(this.cfg().get('sessionListPosition', 'auto'));
     const term = String(vscode.workspace.getConfiguration('terminal.integrated').get('tabs.location', 'right'));
@@ -635,7 +641,7 @@ class Controller {
     return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
   }
 
-  /** 页面拖完分隔线（宽度已吸附）：存进 globalState，重载后保持；只在变了时写 */
+  /** The page finished dragging the divider (width already snapped): save to globalState so it survives reloads; write only if changed */
   setListWidth(width) {
     if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) return;
     if (width === this.listWidth) return;
@@ -679,12 +685,12 @@ class Controller {
       settings: st,
       loaded: true,
       emptyText: empty ? emptyText(scope, this.ws(), this.i18n) : undefined,
-      // 只看工作区而工作区里没有会话：空状态里给“显示所有会话”（原来原生树空状态里的链接）
+      // Workspace scope but no sessions in the workspace: offer "Show all sessions" in the empty state
       emptyAction: empty && scope === scopeLib.SCOPE.WORKSPACE ? 'showAll' : null,
     }));
   }
 
-  // 状态栏总灯（§8.5）：颜色 = 总灯；NeedsYou / Error 时加警告 / 错误底色（可关）
+  // Status-bar overall lamp: color = overall lamp; warning / error background on NeedsYou / Error (can be turned off)
   updateStatusBar(now) {
     const item = this.statusItem;
     const c = this.cfg();
@@ -735,7 +741,7 @@ class Controller {
     return parts.join('\n\n');
   }
 
-  // 视图外框：徽标（底部面板挂在 webview 视图上，§11.13）、标题旁说明、空状态上下文键（总览树的欢迎页用）
+  // View chrome: badge (on the bottom panel's webview view), description next to the title, empty-state context key (used by the overview tree's welcome view)
   updateChrome() {
     const i18n = this.i18n;
     const loaded = !!this.last;
@@ -765,7 +771,7 @@ class Controller {
     Promise.resolve(vscode.commands.executeCommand('setContext', `agentMonitor.${key}`, value)).catch(noop);
   }
 
-  // ---------- 当前对话跟随与“已看过”停留计时 ----------
+  // ---------- Current-conversation following and "seen" dwell timers ----------
 
   activeTab() {
     const tg = vscode.window.tabGroups;
@@ -778,19 +784,19 @@ class Controller {
     return !s || s.focused !== false;
   }
 
-  // 标签切换事件（onDidChangeTabs / onDidChangeTabGroups / onDidChangeWindowState），以及第一份快照
+  // Tab-switch events (onDidChangeTabs / onDidChangeTabGroups / onDidChangeWindowState) and the first snapshot
   onTabs(initial = false) {
     if (!this.last || !this.follower) return;
     const before = this.follower.key;
     const r = this.guard('follow', () => this.follower.onTabEvent(this.activeTab(), this.currentScoped(), this.ws()));
     let moved = false;
     if (r && r.follow && r.key && this.cfg().get('followActiveChat', true) !== false) {
-      // 即使 key 没变也要选：用户可能刚点过别的会话
+      // select even if the key didn't change: the user may have just clicked another session
       this.select(r.key);
       moved = true;
     }
-    if (initial) return; // 第一份快照时由 onSnapshot 随后统一渲染
-    // 标签事件很多（改标题、脏标记…）：选中或当前对话变了才整体重算，否则只更新停留计时
+    if (initial) return; // on the first snapshot, onSnapshot renders everything right after
+    // Tab events are frequent (title changes, dirty markers, ...): recompute everything only if the selection or current conversation changed; otherwise just update the dwell timers
     if (moved || this.follower.key !== before) this.render();
     else this.updateTabDwell();
   }
@@ -800,7 +806,7 @@ class Controller {
     if (r && r.follow && r.key && this.cfg().get('followActiveChat', true) !== false) this.select(r.key);
   }
 
-  // §3.4 第 2 条：对话标签是活动标签且窗口有焦点，持续 1.5 秒 → 看过
+  // A chat tab is the active tab and the window is focused for 1.5 s -> seen
   updateTabDwell() {
     let key = null;
     if (this.last && this.windowFocused()) {
@@ -810,16 +816,16 @@ class Controller {
     this.dwell.set('tab', key);
   }
 
-  // §3.4 第 3 条：右侧视图显示该会话、可见、窗口有焦点，持续 1.5 秒 → 看过
+  // The agents view shows that session, is visible, and the window is focused for 1.5 s -> seen
   updateViewDwell() {
     if (!this.dwell) return;
     const visible = !!(this.agentsView && this.agentsView.visible);
     this.dwell.set('view', visible && this.windowFocused() ? this.shownKey : null);
   }
 
-  // ---------- 命令 ----------
+  // ---------- Commands ----------
 
-  /** 命令参数 → 会话 key：总览树节点、webview 右键菜单传来的 { sessionKey }（data-vscode-context）、sessionKey 字符串 */
+  /** Command argument -> session key: an overview tree node, { sessionKey } from the webview context menu (data-vscode-context), or a sessionKey string */
   keyOf(arg) {
     if (typeof arg === 'string') return this.byKey.has(arg) ? arg : null;
     if (!arg || typeof arg !== 'object') return null;
@@ -841,7 +847,7 @@ class Controller {
     return Promise.resolve(this.seen.markMany(keys)).then(() => this.render());
   }
 
-  // 当前快照里出现过的记录文件（打开前核对，不打开任意路径）
+  // Transcript files present in the current snapshot (checked before opening; arbitrary paths are never opened)
   knownTranscripts() {
     const set = new Set();
     for (const s of this.byKey.values()) {
@@ -856,12 +862,12 @@ class Controller {
   openTranscript(arg) {
     let file = null;
     if (arg && typeof arg === 'object' && typeof arg.sessionKey === 'string') {
-      // 底部面板会话列表的右键菜单 / “…”：参数是 data-vscode-context 对象 { webviewSection, sessionKey, … }
+      // Context menu / "..." of the bottom panel's session list: the argument is the data-vscode-context object { webviewSection, sessionKey, ... }
       const s = this.byKey.get(arg.sessionKey);
       file = s && s.main && s.main.file;
     } else if (arg && typeof arg === 'object') {
-      if (arg.kind === 'session' && arg.data) file = arg.data.main && arg.data.main.file;               // 总览树的会话
-      else if ((arg.kind === 'main' || arg.kind === 'agent') && arg.data) file = arg.data.file;         // 总览树的智能体
+      if (arg.kind === 'session' && arg.data) file = arg.data.main && arg.data.main.file;               // overview tree session
+      else if ((arg.kind === 'main' || arg.kind === 'agent') && arg.data) file = arg.data.file;         // overview tree agent
     } else if (typeof arg === 'string') {
       const s = this.byKey.get(arg);
       file = s && s.main && s.main.file;
@@ -875,7 +881,7 @@ class Controller {
     return vscode.window.showTextDocument(vscode.Uri.file(file), { preview: true });
   }
 
-  /** 命令参数 → 会话的主记录路径（只用快照里的数据，不接受外面传来的路径） */
+  /** Command argument -> the session's main transcript path (uses snapshot data only; never accepts a path from outside) */
   transcriptFor(arg) {
     const key = this.keyOf(arg) || (arg == null ? this.shownKey : null);
     const s = key ? this.byKey.get(key) : null;
@@ -883,7 +889,7 @@ class Controller {
     return file ? { key, session: s, file } : null;
   }
 
-  // 在 Finder / 资源管理器中显示主记录（§11.11）
+  // Reveal the main transcript in Finder / Explorer
   revealTranscript(arg) {
     const r = this.transcriptFor(arg);
     if (!r) return undefined;
@@ -894,7 +900,7 @@ class Controller {
     return vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(r.file));
   }
 
-  // 复制主记录路径（§11.11）
+  // Copy the main transcript path
   async copyTranscriptPath(arg) {
     const r = this.transcriptFor(arg);
     if (!r) return;
@@ -903,7 +909,7 @@ class Controller {
   }
 
   /**
-   * 没有参数时（命令面板）先选会话：当前选中的排第一并标出来。
+   * Without an argument (Command Palette), pick a session first: the currently selected one is listed first and marked.
    * @param {(s: any) => boolean} [filter]
    * @returns {Promise<string|null>}
    */
@@ -914,7 +920,7 @@ class Controller {
       return null;
     }
     const current = this.selectedKey || this.shownKey;
-    list.sort((a, b) => Number(b.key === current) - Number(a.key === current)); // 稳定排序：只把当前的挪到最前
+    list.sort((a, b) => Number(b.key === current) - Number(a.key === current)); // stable sort: only moves the current one to the front
     const items = list.map((s) => ({
       label: String(s.title || s.id || ''),
       description: [s.key === current ? this.t('ext.pickSession.selected') : '', fmt.providerLabel(s.provider, this.i18n)].filter(Boolean).join(fmt.SEP),
@@ -925,8 +931,8 @@ class Controller {
   }
 
   /**
-   * 命令标题（和右键菜单里显示的一样）：package.nls.json，再用界面语言的 package.nls.<locale>.json 覆盖。
-   * VS Code 不提供读取贡献点标题的 API，这里按它的规则自己读一次（只读扩展自己目录里的文件）。
+   * Command titles (as shown in the context menu): package.nls.json, overridden by package.nls.<locale>.json for the UI language.
+   * VS Code has no API for reading contributed command titles, so we read them once following its rules (only files in the extension's own directory).
    */
   commandTitles() {
     if (this.cmdTitles) return this.cmdTitles;
@@ -944,8 +950,8 @@ class Controller {
   }
 
   /**
-   * 会话行尾的“…”（§11.13）：弹出与右键菜单同样内容的 QuickPick（同一份清单 SESSION_MENU、同样的 compactable / resumable 条件），
-   * 选中后执行命令，参数和右键菜单一样是 { webviewSection, sessionKey }。
+   * The "..." at the end of a session row: shows a QuickPick with the same items as the context menu (same SESSION_MENU list,
+   * same compactable / resumable conditions), then runs the chosen command with the same argument as the context menu, { webviewSection, sessionKey }.
    */
   async sessionMenu(key) {
     const s = typeof key === 'string' ? this.byKey.get(key) : null;
@@ -968,7 +974,7 @@ class Controller {
     await vscode.commands.executeCommand(pick.command, { webviewSection: 'session', sessionKey: key });
   }
 
-  // 换任务：写交接笔记后开新会话（§11.8 第 4 条）。流程在 compact.js 的 runHandoff 里
+  // Switch task: write a handoff note, then start a new session. The flow lives in runHandoff in compact.js
   async handoff(arg) {
     const api = this.compactApi;
     const run = (api && typeof api.runHandoff === 'function' && api.runHandoff.bind(api))
@@ -982,7 +988,7 @@ class Controller {
     await run(key);
   }
 
-  // 续跑（§7.2）：由扩展端按当前数据重新生成文本再写剪贴板
+  // Resume: the extension regenerates the text from current data, then writes it to the clipboard
   async copyResume(arg) {
     const i18n = this.i18n;
     const key = this.keyOf(arg) || this.shownKey;
@@ -1018,7 +1024,7 @@ class Controller {
 }
 
 // ---------------------------------------------------------------------------
-// 小工具
+// Helpers
 // ---------------------------------------------------------------------------
 
 function emptyText(scope, ws, i18n) {
@@ -1026,7 +1032,7 @@ function emptyText(scope, ws, i18n) {
   return fmt.formatScope(scope, i18n).empty;
 }
 
-// 右侧视图模块加载失败时的占位页：只显示一句说明（纯文本，不执行脚本）
+// Placeholder page when the agents-view module fails to load: a single line of explanation (plain text, no scripts)
 function fallbackAgentsView(message) {
   return {
     resolveWebviewView(view) {
@@ -1044,7 +1050,7 @@ function num(v, d) {
   return Number.isFinite(n) && n > 0 ? n : d;
 }
 
-/** 会话的主记录路径：provider 给的 transcript，没有时用主对话的记录文件；必须是绝对路径 */
+/** The session's main transcript path: the provider's transcript, else the main conversation's file; must be absolute */
 function transcriptOf(s) {
   if (!s) return '';
   const p = typeof s.transcript === 'string' && s.transcript ? s.transcript
@@ -1053,9 +1059,9 @@ function transcriptOf(s) {
 }
 
 /**
- * 快照里的实测自动压缩点（§11.10 第 2 条）：Claude 主对话最近一次 trigger === 'auto' 的 preTokens，
- * 按 `${模型}|${窗口}` 分组（与 core/context.js 的 observedKey 同形），同组取最晚的一次。
- * 压缩点来自设置的会话不算（那是设置值，不是模型默认）。
+ * Observed auto-compaction points in a snapshot: preTokens of the Claude main conversation's latest trigger === 'auto',
+ * grouped by `${model}|${window}` (same shape as observedKey in core/context.js), keeping the latest per group.
+ * Sessions whose compaction point comes from settings are skipped (that is a configured value, not the model default).
  * @param {any[]} sessions
  * @returns {Map<string, { tokens: number, ms: number, model: string, window: number }>}
  */
@@ -1071,7 +1077,7 @@ function observedCompactsOf(sessions) {
     const ms = Number(lc.ms);
     const model = String(lc.model || main.model || s.model || '');
     const tk = main.tokens || {};
-    // 窗口：provider 按压缩时的模型算好的 lastCompact.contextWindow 优先（中途换过模型时和会话当前窗口不同）
+    // Window: prefer lastCompact.contextWindow computed by the provider for the model at compaction time (differs from the session's current window if the model was switched mid-session)
     const window = Number(lc.contextWindow) > 0 ? Number(lc.contextWindow)
       : Number(s.contextWindow) > 0 ? Number(s.contextWindow) : Number(tk.contextWindow);
     if (!model || !(tokens > 0) || !Number.isFinite(ms) || !(window > 0)) continue;

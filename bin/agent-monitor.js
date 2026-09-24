@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
-// 终端版（DESIGN §1.2、§3.4、§3.5、§11.3）：同时读 Claude Code 与 Codex 的本机会话记录。
-// - 文字全部走 lib/i18n + lib/format（--lang 或 LC_ALL / LC_MESSAGES / LANG），本文件不写界面文字；
-// - 灯用 statuslight 同色号的 xterm 256 色（lib/lamp.xtermDot）；
-// - 会话、智能体顺序用 lib/order.js 锁定：--watch 下不因活动、灯、token 变化而跳动；
-// - 只读本机文件，不联网；没有持久化，默认全部当作“未看过”（--seen-all 全部当看过）。
-// 用法见 --help。被 require 时不运行，只导出纯函数（测试用）。
+// Terminal version: reads both Claude Code and Codex local session transcripts.
+// - All text goes through lib/i18n + lib/format (--lang or LC_ALL / LC_MESSAGES / LANG); this file contains no UI text;
+// - Lamps use xterm 256 colors (lib/lamp.xtermDot);
+// - Session and agent order is locked by lib/order.js: under --watch nothing jumps when activity, lamps or tokens change;
+// - Reads local files only, no network; nothing is persisted, so everything starts "unseen" (--seen-all marks all as seen).
+// See --help for usage. Does not run when required; only exports pure functions (for tests).
 
 const os = require('os');
 const path = require('path');
@@ -18,19 +18,19 @@ const { ALL_SEEN } = require('../lib/seen');
 const { workspaceInfo, filterByScope } = require('../lib/scope');
 const S = require('../lib/core/status');
 
-const BRAND = 'CYUNEO Agent Monitor'; // 产品名，不翻译
+const BRAND = 'CYUNEO Agent Monitor'; // product name, not translated
 const SEP = F.SEP;
 const DEFAULTS = Object.freeze({ window: 30, stale: 5, interval: 2 });
 const PROVIDERS = ['all', 'claude', 'codex'];
-const ONE_SHOT_BUDGET = 1e15; // 单次运行加 --today 时一次读完今天的记录
-const RESULT_LINES = 12;      // 细节模式里结果最多显示的行数
+const ONE_SHOT_BUDGET = 1e15; // a one-shot run with --today reads all of today's transcripts at once
+const RESULT_LINES = 12;      // max result lines shown in detail mode
 const TIMELINE_MAX = 12;
 
 // ---------------------------------------------------------------------------
-// 参数
+// Arguments
 // ---------------------------------------------------------------------------
 
-// 选项表：name → { flag, takes: 值的类型 }；help 按这个顺序列出
+// Option table: name -> { flag, takes: value type }; --help lists them in this order
 const OPTIONS = [
   { name: 'watch', flags: ['--watch', '-w'] },
   { name: 'interval', flags: ['--interval'], value: 'SEC', type: 'number' },
@@ -55,7 +55,7 @@ const BY_FLAG = new Map();
 for (const o of OPTIONS) for (const f of o.flags) BY_FLAG.set(f, o);
 
 /**
- * 解析命令行。出错不抛，放进 errors（{ key, vars }，由调用方按语言输出）。
+ * Parse the command line. Errors are not thrown but collected in errors ({ key, vars }, printed by the caller in the chosen language).
  * @param {string[]} argv process.argv.slice(2)
  * @returns {{ opts: Record<string, any>, errors: { key: string, vars: Record<string, any> }[] }}
  */
@@ -95,7 +95,7 @@ function parseArgs(argv) {
   return { opts, errors };
 }
 
-/** 展开开头的 ~ 并转成绝对路径 */
+/** Expand a leading ~ and make the path absolute */
 function expandPath(p) {
   if (!p) return undefined;
   const s = String(p);
@@ -105,7 +105,7 @@ function expandPath(p) {
   return path.resolve(s);
 }
 
-/** 由参数得到 Monitor 的配置（WorkerConfig 的子集，其余由 normalizeConfig 补默认值） */
+/** Monitor config from the options (a subset of WorkerConfig; normalizeConfig fills in the rest) */
 function monitorConfig(opts) {
   const daily = opts.watch ? !opts.noToday : !!opts.today;
   const cfg = {
@@ -125,11 +125,11 @@ function monitorConfig(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// 终端小工具：颜色、显示宽度、截断
+// Terminal helpers: color, display width, truncation
 // ---------------------------------------------------------------------------
 
 /**
- * 是否上色：--no-color / NO_COLOR 关；--color / FORCE_COLOR 开；否则看 stdout 是不是终端。
+ * Whether to use color: off with --no-color / NO_COLOR; on with --color / FORCE_COLOR; otherwise only if stdout is a TTY.
  * @param {Record<string, any>} opts
  * @param {Record<string, string|undefined>} env
  * @param {{ isTTY?: boolean }} stream
@@ -150,7 +150,7 @@ const dim = (on, s) => paint(on, '2', s);
 const bold = (on, s) => paint(on, '1', s);
 const fg = (on, n, s) => paint(on, `38;5;${n}`, s);
 
-// 东亚宽字符占两列；组合符号、零宽字符占 0 列
+// East Asian wide chars take 2 columns; combining marks and zero-width chars take 0
 function charWidth(cp) {
   if (cp === 0 || cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0;
   if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
@@ -162,14 +162,14 @@ function charWidth(cp) {
   return 1;
 }
 
-/** 终端里的显示宽度（忽略 ANSI 转义） */
+/** Display width in the terminal (ignoring ANSI escapes) */
 function displayWidth(s) {
   let w = 0;
   for (const ch of String(s).replace(ANSI_RE, '')) w += charWidth(ch.codePointAt(0));
   return w;
 }
 
-/** 截到 width 列（保留 ANSI 转义），超出时以 … 结尾并复位颜色 */
+/** Truncate to width columns (keeping ANSI escapes); on overflow end with … and reset color */
 function truncate(s, width) {
   const str = String(s);
   if (!(width > 0) || displayWidth(str) <= width) return str;
@@ -199,13 +199,13 @@ function truncate(s, width) {
   return out + (colored ? '\x1b[0m' : '') + '…';
 }
 
-/** 按显示宽度补空格到 width 列 */
+/** Pad with spaces to width columns by display width */
 function padWidth(s, width) {
   const w = displayWidth(s);
   return w >= width ? String(s) : String(s) + ' '.repeat(width - w);
 }
 
-/** 行首缩进 + 单行化（原文里的换行、制表符变成空格） */
+/** Indent and flatten to one line (newlines and tabs become spaces) */
 function oneLine(s) { return String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim(); }
 
 function shortHome(p) {
@@ -216,11 +216,11 @@ function shortHome(p) {
 }
 
 // ---------------------------------------------------------------------------
-// 视图：把一份快照排成终端文字
+// Views: lay out a snapshot as terminal text
 // ---------------------------------------------------------------------------
 
 /**
- * 一次运行的渲染状态：i18n、上色、稳定排序器（--watch 期间一直用同一份，顺序才不跳）。
+ * Render state for one run: i18n, color, stable sorters (reused for the whole --watch session so order never jumps).
  * @param {{ i18n: any, color: boolean, seenAll?: boolean, here?: string|null, window?: number,
  *   staleAsNeedsYou?: boolean, showToday?: boolean, providers?: string }} o
  */
@@ -238,7 +238,7 @@ function createView(o) {
   };
 }
 
-/** 范围过滤 + 稳定排序 + 灯 */
+/** Scope filter + stable ordering + lamps */
 function arrange(view, snap) {
   let sessions = (snap && snap.sessions) || [];
   if (view.here) sessions = filterByScope(sessions, 'workspace', workspaceInfo([view.here]));
@@ -252,7 +252,7 @@ function arrange(view, snap) {
 
 const LAMP_TEXT_COLOR = { needsYou: 161, error: 196 };
 
-/** 灯 + 文字：NeedsYou / Error 的文字也上灯色 */
+/** Lamp + text: NeedsYou / Error text is also drawn in the lamp color */
 function lampText(view, lamp, text) {
   const n = LAMP_TEXT_COLOR[lamp];
   return n ? fg(view.color, n, text) : text;
@@ -260,7 +260,7 @@ function lampText(view, lamp, text) {
 
 function dot(view, lamp) { return lampLib.xtermDot(lamp, { color: view.color }); }
 
-/** 顶部一行：品牌 + 各灯的会话数（按显示紧急度） */
+/** Top line: brand + session count per lamp (by display urgency) */
 function headerLine(view, counts) {
   const { i18n } = view;
   const parts = [];
@@ -271,7 +271,7 @@ function headerLine(view, counts) {
   return bold(view.color, BRAND) + '   ' + tail;
 }
 
-/** 会话标题行 + 一行灰色的元信息 */
+/** Session title line + one dimmed line of metadata */
 function sessionLines(view, s, L, now) {
   const { i18n } = view;
   const row = F.formatSessionRow(s, i18n, { lamps: L, now, staleAsNeedsYou: view.staleAsNeedsYou });
@@ -293,7 +293,7 @@ function sessionLines(view, s, L, now) {
   return lines;
 }
 
-/** 一个智能体行 */
+/** One agent row */
 function agentLine(view, s, r, L, now) {
   const { i18n } = view;
   const indent = '  ' + '  '.repeat(r.depth);
@@ -312,7 +312,7 @@ function agentLine(view, s, r, L, now) {
   if (!isMain) parts.push(dim(view.color, F.formatAgentKind(a, i18n)));
   const status = F.formatStatus(st, a, i18n, now, { isMain, staleAsNeedsYou: view.staleAsNeedsYou });
   const step = F.formatStep(a.step, st, i18n, now, { withDur: true });
-  // “思考中”状态配“思考中”步骤时只写一次（带用时）
+  // A "thinking" status with a "thinking" step is written only once (with duration)
   const same = st && st.code === S.STATUS.THINKING && a.step && a.step.kind === S.STEP.THINKING && step;
   parts.push(lampText(view, cell.lamp, same ? oneLine(step) : status));
   if (step && !same) parts.push(oneLine(step));
@@ -323,7 +323,7 @@ function agentLine(view, s, r, L, now) {
   return indent + dot(view, cell.lamp) + ' ' + parts.join(SEP);
 }
 
-/** 账号级信息：Codex 额度、Claude 最近一次撞额度、今日合计、出错信息 */
+/** Account-level info: Codex quota, Claude's most recent quota hit, today's totals, errors */
 function footerLines(view, snap, now) {
   const { i18n } = view;
   const out = [];
@@ -351,10 +351,10 @@ function footerLines(view, snap, now) {
 }
 
 /**
- * 列表视图：打开中 / 最近两组，每个会话下面是它的智能体（顺序固定）。
- * @param {any} view createView() 的结果
+ * List view: "open" and "recent" groups, each session followed by its agents (fixed order).
+ * @param {any} view result of createView()
  * @param {any} snap Monitor.snapshot()
- * @param {{ now?: number, extra?: string[] }} [o] extra：放在底部的附加行（用时、按键提示）
+ * @param {{ now?: number, extra?: string[] }} [o] extra: extra lines at the bottom (timing, key hints)
  * @returns {string[]}
  */
 function renderList(view, snap, o = {}) {
@@ -388,7 +388,7 @@ function renderList(view, snap, o = {}) {
 }
 
 /**
- * --session 用：在这份列表里能唯一定位的 id 前缀（至少 8 个字符）。
+ * For --session: the shortest id prefix (at least 8 chars) that is unique within this list.
  * @param {any} s
  * @param {any[]} [list]
  */
@@ -403,7 +403,7 @@ function shortId(s, list) {
 }
 
 /**
- * 按 id、key 或前缀找会话。
+ * Find a session by id, key or prefix.
  * @returns {{ session: any|null, matches: number }}
  */
 function findSession(sessions, q) {
@@ -417,9 +417,10 @@ function findSession(sessions, q) {
 }
 
 /**
- * 细节视图（右侧那一栏的终端版）：会话、每个智能体的时间线 / 结果 / 改过的文件 / 报错，再加续跑提示。
+ * Detail view (terminal version of the right-hand panel): the session, each agent's timeline / result / changed files /
+ * errors, plus a resume hint.
  * @param {any} view
- * @param {any} snap 已 setFocus 过该会话的快照
+ * @param {any} snap a snapshot taken after setFocus on that session
  * @param {any} session
  * @param {{ now?: number, platform?: string, extra?: string[] }} [o]
  * @returns {string[]}
@@ -488,7 +489,7 @@ function renderDetail(view, snap, session, o = {}) {
 }
 
 /**
- * --json 的内容：快照 + 固定顺序 + 灯。会话按左侧顺序排好，每个会话带 lamp、group 和按右侧顺序的 rows。
+ * --json output: snapshot + fixed order + lamps. Sessions are in left-hand order; each has lamp, group, and rows in right-hand order.
  * @param {any} view
  * @param {any} snap
  * @param {{ scanMs?: number, locale?: string }} [o]
@@ -523,7 +524,7 @@ function buildJson(view, snap, o = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 帮助、版本
+// Help, version
 // ---------------------------------------------------------------------------
 
 function packageInfo() {
@@ -543,7 +544,7 @@ const HELP_KEY = {
   help: 'cli.opt.help', version: 'cli.opt.version',
 };
 
-/** --help 的全部行 */
+/** All lines of --help */
 function helpLines(i18n, color) {
   const view = { color, i18n };
   const lines = [bold(color, BRAND), i18n.t('cli.help.intro'), '', bold(color, i18n.t('cli.help.usage')),
@@ -567,13 +568,13 @@ function helpLines(i18n, color) {
 }
 
 // ---------------------------------------------------------------------------
-// 运行
+// Run
 // ---------------------------------------------------------------------------
 
 function writeLines(stream, lines) { stream.write(lines.join('\n') + '\n'); }
 
 /**
- * 入口。返回退出码（watch 模式下返回 null，由信号结束进程）。
+ * Entry point. Returns the exit code (null in watch mode, where a signal ends the process).
  * @param {string[]} argv
  * @param {{ env?: Record<string, string|undefined>, stdout?: any, stderr?: any, stdin?: any }} [io]
  */
@@ -601,7 +602,7 @@ function main(argv, io = {}) {
     here: opts.here ? process.cwd() : null,
   });
 
-  // 一次渲染：返回 { lines } 或 { error }
+  // Render one frame: returns { lines } or { error }
   const frame = (extra) => {
     const t0 = Date.now();
     let snap = mon.snapshot(t0);
@@ -614,7 +615,7 @@ function main(argv, io = {}) {
           : i18n.t('cli.error.noSession', { id: opts.session, n: opts.window }) };
       }
       session = f.session;
-      // 细节只给 focus 里的会话：设好 focus 再取一份（只用内存状态，很便宜）
+      // Details are only produced for focused sessions: set focus and take another snapshot (in-memory state only, cheap)
       if (!snap.details || !snap.details[session.key]) {
         mon.setFocus([session.key]);
         snap = mon.snapshot(Date.now());
@@ -649,7 +650,7 @@ function main(argv, io = {}) {
     return 0;
   }
 
-  // --watch：终端里用备用屏幕、原地重画；不是终端（管道）时逐帧追加
+  // --watch: on a TTY use the alternate screen and redraw in place; otherwise (pipe) append frame by frame
   const tty = !!out.isTTY && !opts.json;
   const stdin = io.stdin || process.stdin;
   let timer = null;
@@ -658,9 +659,9 @@ function main(argv, io = {}) {
     if (stopped) return;
     stopped = true;
     if (timer) clearInterval(timer);
-    try { mon.dispose(); } catch { /* 忽略 */ }
+    try { mon.dispose(); } catch { /* ignore */ }
     if (tty) out.write('\x1b[?25h\x1b[?1049l');
-    try { if (stdin.isTTY && stdin.setRawMode) stdin.setRawMode(false); } catch { /* 忽略 */ }
+    try { if (stdin.isTTY && stdin.setRawMode) stdin.setRawMode(false); } catch { /* ignore */ }
     process.exit(code);
   };
   const draw = () => {
@@ -676,7 +677,7 @@ function main(argv, io = {}) {
     const width = out.columns || 0;
     const height = out.rows || 0;
     let shown = width ? lines.map((l) => truncate(l, width)) : lines;
-    // 放不下时截掉中间，最后一行（更新时间、按键提示）总留着
+    // If it doesn't fit, cut the middle; the last line (update time, key hints) always stays
     if (height > 3 && shown.length > height) {
       const hidden = shown.length - (height - 2) - 1;
       shown = shown.slice(0, height - 2).concat(dim(color, i18n.t('cli.more', { n: hidden })), shown[shown.length - 1]);

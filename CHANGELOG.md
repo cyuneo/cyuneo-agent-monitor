@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **New license.** From this version on, CYUNEO Agent Monitor is licensed under the PolyForm Noncommercial License 1.0.0: free for personal and noncommercial use; commercial use needs a separate license. See the License, Disclaimer and Copyright sections of the README.
 - **Shorter README.** It now explains why the extension exists, what it does for you and how to get started, with an **Install in VS Code** link. Every feature, command and setting is described in the [full guide](docs/GUIDE.md).
 - **Clearer Marketplace description and more search keywords.**
+- The README now notes that the extension was developed with AI assistance.
 
 ## [0.3.0] - 2026-09-24
 

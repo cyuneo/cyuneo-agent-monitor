@@ -1,4 +1,4 @@
-# 合成的测试配置
+# Synthetic test config
 model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
 

@@ -1,8 +1,8 @@
 'use strict';
-// “存储位置与占用”页面脚本（DESIGN §11.11）。
-// - 只渲染扩展算好的视图模型（lib/storage-view.js），文字都已按语言格式化好；自己不拼命令、不碰路径。
-// - 按钮只 postMessage 条目 id / app / 方案 / 命令段名，由扩展按当前数据重新查找后执行；命令插件从不执行。
-// - 选了哪个方案记在 vscode.setState 里；重新渲染后把焦点放回原来的按钮。
+// Script for the "Storage locations and usage" page.
+// - Only renders the view model computed by the extension (lib/storage-view.js); all text is already localized and formatted. It never builds commands or touches paths itself.
+// - Buttons only postMessage an entry id / app / plan / command-step name; the extension looks them up again in its current data and acts. The webview never runs commands.
+// - The selected plan is kept in vscode.setState; after a re-render, focus returns to the previously focused button.
 (function () {
   const vscode = acquireVsCodeApi();
 
@@ -13,7 +13,7 @@
   const saved = vscode.getState() || {};
   const state = { plan: saved.plan && typeof saved.plan === 'object' ? saved.plan : {} };
   const save = () => vscode.setState(state);
-  // 用户是否勾了“迁移方案仅供参考、自己核对并承担后果”的确认。只在这一次打开页面期间有效，不保存
+  // Whether the user ticked "migration plans are for reference only; I will check them myself and accept the consequences". Lasts only while this page is open; never saved
   let ack = false;
 
   const $ = (id) => document.getElementById(id);
@@ -37,14 +37,14 @@
   }
   const icon = (name, cls) => h('i', { class: 'codicon codicon-' + name + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' });
 
-  // 带文字的按钮
+  // Button with a text label
   function btn(label, iconName, data, o) {
     const locked = o && o.locked != null;
     const a = { type: 'button', class: 'btn' + (o && o.primary ? '' : ' secondary'), title: locked ? o.locked : o && o.title, disabled: locked };
     for (const k of Object.keys(data)) a['data-' + k] = data[k];
     return h('button', a, [iconName ? icon(iconName) : null, h('span', { text: label })]);
   }
-  // 只有图标的按钮（标签给读屏与悬停提示）
+  // Icon-only button (the label goes to screen readers and the hover tooltip)
   function iconBtn(label, iconName, data) {
     const a = { type: 'button', class: 'ibtn', title: label, 'aria-label': label };
     for (const k of Object.keys(data)) a['data-' + k] = data[k];
@@ -57,7 +57,7 @@
     ]);
   }
 
-  // ---------- 各块 ----------
+  // ---------- Blocks ----------
 
   function dirSection(d, L) {
     const head = h('div', { class: 'dline' }, [
@@ -121,7 +121,7 @@
       h('span', { class: 'c-acts' }, [iconBtn(L.reveal, 'folder-opened', { act: 'reveal', id: r.pathId, fk: 'reveal:' + r.key })]),
     ]));
     const list = h('ul', { class: 'vols' }, items);
-    // CSP 不允许内联 style 属性：宽度用 CSSOM 设置
+    // CSP disallows inline style attributes, so set widths via the CSSOM
     v.rows.forEach((r, i) => {
       const fill = items[i].querySelector('.meter-fill');
       if (fill) fill.style.width = r.usedPct + '%';
@@ -134,7 +134,7 @@
     if (s.code) {
       kids.push(h('pre', { class: 'code', tabindex: '0' }, [h('code', { text: s.code })]));
       const acts = [];
-      // 没勾确认时不能复制、不能放进终端（悬停提示说明原因）
+      // Until the confirmation is ticked, copy and send-to-terminal are disabled (the tooltip explains why)
       const lock = ack || !vm.migrate.disclaimer ? null : vm.migrate.disclaimer.locked;
       if (s.actions.indexOf('copy') >= 0) {
         acts.push(btn(s.part === 'commands' ? L.copy : L.copyOne, 'copy', { act: 'copy', app, kind, part: s.part, fk: 'copy:' + app + kind + s.part }, { primary: s.part === 'commands', locked: lock }));
@@ -147,7 +147,7 @@
     return h('li', { class: 'step' }, kids);
   }
 
-  // 迁移方案的免责说明和确认勾选框
+  // Migration plan disclaimer and confirmation checkbox
   function disclaimer(D) {
     const box = h('input', { type: 'checkbox', id: 'ack', 'data-fk': 'ack', checked: ack });
     return h('div', { class: 'disclaimer', role: 'note', 'aria-labelledby': 'disc-title' }, [
@@ -164,7 +164,7 @@
       kids.push(banner('warning', 'warning', c.live.text,
         h('ul', { class: 'live' }, c.live.items.map((x) => h('li', { text: x })))));
     }
-    // 目标文件夹
+    // Target folder
     kids.push(h('div', { class: 'target' }, [
       h('span', { class: 'f-label', text: L.base }),
       h('span', { class: 'f-val' }, [
@@ -178,7 +178,7 @@
     ]));
     kids.push(h('p', { class: 'hint muted', text: c.target.hint }));
     for (const w of c.warnings) kids.push(banner('warning', 'warning', w));
-    // 方案切换
+    // Plan switcher
     const tabs = h('div', { class: 'tabs', role: 'tablist', 'aria-label': L.plans }, c.plans.map((p) => h('button', {
       type: 'button', class: 'tab', role: 'tab', id: 'tab-' + c.app + '-' + p.kind, 'aria-selected': p.kind === sel ? 'true' : 'false',
       'aria-controls': 'panel-' + c.app, 'data-act': 'plan', 'data-app': c.app, 'data-kind': p.kind, 'data-fk': 'tab:' + c.app + p.kind,
@@ -211,7 +211,7 @@
     const L = vm.labels;
     const focusKey = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-fk');
     status.textContent = vm.statusText || '';
-    // 统计中不禁用刷新按钮（禁用色对比度太低），只把图标换成转圈
+    // While scanning, keep the refresh button enabled (disabled colors have too little contrast); just swap its icon for a spinner
     const refresh = $('refresh');
     refresh.querySelector('span').textContent = L.refresh;
     refresh.querySelector('.codicon').className = 'codicon ' + (vm.loading ? 'codicon-loading codicon-modifier-spin' : 'codicon-refresh');
@@ -244,7 +244,7 @@
     }
   }
 
-  // ---------- 事件 ----------
+  // ---------- Events ----------
 
   document.addEventListener('click', (ev) => {
     const b = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
@@ -267,7 +267,7 @@
     }
   });
 
-  // 勾选 / 取消确认：重画一遍，按钮跟着可用或不可用
+  // Ticking / unticking the confirmation re-renders, enabling or disabling the buttons accordingly
   document.addEventListener('change', (ev) => {
     const el = ev.target;
     if (!el || el.id !== 'ack') return;
@@ -275,7 +275,7 @@
     render();
   });
 
-  // 方案切换：左右方向键
+  // Plan switcher: left / right arrow keys
   document.addEventListener('keydown', (ev) => {
     const b = ev.target;
     if (!b || !b.classList || !b.classList.contains('tab')) return;

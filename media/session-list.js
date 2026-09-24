@@ -1,8 +1,8 @@
 'use strict';
-// 会话列表（仿终端标签列表，DESIGN §11.13）的纯函数：宽度吸附、键盘移动、首字母跳转、按 key 增量同步子节点。
-// 页面（media/agents.js）和扩展（lib/agents-view.js）共用同一份数值；单测在 Node 里直接 require。
-// 不依赖 DOM 全局对象：syncKeyed 只用 children / firstChild / nextSibling / insertBefore / remove，测试可以用假节点。
-// 浏览器里用 <script> 引入时挂在 globalThis.AgentMonitorList。
+// Pure functions for the session list (modeled on VS Code's terminal tab list): width snapping, keyboard navigation, type-to-jump, keyed incremental child sync.
+// The page (media/agents.js) and the extension (lib/agents-view.js) share the same values; unit tests require it directly in Node.
+// No dependency on DOM globals: syncKeyed only uses children / firstChild / nextSibling / insertBefore / remove, so tests can use fake nodes.
+// When loaded in the browser via <script>, it is exposed as globalThis.AgentMonitorList.
 (function (root, factory) {
   'use strict';
   const api = factory();
@@ -11,9 +11,9 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  // 数值取自 VS Code 终端标签列表（terminal.ts TerminalTabsListSizes）：窄条 46、宽模式最少 80、最宽 500；
-  // 默认宽度按 §11.13 用 200；面板窄于 500 时自动用窄条。
-  // 内容区至少留 300：窄排法的第二行（缩进 + token / 费用 / 用时三个定宽格）要这么宽才不被裁掉
+  // Values taken from VS Code's terminal tab list (terminal.ts TerminalTabsListSizes): narrow strip 46, wide mode at least 80, at most 500;
+  // default width 200; when the panel is narrower than 500 the narrow strip is used automatically.
+  // Leave at least 300 for the content area: the second line of the narrow layout (indent + three fixed-width cells for tokens / cost / time) needs that much to avoid clipping
   const WIDTH = Object.freeze({
     DEFAULT: 200,
     NARROW: 46,
@@ -22,11 +22,11 @@
     AUTO_NARROW_PANEL: 500,
     MIN_CONTENT: 300,
   });
-  // 拖到窄条和最小宽度的中点以下就吸附成窄条
+  // Dragged below the midpoint between the narrow strip and the minimum width → snap to the narrow strip
   const MIDPOINT = (WIDTH.NARROW + WIDTH.MIN) / 2;
 
   /**
-   * 拖动或保存的宽度 → 吸附后的宽度：< 63 → 46（窄条）；63–80 → 80；最宽 500。非数字 → 默认宽度。
+   * Dragged or saved width → snapped width: < 63 → 46 (narrow strip); 63–80 → 80; at most 500. Non-number → default width.
    * @param {any} w
    * @returns {number}
    */
@@ -39,12 +39,12 @@
   }
 
   /**
-   * 实际显示的宽度。
-   * - 面板窄于 500：自动窄条（auto = true，这时不能拖动，保存的宽度不变）；
-   * - 保存的是窄条：窄条；
-   * - 否则保存的宽度，但给内容区留 300；留不出 80 的列表就用窄条。
-   * @param {any} saved 保存的宽度
-   * @param {number} panelWidth 整个面板（webview）的宽度
+   * Actual displayed width.
+   * - Panel narrower than 500: automatic narrow strip (auto = true; dragging is disabled and the saved width is left unchanged);
+   * - Saved width is the narrow strip: narrow strip;
+   * - Otherwise the saved width, leaving 300 for the content area; if that leaves less than 80 for the list, use the narrow strip.
+   * @param {any} saved saved width
+   * @param {number} panelWidth width of the whole panel (webview)
    * @returns {{ width: number, narrow: boolean, auto: boolean }}
    */
   function effectiveWidth(saved, panelWidth) {
@@ -60,7 +60,7 @@
   }
 
   /**
-   * 拖动分隔线时，指针横坐标 → 列表宽度（列表贴着面板的左边或右边）。
+   * While dragging the sash: pointer x-coordinate → list width (the list sits against the left or right edge of the panel).
    * @param {'left'|'right'} position
    * @param {number} clientX
    * @param {number} panelWidth
@@ -70,11 +70,11 @@
   }
 
   /**
-   * 键盘移动焦点：↑ / ↓ / Home / End / PageUp / PageDown。其它键返回 -1（不处理）。
+   * Keyboard focus movement: ↑ / ↓ / Home / End / PageUp / PageDown. Other keys return -1 (not handled).
    * @param {string} key KeyboardEvent.key
-   * @param {number} index 当前焦点（-1 = 还没有）
-   * @param {number} count 行数
-   * @param {number} [page] 一页多少行（PageUp / PageDown）
+   * @param {number} index current focus (-1 = none yet)
+   * @param {number} count number of rows
+   * @param {number} [page] rows per page (PageUp / PageDown)
    */
   function moveIndex(key, index, count, page) {
     if (!(count > 0)) return -1;
@@ -93,13 +93,13 @@
   }
 
   /**
-   * 首字母跳转（不分大小写，找不到时回绕）。
-   * - 连按同一个字母（“a”“aa”…）：在以这个字母开头的行之间轮换，从当前焦点的下一行找；
-   * - 连着打几个字（“fix”）：从当前焦点这一行开始找以它开头的，这样多打一个字母时焦点不乱跳。
-   * @param {string[]} labels 各行标题
-   * @param {number} from 当前焦点（-1 = 还没有）
-   * @param {string} typed 这一串键入的文字
-   * @returns {number} 找到的行，没有 → -1
+   * Type-to-jump (case-insensitive, wraps around when nothing is found).
+   * - Repeating the same letter ("a", "aa"…): cycles through rows starting with that letter, searching from the row after the current focus;
+   * - Typing several characters ("fix"): searches from the current row for one starting with them, so typing one more letter doesn't make the focus jump around.
+   * @param {string[]} labels row titles
+   * @param {number} from current focus (-1 = none yet)
+   * @param {string} typed the characters typed in this sequence
+   * @returns {number} the matching row, or -1 if none
    */
   function typeAhead(labels, from, typed) {
     const list = labels || [];
@@ -117,14 +117,14 @@
   }
 
   /**
-   * 按键同步子节点：先删掉不再需要的，再按顺序放置；已在正确位置的节点不动（不移动就不会丢焦点、不闪）。
-   * 同一个 key 始终是同一个节点：已有的原地更新，新的插到规定位置。
-   * @param {any} parent 有 children、firstChild、insertBefore 的节点
+   * Sync child nodes by key: first remove the ones no longer needed, then place them in order; nodes already in the right place are not moved (so focus isn't lost and nothing flickers).
+   * The same key is always the same node: existing ones are updated in place, new ones are inserted at their position.
+   * @param {any} parent a node with children, firstChild, insertBefore
    * @param {any[]} items
    * @param {(it: any, i: number) => string} keyOf
-   * @param {(it: any) => any} make 新建节点（节点上会记 _key）
+   * @param {(it: any) => any} make creates a new node (the node records _key)
    * @param {(node: any, it: any) => void} update
-   * @param {(key: string) => any} [reuse] 先到别处找现成的节点（例如从另一个父节点挪过来），没有就 make
+   * @param {(key: string) => any} [reuse] first look for an existing node elsewhere (e.g. moved from another parent); otherwise make
    */
   function syncKeyed(parent, items, keyOf, make, update, reuse) {
     const keys = items.map(keyOf);
