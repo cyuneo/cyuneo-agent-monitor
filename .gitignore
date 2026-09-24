@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+*.vsix
+.vscode-test/
+coverage/
+*.log
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+
+# 本地环境变量（可能含密钥）
+.env
+.env.*
+
+# 内部底稿：发布者资料、设计规格、开发日志，不公开
+docs/PUBLISHER.md
+docs/DESIGN.md
+DEVLOG.md

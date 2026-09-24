@@ -1,0 +1,1278 @@
+'use strict';
+// Claude provider、在线登记表、今日合计、编排层（monitor）与 worker 的测试。纯 node 运行：node test/claude.test.js
+// - 样例全部是合成的：test/fixtures/claude（由 make-fixtures.js 生成）+ 测试里现写的登记表目录。
+// - 临时文件放在 AGENT_MONITOR_TEST_TMP（没设就用系统临时目录），跑完删除。
+// - 最后一段“真实数据冒烟”只读本机 ~/.claude、~/.codex，只打印计数、状态分布与耗时，不打印任何内容；
+//   设 AGENT_MONITOR_SKIP_REAL=1 可跳过。
+
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { Worker } = require('worker_threads');
+
+const ROOT = path.join(__dirname, '..');
+const { ClaudeProvider, describeInput, projectDirName, _internal } = require('../lib/providers/claude');
+const live = require('../lib/providers/claude-live');
+const { Monitor, normalizeConfig, sameExceptObserved } = require('../lib/monitor');
+const { DailyScanner } = require('../lib/core/daily');
+const S = require('../lib/core/status');
+const pricing = require('../lib/core/pricing');
+
+const FIX = path.join(__dirname, 'fixtures', 'claude', 'projects');
+const PROJ = '-tmp-am-fixture';
+const TMP_ROOT = process.env.AGENT_MONITOR_TEST_TMP || os.tmpdir();
+fs.mkdirSync(TMP_ROOT, { recursive: true });
+const TMP = fs.mkdtempSync(path.join(TMP_ROOT, 'am-claude-'));
+
+const SID = {
+  A: 'aaaaaaaa-0000-4000-8000-000000000001',
+  B: 'bbbbbbbb-0000-4000-8000-000000000002',
+  C: 'cccccccc-0000-4000-8000-000000000003',
+  D: 'dddddddd-0000-4000-8000-000000000004',
+  E: 'eeeeeeee-0000-4000-8000-000000000005',
+  F: 'ffffffff-0000-4000-8000-000000000006',
+  G: '99999999-0000-4000-8000-000000000007',
+  H: '88888888-0000-4000-8000-000000000008',
+  I: '77777777-0000-4000-8000-000000000009',
+  J: '66666666-0000-4000-8000-00000000000a',
+};
+const KEY = Object.fromEntries(Object.entries(SID).map(([k, v]) => [k, 'claude:' + v]));
+const pad = (n) => String(n).padStart(2, '0');
+const T = (mm, ss = 0) => Date.parse(`2026-09-20T10:${pad(mm)}:${pad(ss)}.000Z`);
+const DEAD_PID = 99999999; // 不存在的大 pid（kill 会得到 ESRCH）
+
+// ---------- 小工具 ----------
+
+const tests = [];
+function test(name, fn) { tests.push({ name, fn }); }
+const approx = (a, b, eps = 1e-9, msg) => assert.ok(a != null && Math.abs(a - b) <= eps, msg || `${a} ≠ ${b}`);
+
+let homeNo = 0;
+// 把样例复制到一个新的 claudeHome，按每个文件最后一行的时间改 mtime（目录改到 T(0)）
+function makeHome() {
+  const home = path.join(TMP, `home-${++homeNo}`);
+  const projects = path.join(home, 'projects');
+  fs.cpSync(FIX, projects, { recursive: true });
+  stampTree(projects);
+  return { home, projects, dir: path.join(projects, PROJ) };
+}
+
+function lastTs(file) {
+  const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try { const t = Date.parse(JSON.parse(lines[i]).timestamp); if (Number.isFinite(t)) return t; } catch { /* 跳过 */ }
+  }
+  return null;
+}
+
+function setMtime(p, ms) { const s = ms / 1000; fs.utimesSync(p, s, s); }
+
+function stampTree(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { stampTree(p); continue; }
+    let ms = T(0);
+    if (e.name.endsWith('.jsonl')) ms = lastTs(p) ?? T(3, 1); // journal.jsonl 没有时间戳
+    setMtime(p, ms);
+  }
+  setMtime(dir, T(0));
+}
+
+function append(file, rows, mtimeMs) {
+  fs.appendFileSync(file, rows.map((r) => JSON.stringify(r) + '\n').join(''));
+  if (mtimeMs != null) setMtime(file, mtimeMs);
+}
+
+function writeRegistry(home, entries) {
+  const dir = path.join(home, 'sessions');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  let n = 0;
+  for (const e of entries) {
+    const pid = e.pid ?? process.pid;
+    const name = e.fileName || `${pid}${e.pid == null ? '-' + (++n) : ''}.json`;
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({
+      pid, sessionId: e.sessionId, cwd: e.cwd ?? '/tmp/am-fixture', startedAt: e.startedAt ?? T(0), procStart: 'synthetic',
+      version: e.version ?? '2.1.280', kind: 'interactive', entrypoint: e.entrypoint ?? 'claude-vscode', name: 'synthetic',
+      status: e.status, ...(e.waitingFor ? { waitingFor: e.waitingFor } : {}),
+      updatedAt: e.updatedAt ?? e.statusUpdatedAt ?? T(0), statusUpdatedAt: e.statusUpdatedAt ?? T(0),
+    }));
+  }
+  // 旁边放一个 .key 文件：实现不得读它
+  fs.writeFileSync(path.join(dir, `${process.pid}.0000synthetic.key`), 'synthetic-key');
+  return dir;
+}
+
+function provider(h, opts = {}) {
+  return new ClaudeProvider({
+    projectsDir: h.projects,
+    home: h.home,
+    activeWindowMinutes: 100000,
+    staleMinutes: 5,
+    discoverMs: 0,
+    env: {},
+    ...opts,
+  });
+}
+
+const byId = (sessions, sid) => sessions.find((s) => s.id === sid);
+const allAgents = (s) => [s.main, ...s.agents, ...s.workflows.flatMap((w) => w.agents)];
+
+// 用法：const s = scanOne(p, now, SID.A)
+function scanAll(p, now, opts) { return p.scan(now, opts).sessions; }
+
+// ---------- claude-live ----------
+
+test('登记表：目录不存在 → 空 Map，ok=false', () => {
+  const m = live.readLiveSessions(path.join(TMP, 'no-such-home'));
+  assert.ok(m instanceof Map);
+  assert.strictEqual(m.size, 0);
+  assert.strictEqual(live.readRegistry(path.join(TMP, 'no-such-home')).ok, false);
+});
+
+test('登记表：存活（本进程 pid）收下，已退出（ESRCH）忽略，坏 JSON 跳过，.key 不读', () => {
+  const h = { home: path.join(TMP, `reg-${++homeNo}`) };
+  const dir = writeRegistry(h.home, [
+    { sessionId: SID.H, status: 'waiting', waitingFor: 'permission prompt', statusUpdatedAt: T(1), fileName: `${process.pid}.json` },
+    { pid: DEAD_PID, sessionId: SID.A, status: 'busy', version: '2.1.279' },
+  ]);
+  fs.writeFileSync(path.join(dir, '12345.json'), '{ not json');
+  // 记录读了哪些文件
+  const seen = [];
+  const orig = { readFileSync: fs.readFileSync, openSync: fs.openSync };
+  fs.readFileSync = function (p, ...a) { seen.push(String(p)); return orig.readFileSync.call(fs, p, ...a); };
+  fs.openSync = function (p, ...a) { seen.push(String(p)); return orig.openSync.call(fs, p, ...a); };
+  let reg;
+  try { reg = live.readRegistry(h.home); } finally { Object.assign(fs, orig); }
+  assert.ok(!seen.some((p) => p.endsWith('.key')), '不得读 .key 文件');
+  assert.ok(reg.ok);
+  assert.strictEqual(reg.minVersion, '2.1.279');
+  assert.strictEqual(reg.live.size, 1);
+  const e = reg.live.get(SID.H);
+  assert.strictEqual(e.pid, process.pid);
+  assert.strictEqual(e.status, 'waiting');
+  assert.strictEqual(e.waitingFor, 'permission prompt');
+  assert.strictEqual(e.entrypoint, 'claude-vscode');
+  assert.strictEqual(e.cwd, '/tmp/am-fixture');
+  assert.strictEqual(e.startedAt, T(0));
+  assert.strictEqual(e.statusUpdatedAt, T(1));
+  assert.ok(!reg.live.has(SID.A), '死进程的残留文件不算');
+  assert.deepStrictEqual([...live.readLiveSessions(h.home).keys()], [SID.H]);
+});
+
+test('登记表：EPERM 视为存活（pid 1 属于 root）；ESRCH 视为退出', () => {
+  if (process.platform !== 'win32' && process.getuid && process.getuid() !== 0) assert.strictEqual(live.isPidAlive(1), true);
+  assert.strictEqual(live.isPidAlive(process.pid), true);
+  assert.strictEqual(live.isPidAlive(DEAD_PID), false);
+  assert.strictEqual(live.isPidAlive(0), false);
+});
+
+test('登记表：同一会话两个存活条目取 updatedAt 新的；非 waiting 时 waitingFor 为 null', () => {
+  const h = { home: path.join(TMP, `reg-${++homeNo}`) };
+  writeRegistry(h.home, [
+    { sessionId: SID.H, status: 'idle', waitingFor: 'input needed', updatedAt: T(1) },
+    { sessionId: SID.H, status: 'busy', updatedAt: T(2) },
+  ]);
+  const e = live.readLiveSessions(h.home).get(SID.H);
+  assert.strictEqual(e.status, 'busy');
+  assert.strictEqual(e.waitingFor, null);
+});
+
+// ---------- provider：没有登记表 ----------
+
+test('会话 A：主智能体本轮完成、工作流还在跑 → idleBackground；token / 费用 / 调用去重', () => {
+  const h = makeHome();
+  const p = provider(h);
+  const ss = scanAll(p, T(5));
+  const a = byId(ss, SID.A);
+  assert.ok(a, '找到会话 A');
+  assert.strictEqual(a.key, KEY.A);
+  assert.strictEqual(a.title, 'Synthetic session A');
+  assert.strictEqual(a.titleSource, 'ai');
+  assert.strictEqual(a.entry, 'vscode');
+  assert.strictEqual(a.entrypoint, 'claude-vscode');
+  assert.strictEqual(a.cwd, '/tmp/am-fixture');
+  assert.strictEqual(a.projectDir, PROJ);
+  assert.strictEqual(a.live, false);
+  assert.strictEqual(a.liveStatus, null);
+  assert.strictEqual(a.model, 'claude-opus-5-5');
+  assert.strictEqual(a.createdMs, T(0));
+  assert.strictEqual(a.startedMs, T(0));
+  assert.strictEqual(a.doneAtMs, T(2, 30));
+  const m = a.main;
+  assert.strictEqual(m.kind, 'main');
+  assert.strictEqual(m.status.code, 'idleBackground');
+  assert.strictEqual(m.status.sinceMs, T(2, 30));
+  assert.strictEqual(m.tokens.apiCalls, 6, 'msg_a1 两行只算一次');
+  assert.strictEqual(m.tokens.output, 180);
+  assert.strictEqual(m.tokens.processed, 6963);
+  assert.strictEqual(m.tokens.contextUsed, 1303);
+  assert.strictEqual(m.tokens.display, 1343);
+  assert.strictEqual(m.tokens.contextWindow, 1000000);
+  assert.strictEqual(m.tokens.compactAt, 967000);
+  assert.strictEqual(m.toolCalls, 5);
+  assert.strictEqual(m.toolErrors, 1);
+  assert.strictEqual(m.filesChanged, 2);
+  approx(m.costUsd, 0.014442, 1e-9);
+  assert.strictEqual(m.cacheTtl, '1h');
+  assert.strictEqual(m.step.kind, 'text');
+  assert.strictEqual(m.step.detail, 'All done. Synthetic summary line.');
+  assert.strictEqual(a.cacheTtl, '1h');
+  assert.strictEqual(a.lastApiMs, T(2, 30));
+  assert.strictEqual(a.cacheExpiresMs, T(2, 30) + 3600e3);
+  assert.strictEqual(a.contextUsed, 1303);
+  approx(a.costUsd, 0.020336, 1e-9);
+  // idleBackground 算在跑（Working 灯）；w2 推测等批准；sub1、w1 完成
+  assert.deepStrictEqual(a.counts, { running: 1, awaiting: 1, error: 0, done: 2, total: 4 });
+});
+
+test('会话 A：子智能体、工作流、推测“可能在等你批准”（快工具 Read 挂 150 秒）', () => {
+  const h = makeHome();
+  const a = byId(scanAll(provider(h), T(5)), SID.A);
+  assert.strictEqual(a.agents.length, 1);
+  const sub = a.agents[0];
+  assert.strictEqual(sub.id, 'sub1');
+  assert.strictEqual(sub.kind, 'subagent');
+  assert.strictEqual(sub.name, 'Synthetic helper');
+  assert.strictEqual(sub.agentType, 'general-purpose');
+  assert.strictEqual(sub.model, 'claude-sonnet-5');
+  assert.strictEqual(sub.status.code, 'done');
+  assert.strictEqual(sub.cacheTtl, '5m');
+  assert.strictEqual(sub.startedMs, T(0, 7));
+  approx(sub.costUsd, 0.001654, 1e-9);
+  assert.strictEqual(a.workflows.length, 1);
+  const wf = a.workflows[0];
+  assert.strictEqual(wf.id, 'wf_abc123-def456');
+  assert.strictEqual(wf.name, 'synth-flow');
+  assert.strictEqual(wf.scriptPath, '/tmp/am-fixture/wf.js');
+  assert.strictEqual(wf.state, 'running');
+  assert.deepStrictEqual([wf.total, wf.done, wf.running], [2, 1, 1]);
+  assert.deepStrictEqual(wf.phases, ['build']);
+  assert.deepStrictEqual(wf.agents.map((x) => x.id), ['w1', 'w2']);
+  const [w1, w2] = wf.agents;
+  assert.strictEqual(w1.kind, 'workflowAgent');
+  assert.strictEqual(w1.status.code, 'done');
+  assert.strictEqual(w1.name, 'Phase one worker');
+  assert.strictEqual(w1.phase, 'build');
+  assert.strictEqual(w2.status.code, 'maybeAwaitingApproval');
+  assert.strictEqual(w2.status.certainty, 'guess');
+  assert.strictEqual(w2.status.pendingTool, 'Read');
+  assert.strictEqual(w2.status.sinceMs, T(2, 30));
+  assert.strictEqual(S.lampForStatus(w2.status), 'needsYou');
+  assert.strictEqual(w2.step.kind, 'tool');
+  assert.strictEqual(w2.step.tool, 'Read');
+  assert.strictEqual(w2.step.parallel, 1);
+});
+
+test('推测只对快工具、且过了阈值：59 秒不判；approvalGuess=off 不判；allTools 用 staleMinutes', () => {
+  const h = makeHome();
+  const w2 = (p, now) => byId(scanAll(p, now), SID.A).workflows[0].agents[1];
+  assert.strictEqual(w2(provider(h), T(2, 30) + 59e3).status.code, 'tool');
+  assert.strictEqual(w2(provider(h), T(2, 30) + 60e3).status.code, 'maybeAwaitingApproval');
+  assert.strictEqual(w2(provider(h, { approvalGuess: 'off' }), T(5)).status.code, 'tool');
+  assert.strictEqual(w2(provider(h, { approvalGuessSeconds: 200 }), T(5)).status.code, 'tool');
+  // allTools：阈值 = staleMinutes（5 分钟）
+  assert.strictEqual(w2(provider(h, { approvalGuess: 'allTools' }), T(5)).status.code, 'tool');
+  assert.strictEqual(w2(provider(h, { approvalGuess: 'allTools' }), T(7, 31)).status.code, 'maybeAwaitingApproval');
+});
+
+test('会话 A 细节：时间线、结果、改过的文件、报错；工作流智能体的结果来自 journal', () => {
+  const h = makeHome();
+  const p = provider(h);
+  scanAll(p, T(5));
+  const d = p.detail(KEY.A);
+  assert.strictEqual(d.key, KEY.A);
+  assert.deepStrictEqual(Object.keys(d.agents).sort(), ['main', 'sub1', 'w1', 'w2']);
+  const m = d.agents.main;
+  assert.ok(m.timeline.length <= 12);
+  assert.deepStrictEqual(m.timeline.slice(-3).map((e) => e.kind), ['toolError', 'text', 'done']);
+  assert.strictEqual(m.timeline.find((e) => e.kind === 'toolError').tool, 'Bash');
+  assert.deepStrictEqual(m.result, { text: 'All done. Synthetic summary line.', truncated: false, ms: T(2, 30), source: 'lastText' });
+  assert.deepStrictEqual(m.files.map((f) => [f.path, f.op, f.count]).sort(), [
+    ['/tmp/am-fixture/src/a.js', 'edit', 1],
+    ['/tmp/am-fixture/src/new.js', 'create', 1],
+  ]);
+  assert.strictEqual(m.errors.length, 1);
+  assert.strictEqual(m.errors[0].tool, 'Bash');
+  assert.strictEqual(m.errors[0].text, 'Exit code 1');
+  assert.strictEqual(d.agents.w1.result.source, 'journal');
+  assert.ok(d.agents.w1.result.text.includes('"ok": true'));
+  assert.strictEqual(d.agents.sub1.result.text, 'Helper result text.');
+  assert.strictEqual(d.agents.w2.result, null);
+  // 时间线里只有代码和原文片段
+  for (const e of m.timeline) assert.deepStrictEqual(Object.keys(e).sort(), ['detail', 'kind', 'ms', 'tool']);
+  assert.strictEqual(p.detail('claude:no-such'), null);
+});
+
+test('§1.3 bug 修复：撞额度的 synthetic 行不计调用、不清零上下文；按 §4.3 判为 quota（quotaLimits 优先）', () => {
+  const h = makeHome();
+  const p = provider(h);
+  const r = p.scan(T(5));
+  const b = byId(r.sessions, SID.B);
+  const m = b.main;
+  assert.strictEqual(b.title, 'Quota session B');
+  assert.strictEqual(b.titleSource, 'custom');
+  assert.strictEqual(b.entry, 'cli');
+  assert.strictEqual(m.status.code, 'quota');
+  assert.strictEqual(S.lampForStatus(m.status), 'error');
+  assert.strictEqual(m.status.sinceMs, T(0, 20));
+  assert.strictEqual(m.status.quota.kind, 'weekly');
+  assert.strictEqual(m.status.quota.source, 'quotaLimits');
+  assert.strictEqual(m.status.quota.resetsAtMs, Date.parse('2026-09-21T17:00:00Z'));
+  assert.strictEqual(m.status.quota.autoContinue, null, '2.1.270 的 cli 会话：自动继续未知');
+  assert.strictEqual(m.tokens.apiCalls, 1);
+  assert.strictEqual(m.tokens.contextUsed, 50100, '上下文不被 synthetic 的全 0 usage 覆盖');
+  assert.strictEqual(m.tokens.display, 50110);
+  assert.strictEqual(m.model, 'claude-opus-5-5');
+  // 续跑提示
+  assert.strictEqual(b.resume.length, 1);
+  const hint = b.resume[0];
+  assert.strictEqual(hint.kind, 'claudeSession');
+  assert.strictEqual(hint.sessionId, SID.B);
+  assert.strictEqual(hint.entry, 'cli');
+  assert.strictEqual(hint.estimate.contextTokens, 50100);
+  // 账号级：最近一次撞额度
+  assert.strictEqual(r.quotaHit.sessionKey, KEY.B);
+  assert.strictEqual(r.quotaHit.ms, T(0, 20));
+});
+
+test('撞额度文字版（无 quotaLimits）：session 额度、时区括号、老版本不自动继续；synthetic “No response requested.” 不计', () => {
+  const h = makeHome();
+  const j = byId(scanAll(provider(h), T(5)), SID.J).main;
+  assert.strictEqual(j.status.code, 'quota');
+  assert.strictEqual(j.status.quota.kind, 'session');
+  assert.strictEqual(j.status.quota.source, 'text');
+  assert.strictEqual(j.status.quota.resetsAtMs, Date.parse('2026-09-21T06:45:00Z'), '19:00 KST 之后的第一个 15:45 KST');
+  assert.strictEqual(j.status.quota.autoContinue, false);
+  assert.strictEqual(j.tokens.apiCalls, 1);
+  assert.strictEqual(j.model, 'claude-sonnet-4-6');
+});
+
+test('用户打断：主智能体 interrupted；挂着的前台子智能体随之停下，不会被推测成“等批准”', () => {
+  const h = makeHome();
+  const c = byId(scanAll(provider(h), T(20)), SID.C);
+  assert.strictEqual(c.main.status.code, 'interrupted');
+  assert.strictEqual(c.main.status.sinceMs, T(1));
+  assert.strictEqual(S.lampForStatus(c.main.status), 'idle');
+  assert.strictEqual(c.agents[0].status.code, 'interrupted');
+  assert.strictEqual(c.agents[0].status.sinceMs, T(1));
+  assert.strictEqual(c.agents[0].agentType, 'Explore');
+  assert.strictEqual(c.resume[0].kind, 'claudeSession');
+  assert.strictEqual(c.main.toolErrors, 0, '用户打断带出的 is_error 不算工具报错');
+});
+
+test('用户拒绝权限（toolDenialKind）：结果带 is_error 也不算工具报错，时间线仍记一条', () => {
+  const s = _internal.newState({ timeline: 30, resultChars: 100, filesPerAgent: 10, errorsPerAgent: 5 }, true);
+  const at = (ms) => new Date(ms).toISOString();
+  _internal.ingest(s, { type: 'user', timestamp: at(T(0)), message: { role: 'user', content: 'go' } });
+  _internal.ingest(s, { type: 'assistant', timestamp: at(T(0, 5)), message: { id: 'm1', model: 'claude-opus-5', content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: '/tmp/x' } }], stop_reason: 'tool_use', usage: { input_tokens: 1 } } });
+  _internal.ingest(s, { type: 'user', timestamp: at(T(0, 9)), toolDenialKind: 'user-rejected', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'rejected', is_error: true }] } });
+  assert.strictEqual(s.toolErrors, 0);
+  assert.strictEqual(s.errors.length, 0);
+  assert.strictEqual(s.files.size, 0);
+  assert.strictEqual(s.timeline[s.timeline.length - 1].kind, 'toolError');
+});
+
+test('手动 /compact 之后：本地命令行不改变状态（仍是 done），步骤 compact，上下文取 postTokens', () => {
+  const h = makeHome();
+  const d = byId(scanAll(provider(h), T(30)), SID.D);
+  assert.strictEqual(d.main.status.code, 'done');
+  assert.strictEqual(d.main.status.sinceMs, T(0, 30));
+  assert.strictEqual(d.main.step.kind, 'compact');
+  assert.deepStrictEqual(d.main.lastCompact, { ms: T(1), trigger: 'manual', preTokens: 150400, postTokens: 4000, model: 'claude-opus-5-5', contextWindow: 1000000 });
+  assert.deepStrictEqual([d.compactCount, d.compactLoop], [1, false]); // §11.8 第 2 条
+  assert.strictEqual(d.main.tokens.contextUsed, 4000);
+  assert.strictEqual(d.contextUsed, 4000);
+  assert.strictEqual(d.main.tokens.apiCalls, 1);
+  assert.strictEqual(d.resume.length, 0);
+});
+
+test('重试中 → retrying；下一条 assistant 之后清掉', () => {
+  const h = makeHome();
+  const p = provider(h);
+  const e = byId(scanAll(p, T(1)), SID.E).main;
+  assert.strictEqual(e.status.code, 'retrying');
+  assert.deepStrictEqual(e.status.retry, { attempt: 2, max: 10, inMs: 5000 });
+  assert.strictEqual(S.lampForStatus(e.status), 'working');
+  const f = path.join(h.dir, SID.E + '.jsonl');
+  append(f, [{ type: 'assistant', timestamp: new Date(T(0, 30)).toISOString(), sessionId: SID.E, cwd: '/tmp/am-fixture', version: '2.1.280', entrypoint: 'claude-vscode',
+    message: { id: 'msg_e2', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, cache_read_input_tokens: 500, output_tokens: 2 } } }], T(0, 30));
+  const e2 = byId(scanAll(p, T(1)), SID.E).main;
+  assert.strictEqual(e2.status.code, 'done');
+  assert.strictEqual(e2.status.retry, null);
+});
+
+test('529 过载 → apiError（http、kind、报错首行）', () => {
+  const h = makeHome();
+  const f = byId(scanAll(provider(h), T(5)), SID.F).main;
+  assert.strictEqual(f.status.code, 'apiError');
+  assert.deepStrictEqual(f.status.error, { kind: 'server_error', http: 529, message: 'API Error: 529 Overloaded (synthetic)' });
+  assert.strictEqual(f.tokens.apiCalls, 0);
+});
+
+test('AskUserQuestion 未返回 → awaitingInput（确定），等很久也不变成 stale', () => {
+  const h = makeHome();
+  const g = byId(scanAll(provider(h), T(55)), SID.G).main;
+  assert.strictEqual(g.status.code, 'awaitingInput');
+  assert.strictEqual(g.status.question, 'askUser');
+  assert.strictEqual(g.status.certainty, 'certain');
+  assert.strictEqual(g.status.pendingTool, 'AskUserQuestion');
+});
+
+test('没有登记表：挂着 Edit 的会话 H、老版本会话 I 都推测为“可能在等你批准”', () => {
+  const h = makeHome();
+  const ss = scanAll(provider(h), T(5));
+  for (const sid of [SID.H, SID.I]) {
+    const m = byId(ss, sid).main;
+    assert.strictEqual(m.status.code, 'maybeAwaitingApproval', sid);
+    assert.strictEqual(m.status.certainty, 'guess');
+  }
+  assert.strictEqual(byId(ss, SID.H).main.status.pendingTool, 'Edit');
+});
+
+// ---------- provider：有登记表（§11.1） ----------
+
+test('登记表 busy：不推测、不判 stale；live / liveStatus / entrypoint 进 Session', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ sessionId: SID.H, status: 'busy', statusUpdatedAt: T(0, 10), entrypoint: 'claude-vscode', cwd: '/tmp/am-fixture' }]);
+  const p = provider(h);
+  const s = byId(scanAll(p, T(20)), SID.H);
+  assert.strictEqual(s.live, true);
+  assert.strictEqual(s.liveStatus, 'busy');
+  assert.strictEqual(s.waitingFor, null);
+  assert.strictEqual(s.entrypoint, 'claude-vscode');
+  assert.strictEqual(s.main.status.code, 'tool');
+  assert.strictEqual(s.main.status.pendingTool, 'Edit');
+});
+
+test('登记表 busy、记录显示本轮已结束 → idleBackground（算在跑，Working 灯）', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ sessionId: SID.D, status: 'busy', statusUpdatedAt: T(1, 5) }]);
+  const d = byId(scanAll(provider(h), T(3)), SID.D);
+  assert.strictEqual(d.main.status.code, 'idleBackground');
+  assert.strictEqual(d.main.status.sinceMs, T(0, 30));
+  assert.strictEqual(S.lampForStatus(d.main.status), 'working');
+});
+
+test('登记表 waiting 盖过撞额度时，额度信息保留在状态里', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ sessionId: SID.B, status: 'waiting', waitingFor: 'dialog open', statusUpdatedAt: T(0, 21), version: '2.1.270' }]);
+  const b = byId(scanAll(provider(h), T(5)), SID.B);
+  assert.strictEqual(b.main.status.code, 'dialogOpen');
+  assert.strictEqual(b.main.status.quota.kind, 'weekly');
+});
+
+test('登记表 waiting：permission prompt / input needed / dialog open → 三种确定状态', () => {
+  const h = makeHome();
+  const cases = [
+    ['permission prompt', 'awaitingApproval'],
+    ['input needed', 'awaitingInput'],
+    ['dialog open', 'dialogOpen'],
+  ];
+  for (const [wf, code] of cases) {
+    writeRegistry(h.home, [{ sessionId: SID.H, status: 'waiting', waitingFor: wf, statusUpdatedAt: T(0, 12) }]);
+    const s = byId(scanAll(provider(h), T(5)), SID.H);
+    assert.strictEqual(s.main.status.code, code, wf);
+    assert.strictEqual(s.main.status.certainty, 'certain');
+    assert.strictEqual(s.main.status.waitingFor, wf);
+    assert.strictEqual(s.main.status.sinceMs, T(0, 12));
+    assert.strictEqual(s.waitingFor, wf);
+    assert.strictEqual(S.lampForStatus(s.main.status), 'needsYou');
+  }
+});
+
+test('登记表 idle：比记录新 → 本轮结束（done）；比记录旧（刚提交提示）→ 不采信', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ sessionId: SID.H, status: 'idle', statusUpdatedAt: T(0, 30) }]);
+  let s = byId(scanAll(provider(h), T(5)), SID.H);
+  assert.strictEqual(s.main.status.code, 'done');
+  assert.strictEqual(s.main.status.sinceMs, T(0, 30));
+  writeRegistry(h.home, [{ sessionId: SID.H, status: 'idle', statusUpdatedAt: T(0, 5) }]);
+  s = byId(scanAll(provider(h), T(0, 40)), SID.H);
+  assert.strictEqual(s.main.status.code, 'tool');
+});
+
+test('登记表可用、会话版本会登记却不在表里（进程已退出）→ 不推测；老版本会话照旧推测', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ pid: DEAD_PID, sessionId: 'dead0000-0000-4000-8000-000000000000', status: 'busy', version: '2.1.280' },
+    { sessionId: SID.D, status: 'idle', statusUpdatedAt: T(1, 5), version: '2.1.280' }]);
+  let ss = scanAll(provider(h), T(5));
+  assert.strictEqual(byId(ss, SID.A).workflows[0].agents[1].status.code, 'tool', '2.1.280 的会话不在登记表里：不推测');
+  assert.strictEqual(byId(ss, SID.H).main.status.code, 'tool');
+  assert.strictEqual(byId(ss, SID.I).main.status.code, 'maybeAwaitingApproval', '2.1.200 早于登记表最低版本：照旧推测');
+  assert.strictEqual(byId(ss, SID.A).main.status.code, 'idleBackground');
+  // 过了 stale 时间：w2 变 stale（灰灯），主智能体没有后台在跑了 → done
+  ss = scanAll(provider(h), T(10));
+  const w2 = byId(ss, SID.A).workflows[0].agents[1];
+  assert.strictEqual(w2.status.code, 'stale');
+  assert.strictEqual(w2.status.stalePending, true);
+  assert.strictEqual(w2.status.pendingTool, 'Read');
+  assert.strictEqual(S.lampForStatus(w2.status), 'idle');
+  assert.strictEqual(byId(ss, SID.A).main.status.code, 'done');
+});
+
+test('登记表 waiting 落到真正在等的智能体：工作流智能体挂着 Read → 它变 awaitingApproval，主智能体不变', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ sessionId: SID.A, status: 'waiting', waitingFor: 'permission prompt', statusUpdatedAt: T(2, 31) }]);
+  const a = byId(scanAll(provider(h), T(5)), SID.A);
+  const w2 = a.workflows[0].agents[1];
+  assert.strictEqual(w2.status.code, 'awaitingApproval');
+  assert.strictEqual(w2.status.certainty, 'certain');
+  assert.strictEqual(w2.status.pendingTool, 'Read');
+  assert.strictEqual(a.main.status.code, 'idleBackground');
+  assert.strictEqual(a.waitingFor, 'permission prompt');
+  assert.strictEqual(a.counts.awaiting, 1);
+});
+
+test('窗口过滤：存活会话不受活动窗口限制，其余过期的会话被释放', () => {
+  const h = makeHome();
+  writeRegistry(h.home, [{ sessionId: SID.H, status: 'idle', statusUpdatedAt: T(0, 30) }]);
+  const p = provider(h, { activeWindowMinutes: 30 });
+  const later = T(0) + 3 * 3600e3;
+  const ss = scanAll(p, later);
+  assert.deepStrictEqual(ss.map((s) => s.id), [SID.H]);
+  assert.strictEqual(p.sessions.size, 1, '过期会话的读取器已释放');
+  // keep：选中的会话即使过期也保留
+  const p2 = provider(h, { activeWindowMinutes: 30 });
+  scanAll(p2, T(5));
+  const kept = p2.scan(later, { keep: [KEY.A] }).sessions.map((s) => s.id).sort();
+  assert.deepStrictEqual(kept, [SID.A, SID.H].sort());
+});
+
+// ---------- §11.3 顺序固定 ----------
+
+test('§11.3：连续 20 次扫描，两个子智能体交替活动、中途新增智能体；顺序只按开始时间，新行追加在末尾', () => {
+  const h = makeHome();
+  const p = provider(h);
+  const subDir = path.join(h.dir, SID.A, 'subagents');
+  const wfDir = path.join(subDir, 'workflows', 'wf_abc123-def456');
+  const line = (agentId, ts, id, content, stop) => ({ type: 'assistant', timestamp: new Date(ts).toISOString(), sessionId: SID.A, isSidechain: true, agentId,
+    cwd: '/tmp/am-fixture', version: '2.1.280', message: { id, role: 'assistant', model: 'claude-sonnet-5', content, stop_reason: stop, usage: { input_tokens: 1, cache_read_input_tokens: 100, output_tokens: 1 } } });
+  const user = (agentId, ts, textOrContent) => ({ type: 'user', timestamp: new Date(ts).toISOString(), sessionId: SID.A, isSidechain: true, agentId,
+    cwd: '/tmp/am-fixture', version: '2.1.280', message: { role: 'user', content: textOrContent } });
+  // 第二个子智能体，晚于 sub1 开始
+  fs.writeFileSync(path.join(subDir, 'agent-sub2.jsonl'), JSON.stringify(user('sub2', T(3, 0), 'second helper')) + '\n');
+  fs.writeFileSync(path.join(subDir, 'agent-sub2.meta.json'), JSON.stringify({ agentType: 'general-purpose', description: 'Second helper', requestShape: 'background' }));
+  setMtime(path.join(subDir, 'agent-sub2.jsonl'), T(3, 0));
+  const first = scanAll(p, T(4));
+  const sessionOrder = first.map((s) => s.id);
+  const started = new Map(first.map((s) => [s.id, s.startedMs]));
+  assert.deepStrictEqual(byId(first, SID.A).agents.map((x) => x.id), ['sub1', 'sub2']);
+  let now = T(4);
+  for (let i = 0; i < 20; i++) {
+    now += 10e3;
+    // 交替：一次 sub1 在跑，一次 sub2 在跑（灯来回切换）
+    const who = i % 2 ? 'sub1' : 'sub2';
+    const other = i % 2 ? 'sub2' : 'sub1';
+    const f = path.join(subDir, `agent-${who}.jsonl`);
+    append(f, [user(who, now, 'go ' + i), line(who, now + 1, `m_${who}_${i}`, [{ type: 'tool_use', id: `t_${who}_${i}`, name: 'Bash', input: { command: 'true' } }], 'tool_use')], now + 1);
+    append(path.join(subDir, `agent-${other}.jsonl`), [user(other, now, [{ type: 'tool_result', tool_use_id: `t_${other}_${i - 1}`, content: 'ok' }]),
+      line(other, now + 2, `m_${other}_${i}_end`, [{ type: 'text', text: 'done' }], 'end_turn')], now + 2);
+    // 第 10 次：工作流里新增一个智能体 w3
+    if (i === 10) {
+      append(path.join(wfDir, 'journal.jsonl'), [{ type: 'started', key: 'k3', agentId: 'w3', label: 'Phase three worker', phase: 'check' }], now);
+      fs.writeFileSync(path.join(wfDir, 'agent-w3.jsonl'), JSON.stringify(user('w3', now, 'phase three')) + '\n');
+      setMtime(path.join(wfDir, 'agent-w3.jsonl'), now);
+    }
+    const ss = scanAll(p, now + 5);
+    assert.deepStrictEqual(ss.map((s) => s.id), sessionOrder, `第 ${i} 次：会话顺序不变`);
+    for (const s of ss) assert.strictEqual(s.startedMs, started.get(s.id), `第 ${i} 次：${s.id} 的 startedMs 不变`);
+    const a = byId(ss, SID.A);
+    assert.deepStrictEqual(a.agents.map((x) => x.id), ['sub1', 'sub2'], `第 ${i} 次：子智能体顺序不变`);
+    assert.deepStrictEqual(a.workflows[0].agents.map((x) => x.id), i >= 10 ? ['w1', 'w2', 'w3'] : ['w1', 'w2'], `第 ${i} 次：工作流智能体顺序`);
+    const lamps = a.agents.map((x) => x.status.code);
+    assert.ok(lamps.includes('tool') && lamps.includes('done'), `第 ${i} 次：两个子智能体一个在跑一个完成（${lamps}）`);
+  }
+  // 会话按 startedMs 倒序
+  const st = first.map((s) => s.startedMs);
+  assert.deepStrictEqual(st, [...st].sort((x, y) => y - x));
+});
+
+test('§11.1：startedMs 取记录第一行时间；缺失用第一次看到的时间，之后不变', () => {
+  const h = makeHome();
+  const f = path.join(h.dir, 'abababab-0000-4000-8000-00000000000b.jsonl');
+  fs.writeFileSync(f, JSON.stringify({ type: 'custom-title', customTitle: 'No timestamp yet' }) + '\n');
+  setMtime(f, T(1));
+  const p = provider(h);
+  const s1 = byId(scanAll(p, T(9)), 'abababab-0000-4000-8000-00000000000b');
+  assert.strictEqual(s1.startedMs, T(9), '没有时间戳：用第一次看到的时间');
+  append(f, [{ type: 'user', timestamp: new Date(T(2)).toISOString(), message: { role: 'user', content: 'hi' } }], T(2));
+  const s2 = byId(scanAll(p, T(10)), 'abababab-0000-4000-8000-00000000000b');
+  assert.strictEqual(s2.startedMs, T(9), '之后出现时间戳也不变');
+  assert.strictEqual(s2.createdMs, T(2));
+});
+
+// ---------- 其它 ----------
+
+test('工具参数摘要只有原文，没有中文硬编码；本地命令 / 打断的正则', () => {
+  assert.strictEqual(describeInput('TodoWrite', { todos: [] }), '');
+  assert.strictEqual(describeInput('StructuredOutput', { a: 1 }), '');
+  assert.strictEqual(describeInput('Read', { file_path: '/a/b/c/d.js' }), '…/c/d.js');
+  assert.strictEqual(describeInput('Bash', { command: 'ls', description: 'List files' }), 'List files');
+  assert.ok(_internal.LOCAL_CMD_RE.test('<local-command-stdout>x</local-command-stdout>'));
+  assert.ok(_internal.LOCAL_CMD_RE.test('<command-name>/model</command-name>'));
+  assert.ok(!_internal.LOCAL_CMD_RE.test('<task-notification>x</task-notification>'), '后台任务通知会开始新一轮');
+  assert.ok(_internal.INTERRUPT_RE.test('[Request interrupted by user for tool use]'));
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'providers', 'claude.js'), 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l) && !/\/\/.*$/.test(l.replace(/'[^']*'/g, '')));
+  for (const l of src) assert.ok(!/'[^']*[一-鿿][^']*'/.test(l), '代码里的字符串不含中文：' + l.trim().slice(0, 40));
+});
+
+test('会话目录里的旧版 isSidechain 行不影响主智能体', () => {
+  const lim = { ..._internal.newState({ timeline: 30, resultChars: 100, filesPerAgent: 10, errorsPerAgent: 5 }).lim };
+  const s = _internal.newState({ timeline: 30, resultChars: 100, filesPerAgent: 10, errorsPerAgent: 5 }, true);
+  void lim;
+  _internal.ingest(s, { type: 'user', timestamp: new Date(T(0)).toISOString(), message: { role: 'user', content: 'hi' } });
+  _internal.ingest(s, { type: 'assistant', isSidechain: true, timestamp: new Date(T(1)).toISOString(), message: { id: 'x', model: 'claude-opus-5', content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }], stop_reason: 'tool_use', usage: { input_tokens: 5 } } });
+  assert.strictEqual(s.apiCalls, 0);
+  assert.strictEqual(s.pending.size, 0);
+  assert.strictEqual(s.lastRole, 'user');
+});
+
+// ---------- 今日合计（§6.2） ----------
+
+const DAY0 = Date.parse('2026-09-20T00:00:00Z');
+const dayStartFixed = (now) => (now >= DAY0 + 86400e3 ? DAY0 + 86400e3 : DAY0);
+const iso = (ms) => new Date(ms).toISOString();
+
+function claudeUsageLine(id, ts, model, u, extra = {}) {
+  return { type: 'assistant', timestamp: iso(ts), sessionId: 's', message: { id, role: 'assistant', model, content: [{ type: 'text', text: 'x' }], stop_reason: null, usage: u }, ...extra };
+}
+
+function dailyHome() {
+  const base = path.join(TMP, `daily-${++homeNo}`);
+  const projects = path.join(base, 'claude', 'projects', 'p');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.mkdirSync(path.join(projects, 'sess1', 'subagents'), { recursive: true });
+  const codexDay = path.join(base, 'codex', 'sessions', '2026', '09', '20');
+  fs.mkdirSync(codexDay, { recursive: true });
+  return { base, claudeDir: path.join(base, 'claude', 'projects'), projects, codexHome: path.join(base, 'codex'), codexDay };
+}
+
+function writeLines(file, rows, mtime) {
+  fs.writeFileSync(file, rows.map((r) => JSON.stringify(r) + '\n').join(''));
+  if (mtime != null) setMtime(file, mtime);
+}
+
+test('今日合计 Claude：同一 message.id 多行只取增量；0 点前的行、synthetic、报错行不计；按模型分', () => {
+  const d = dailyHome();
+  const now = DAY0 + 12 * 3600e3;
+  const u1 = { input_tokens: 10, cache_creation_input_tokens: 100, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 100 }, cache_read_input_tokens: 1000, output_tokens: 5 };
+  const u1b = { ...u1, output_tokens: 50 };
+  writeLines(path.join(d.projects, 'sess1.jsonl'), [
+    claudeUsageLine('old', DAY0 - 60e3, 'claude-opus-5-5', { input_tokens: 999, output_tokens: 999 }),
+    claudeUsageLine('m1', DAY0 + 3600e3, 'claude-opus-5-5', u1),
+    claudeUsageLine('m1', DAY0 + 3600e3 + 1, 'claude-opus-5-5', u1b),
+    claudeUsageLine('syn', DAY0 + 3600e3 + 2, '<synthetic>', { input_tokens: 0, output_tokens: 0 }),
+    { type: 'user', timestamp: iso(DAY0 + 3600e3 + 3), message: { role: 'user', content: 'mentions "usage" in text' } },
+  ], now - 1000);
+  writeLines(path.join(d.projects, 'sess1', 'subagents', 'agent-x.jsonl'), [
+    claudeUsageLine('m2', DAY0 + 7200e3, 'claude-sonnet-5', { input_tokens: 20, cache_creation_input_tokens: 400, cache_read_input_tokens: 0, output_tokens: 10 }),
+  ], now - 1000);
+  const sc = new DailyScanner({ claudeProjectsDir: d.claudeDir, dayStart: dayStartFixed });
+  const t = sc.tick(now);
+  assert.strictEqual(t.dayStartMs, DAY0);
+  assert.strictEqual(t.partial, false);
+  assert.strictEqual(t.progress, 1);
+  const c = t.claude;
+  assert.deepStrictEqual([c.input, c.cacheWrite5m, c.cacheWrite1h, c.cacheRead, c.output], [30, 400, 100, 1000, 60]);
+  const expect = pricing.priceClaudeTokens('claude-opus-5-5', { input: 10, cacheWrite1h: 100, cacheRead: 1000, output: 50 })
+    + pricing.priceClaudeTokens('claude-sonnet-5', { input: 20, cacheWrite5m: 400, output: 10 });
+  approx(c.costUsd, expect, 1e-12);
+  assert.deepStrictEqual(Object.keys(c.byModel).sort(), ['claude-opus-5-5', 'claude-sonnet-5']);
+  assert.strictEqual(c.byModel['claude-opus-5-5'].tokens, 10 + 100 + 1000 + 50);
+  // 再 tick：没有新内容，不重复计
+  const t2 = sc.tick(now + 2000);
+  assert.strictEqual(t2.claude.output, 60);
+});
+
+test('今日合计：分片读（预算很小）逐步读完，结果与一次读完相同；跨零点清零', () => {
+  const d = dailyHome();
+  const now = DAY0 + 12 * 3600e3;
+  const rows = [];
+  for (let i = 0; i < 40; i++) rows.push(claudeUsageLine('k' + i, DAY0 + 3600e3 + i * 1000, 'claude-haiku-4-5', { input_tokens: i, output_tokens: 1 }));
+  writeLines(path.join(d.projects, 'big.jsonl'), rows, now - 1000);
+  const small = new DailyScanner({ claudeProjectsDir: d.claudeDir, budgetBytes: 700, dayStart: dayStartFixed });
+  let t = small.tick(now);
+  assert.strictEqual(t.partial, true);
+  assert.ok(t.progress > 0 && t.progress < 1);
+  let guard = 0;
+  while (t.partial && guard++ < 200) t = small.tick(now + guard);
+  assert.strictEqual(t.partial, false);
+  const full = new DailyScanner({ claudeProjectsDir: d.claudeDir, dayStart: dayStartFixed }).tick(now);
+  assert.deepStrictEqual(t.claude, full.claude);
+  assert.strictEqual(full.claude.input, (39 * 40) / 2);
+  assert.strictEqual(full.claude.output, 40);
+  // 跨零点：累加器清空，今天（第二天）没有改过的文件
+  const next = small.tick(DAY0 + 86400e3 + 60e3);
+  assert.strictEqual(next.dayStartMs, DAY0 + 86400e3);
+  assert.strictEqual(next.claude.output, 0);
+});
+
+test('今日合计：文件被截断重写后不重复计数，新增的照常计', () => {
+  const d = dailyHome();
+  const now = DAY0 + 12 * 3600e3;
+  const f = path.join(d.projects, 'trunc.jsonl');
+  const r = [1, 2, 3].map((i) => claudeUsageLine('t' + i, DAY0 + 3600e3 + i, 'claude-opus-5', { input_tokens: 100, output_tokens: 10 }));
+  writeLines(f, r, now - 5000);
+  const sc = new DailyScanner({ claudeProjectsDir: d.claudeDir, dayStart: dayStartFixed });
+  assert.strictEqual(sc.tick(now).claude.output, 30);
+  writeLines(f, [r[0], claudeUsageLine('t4', DAY0 + 3600e3 + 9, 'claude-opus-5', { input_tokens: 100, output_tokens: 10 })], now - 1000);
+  assert.strictEqual(sc.tick(now + 1000).claude.output, 40);
+});
+
+test('今日合计 Codex：老文件按 token_count 累计值取差（相同跳过、变小整条计）；新文件只按 token_usage_record', () => {
+  const d = dailyHome();
+  const now = DAY0 + 12 * 3600e3;
+  const ev = (ts, payload) => ({ timestamp: iso(ts), type: 'event_msg', payload });
+  const tc = (ts, input, cached, output) => ev(ts, { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: 0, total_tokens: input + output }, last_token_usage: {} } });
+  const ctx = (ts, model) => ({ timestamp: iso(ts), type: 'turn_context', payload: { model, cwd: '/tmp/x' } });
+  const settings = (ts, tier) => ev(ts, { type: 'thread_settings_applied', thread_settings: { model: 'gpt-5.5', service_tier: tier } });
+  const rec = (ts, rid, input, cached, output) => ({ timestamp: iso(ts), type: 'token_usage_record', payload: { response_id: rid, usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 0, total_tokens: input + output } } });
+  const t0 = DAY0 + 3600e3;
+  writeLines(path.join(d.codexDay, 'rollout-2026-09-20T10-00-00-old.jsonl'), [
+    settings(t0, 'default'),
+    ctx(t0, 'gpt-5.5'),
+    tc(DAY0 - 1000, 50, 0, 5),        // 0 点前：只当基准
+    tc(t0 + 1, 100, 40, 10),
+    tc(t0 + 2, 100, 40, 10),          // 相同：跳过
+    tc(t0 + 3, 250, 100, 30),
+    tc(t0 + 4, 20, 0, 2),             // 变小：视为重置，整条计
+  ], now - 1000);
+  writeLines(path.join(d.codexDay, 'rollout-2026-09-20T11-00-00-new.jsonl'), [
+    ctx(t0, 'gpt-5.6-sol'),
+    tc(t0 + 1, 1000, 0, 100),          // 先到的 token_count：见到逐次记录后回滚
+    rec(t0 + 2, 'resp_1', 1000, 0, 100),
+    rec(t0 + 3, 'resp_2', 500, 400, 20),
+    tc(t0 + 4, 1500, 400, 120),        // 之后的 token_count 不再计
+    rec(t0 + 5, 'resp_2', 500, 400, 20), // 重复的 response_id 不计
+  ], now - 1000);
+  const sc = new DailyScanner({ codexHome: d.codexHome, dayStart: dayStartFixed });
+  const t = sc.tick(now).codex;
+  // 老文件：100/40/10 − 50/0/5 → 50/40/5；250/100/30 − 100/40/10 → 150/60/20；变小 20/0/2 整条
+  // 新文件：1000/0/100 + 500/400/20
+  assert.strictEqual(t.input, 50 + 150 + 20 + 1000 + 500);
+  assert.strictEqual(t.cachedInput, 40 + 60 + 0 + 0 + 400);
+  assert.strictEqual(t.output, 5 + 20 + 2 + 100 + 20);
+  assert.deepStrictEqual(Object.keys(t.byModel).sort(), ['gpt-5.5', 'gpt-5.6-sol']);
+  assert.strictEqual(t.byModel['gpt-5.6-sol'].tokens, 1100 + 520);
+  const expectNew = pricing.priceOpenAI('gpt-5.6-sol', { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 100 }, null)
+    + pricing.priceOpenAI('gpt-5.6-sol', { input_tokens: 500, cached_input_tokens: 400, output_tokens: 20 }, null);
+  approx(t.byModel['gpt-5.6-sol'].costUsd, expectNew, 1e-12);
+  // 截断后重读：已计过的不再计
+  const old = path.join(d.codexDay, 'rollout-2026-09-20T10-00-00-old.jsonl');
+  writeLines(old, [ctx(t0, 'gpt-5.5'), tc(t0 + 1, 100, 40, 10), tc(t0 + 9, 300, 100, 40)], now);
+  const t2 = sc.tick(now + 1000).codex;
+  assert.strictEqual(t2.output, t.output + (40 - 30), '重读时只计超过以前最大值的部分');
+});
+
+// ---------- 编排层（monitor） ----------
+
+// ---------- §11.10 窗口、压缩点与来源（现写的合成会话） ----------
+
+let ctxNo = 0;
+const XSID = (n) => `c0570000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+function makeCtxHome() {
+  const home = path.join(TMP, `ctx-${++homeNo}`);
+  const projects = path.join(home, 'projects');
+  fs.mkdirSync(projects, { recursive: true });
+  return { home, projects };
+}
+// 写一个合成主记录。cwd 是临时目录里的项目文件夹（带空格和中文），可以在里面放 .claude/settings*.json
+function writeSession(h, sid, o) {
+  const cwd = o.cwd || path.join(TMP, `proj ${++ctxNo} 项目`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const dir = path.join(h.projects, projectDirName(cwd));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, sid + '.jsonl');
+  const at = (ms) => new Date(ms).toISOString();
+  const b = (type, ts, extra) => ({ type, timestamp: at(ts), sessionId: sid, cwd, version: '2.1.280', entrypoint: 'claude-vscode', isSidechain: false, ...extra });
+  const rows = [
+    b('user', T(0), { message: { role: 'user', content: 'synthetic prompt' } }),
+    b('assistant', T(0, 10), { message: { id: 'msg_' + sid.slice(-4), role: 'assistant', model: o.model, content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: o.used - 10, output_tokens: 5 } } }),
+  ];
+  if (o.compact) {
+    rows.push(b('system', T(0, 20), { subtype: 'compact_boundary', compactMetadata: { trigger: o.compact.trigger || 'auto', preTokens: o.compact.pre, postTokens: o.compact.post } }));
+  }
+  if (o.costKeys) {
+    rows.push({ type: 'cost-state', sessionId: sid, totalCostUSD: o.cost ?? 1.25, totalAPIDuration: 1,
+      modelUsage: Object.fromEntries(o.costKeys.map((k) => [k, { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.1 }])) });
+  }
+  fs.writeFileSync(file, rows.map((r) => JSON.stringify(r) + '\n').join(''));
+  return { file, cwd, dir };
+}
+
+test('§11.10 cost-state：带 [1m] → 1M（来源 cost-state）；不带后缀按模型规则；没有 cost-state；费用取 totalCostUSD；主记录路径', () => {
+  const h = makeCtxHome();
+  const x1 = writeSession(h, XSID(1), { model: 'claude-opus-4-6', used: 150000, costKeys: ['claude-haiku-4-5-20251001', 'claude-opus-4-6[1m]'], cost: 3.5 });
+  writeSession(h, XSID(2), { model: 'claude-opus-4-6', used: 150000, costKeys: ['claude-opus-4-6'] });
+  writeSession(h, XSID(3), { model: 'claude-opus-5-5', used: 150000, costKeys: ['claude-opus-5-5'] });
+  writeSession(h, XSID(4), { model: 'claude-haiku-4-5-20251001', used: 150000 });
+  const ss = scanAll(provider(h), T(5));
+  const pick = (s) => [s.modelVariant, s.contextWindow, s.contextWindowSource, s.compactAt, s.compactAtSource, s.autoCompactWindow, s.contextPct, s.ccCostUsd];
+  const a = byId(ss, XSID(1));
+  assert.deepStrictEqual(pick(a), ['claude-opus-4-6[1m]', 1000000, 'cost-state', 967000, 'default', 1000000, 15, 3.5]);
+  assert.deepStrictEqual([a.main.tokens.contextWindow, a.main.tokens.compactAt, a.main.tokens.toCompact, a.main.tokens.contextPct], [1000000, 967000, 817000, 15]);
+  assert.strictEqual(a.transcript, x1.file);
+  assert.strictEqual(a.transcript, a.main.file);
+  assert.deepStrictEqual(pick(byId(ss, XSID(2))), ['claude-opus-4-6', 200000, 'model-rule', 167000, 'default', 200000, 75, 1.25]);
+  assert.deepStrictEqual(pick(byId(ss, XSID(3))), ['claude-opus-5-5', 1000000, 'model-rule', 967000, 'default', 1000000, 15, 1.25], '原生 1M');
+  assert.deepStrictEqual(pick(byId(ss, XSID(4))), [null, 200000, 'model-rule', 167000, 'default', 200000, 75, null], '没有 cost-state');
+  // 夹具会话 A 有子智能体：Agent 也带百分比
+  const fa = byId(scanAll(provider(makeHome()), T(5)), SID.A);
+  assert.strictEqual(fa.agents[0].tokens.contextPct, Math.round(fa.agents[0].tokens.contextUsed / fa.agents[0].tokens.contextWindow * 100));
+  assert.deepStrictEqual([fa.ccCostUsd, fa.modelVariant, fa.contextWindowSource], [null, null, 'model-rule']);
+});
+
+test('§11.10 三层设置：项目本地 > 项目 > 用户（设定值 − 33K）；autoCompactEnabled:false → 已关；设置文件按 mtime 缓存', () => {
+  const h = makeCtxHome();
+  const x = writeSession(h, XSID(5), { model: 'claude-opus-5-5', used: 100000 });
+  const p = provider(h);
+  let t = T(5);
+  const get = () => { const s = byId(scanAll(p, t), XSID(5)); return [s.compactAt, s.compactAtSource, s.autoCompactWindow, s.main.tokens.compactAt]; };
+  assert.deepStrictEqual(get(), [967000, 'default', 1000000, 967000]);
+  fs.writeFileSync(path.join(h.home, 'settings.json'), JSON.stringify({ theme: 'dark', autoCompactWindow: 500000 }, null, 2));
+  t += 1000;
+  assert.deepStrictEqual(get(), [967000, 'default', 1000000, 967000], '5 秒内不重读设置');
+  t += 5000;
+  assert.deepStrictEqual(get(), [467000, 'settings-user', 500000, 467000]);
+  fs.mkdirSync(path.join(x.cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(x.cwd, '.claude', 'settings.json'), JSON.stringify({ autoCompactWindow: 300000 }));
+  t += 5000;
+  assert.deepStrictEqual(get(), [267000, 'settings-project', 300000, 267000]);
+  fs.writeFileSync(path.join(x.cwd, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactWindow: 400000 }));
+  t += 5000;
+  assert.deepStrictEqual(get(), [367000, 'settings-local', 400000, 367000]);
+  const readsBefore = p.settingsCache.reads;
+  for (let i = 0; i < 5; i++) { t += 5000; get(); }
+  assert.strictEqual(p.settingsCache.reads, readsBefore, '文件没变就不重读');
+  fs.writeFileSync(path.join(x.cwd, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactWindow: 400000, autoCompactEnabled: false }));
+  t += 5000;
+  const off = byId(scanAll(p, t), XSID(5));
+  assert.deepStrictEqual([off.compactAt, off.compactAtSource, off.autoCompactWindow, off.main.tokens.compactAt, off.main.tokens.toCompact], [null, 'disabled', null, null, null]);
+  fs.rmSync(path.join(x.cwd, '.claude', 'settings.local.json'));
+  t += 5000;
+  assert.deepStrictEqual(get(), [267000, 'settings-project', 300000, 267000]);
+  // 200K 窗口的模型：设定值取与窗口的较小值
+  writeSession(h, XSID(6), { model: 'claude-haiku-4-5-20251001', used: 50000, cwd: x.cwd });
+  t += 5000;
+  const small = byId(scanAll(p, t), XSID(6));
+  assert.deepStrictEqual([small.compactAt, small.compactAtSource, small.autoCompactWindow], [167000, 'settings-project', 200000]);
+});
+
+test('§11.10 实测压缩点：扩展给的表 > 本进程学到的 > 默认；设置优先；有设置的会话不学；lastCompact 带 model 与窗口', () => {
+  const h = makeCtxHome();
+  writeSession(h, XSID(7), { model: 'claude-opus-5-5', used: 50000, compact: { trigger: 'auto', pre: 958000, post: 30000 } });
+  const other = writeSession(h, XSID(8), { model: 'claude-opus-5-5', used: 200000 });
+  const p = provider(h);
+  let ss = scanAll(p, T(5));
+  const l = byId(ss, XSID(7));
+  assert.deepStrictEqual(l.main.lastCompact, { ms: T(0, 20), trigger: 'auto', preTokens: 958000, postTokens: 30000, model: 'claude-opus-5-5', contextWindow: 1000000 });
+  assert.strictEqual(l.main.tokens.contextUsed, 30000, '压缩后下一次调用前取 postTokens');
+  assert.deepStrictEqual(p.observed, { 'claude-opus-5-5|1000000': 958000 });
+  ss = scanAll(p, T(5) + 1000);
+  const o = byId(ss, XSID(8));
+  assert.deepStrictEqual([o.compactAt, o.compactAtSource, o.autoCompactWindow, o.main.tokens.toCompact], [958000, 'observed', null, 758000]);
+  // 扩展传来的表优先于本进程学到的；非法值丢掉
+  p.setObservedCompact({ 'claude-opus-5-5|1000000': 940000, bad: 'x', 'neg|1': -1 });
+  assert.deepStrictEqual(p.observedConfig, { 'claude-opus-5-5|1000000': 940000 });
+  ss = scanAll(p, T(5) + 2000);
+  assert.deepStrictEqual([byId(ss, XSID(8)).compactAt, byId(ss, XSID(8)).compactAtSource], [940000, 'observed']);
+  // 不同窗口的键互不影响：200K 模型仍是默认
+  writeSession(h, XSID(9), { model: 'claude-haiku-4-5-20251001', used: 50000 });
+  ss = scanAll(p, T(5) + 3000);
+  assert.deepStrictEqual([byId(ss, XSID(9)).compactAt, byId(ss, XSID(9)).compactAtSource], [167000, 'default']);
+  // 设置优先于实测
+  fs.mkdirSync(path.join(other.cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(other.cwd, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactWindow: 600000 }));
+  ss = scanAll(p, T(5) + 60e3);
+  assert.deepStrictEqual([byId(ss, XSID(8)).compactAt, byId(ss, XSID(8)).compactAtSource], [567000, 'settings-local']);
+  // 用户设置改过阈值的机器上，自动压缩的 preTokens 反映的是设定值：不学
+  const h2 = makeCtxHome();
+  writeSession(h2, XSID(10), { model: 'claude-opus-5-5', used: 50000, compact: { trigger: 'auto', pre: 367500, post: 20000 } });
+  fs.writeFileSync(path.join(h2.home, 'settings.json'), JSON.stringify({ autoCompactWindow: 400000 }));
+  const p2 = provider(h2);
+  scanAll(p2, T(5));
+  assert.deepStrictEqual(p2.observed, {});
+  // 手动压缩不学
+  const h3 = makeCtxHome();
+  writeSession(h3, XSID(11), { model: 'claude-opus-5-5', used: 50000, compact: { trigger: 'manual', pre: 500000, post: 20000 } });
+  const p3 = provider(h3, { observedCompact: { 'claude-opus-5-5|1000000': 961000 } });
+  const m = byId(scanAll(p3, T(5)), XSID(11));
+  assert.deepStrictEqual([m.compactAt, m.compactAtSource], [961000, 'observed'], '构造时传入的表');
+  assert.strictEqual(p3.learned.size, 0);
+});
+
+function monitorCfg(h, extra = {}) {
+  return {
+    activeWindowMinutes: 1e7, // 合成数据在过去：窗口放大
+    staleMinutes: 5,
+    claude: { projectsDir: h.projects, home: h.home },
+    codex: { enabled: false, home: path.join(TMP, 'no-codex') },
+    daily: false,
+    ...extra,
+  };
+}
+
+test('normalizeConfig：补默认值；v0.2 的 { root } 写法也认', () => {
+  const c = normalizeConfig({ root: '/x/projects', activeWindowMinutes: 12 }, {});
+  assert.strictEqual(c.claude.projectsDir, '/x/projects');
+  assert.strictEqual(c.claude.home, '/x');
+  assert.strictEqual(c.claude.settingsPath, path.join('/x', 'settings.json'));
+  assert.strictEqual(c.activeWindowMinutes, 12);
+  assert.strictEqual(c.intervalMs, 2000);
+  assert.strictEqual(c.approvalGuess, 'fastTools');
+  assert.strictEqual(c.approvalGuessSeconds, 60);
+  assert.deepStrictEqual(c.limits, { timeline: 30, timelineSent: 12, resultChars: 4000, filesPerAgent: 200, errorsPerAgent: 10 });
+  assert.strictEqual(c.dailyBudgetBytesPerTick, 8 * 1024 * 1024);
+  const e = normalizeConfig({}, { CLAUDE_CONFIG_DIR: '/cfg', CODEX_HOME: '/cx' });
+  assert.strictEqual(e.claude.projectsDir, path.join('/cfg', 'projects'));
+  assert.strictEqual(e.codex.home, '/cx');
+  // §11.12.3：configDir（登记表与用户设置所在目录）、来源、实测压缩点表
+  assert.deepStrictEqual([c.claude.configDir, c.claude.home, c.observedCompact], ['/x', '/x', {}]);
+  assert.deepStrictEqual([e.claude.configDir, e.claude.configDirSource, e.codex.homeSource], ['/cfg', 'env', 'env']);
+  const d = normalizeConfig({ claude: { projectsDir: '/data/projects', configDir: '/cfg dir/配置' }, observedCompact: { 'm|1': 5, bad: 'x', neg: -1 } }, {});
+  assert.deepStrictEqual([d.claude.home, d.claude.settingsPath, d.claude.configDirSource], ['/cfg dir/配置', path.join('/cfg dir/配置', 'settings.json'), 'setting']);
+  assert.deepStrictEqual(d.observedCompact, { 'm|1': 5 });
+  const f = normalizeConfig({ claude: { configDirSource: 'env', configDir: '/c', settingsPath: '/elsewhere/settings.json', home: '/elsewhere' } }, {});
+  assert.strictEqual(f.claude.configDirSource, 'env', '扩展给了来源就用它');
+  assert.deepStrictEqual([f.claude.home, f.claude.settingsPath], ['/c', path.join('/c', 'settings.json')], '给了 configDir 时以它为准');
+  const g = normalizeConfig({}, {});
+  assert.deepStrictEqual([g.claude.configDirSource, g.codex.homeSource], ['default', 'default']);
+  // 只有 observedCompact 不同 → 不必重建
+  const raw = { claude: { projectsDir: '/p/projects' }, intervalMs: 3000 };
+  assert.ok(sameExceptObserved(normalizeConfig(raw, {}), normalizeConfig({ ...raw, observedCompact: { 'x|1': 9 } }, {})));
+  assert.ok(!sameExceptObserved(normalizeConfig(raw, {}), normalizeConfig({ ...raw, intervalMs: 4000 }, {})));
+});
+
+test('Monitor：Snapshot v2 结构、按 startedMs 倒序、focus 附带细节、额度 lastHit', () => {
+  const h = makeHome();
+  const mon = new Monitor(monitorCfg(h));
+  mon.setFocus([KEY.A, 'claude:not-there']);
+  const snap = mon.snapshot(T(5));
+  assert.strictEqual(snap.v, 2);
+  assert.strictEqual(snap.now, T(5));
+  assert.deepStrictEqual(Object.keys(snap).sort(), ['details', 'now', 'quota', 'sessions', 'sources', 'today', 'v']);
+  assert.strictEqual(snap.sessions.length, 10);
+  const st = snap.sessions.map((s) => s.startedMs);
+  assert.deepStrictEqual(st, [...st].sort((a, b) => b - a));
+  assert.deepStrictEqual(Object.keys(snap.details), [KEY.A]);
+  assert.strictEqual(snap.quota.claude.lastHit.sessionKey, KEY.B);
+  assert.deepStrictEqual(snap.quota.codex.windows, []);
+  assert.strictEqual(snap.sources.claude.ok, true);
+  assert.strictEqual(snap.sources.codex.enabled, false);
+  assert.strictEqual(snap.today.partial, false);
+  // 快照能被结构化克隆（worker postMessage）
+  const clone = structuredClone(snap);
+  assert.strictEqual(clone.sessions.length, snap.sessions.length);
+});
+
+test('Monitor：Codex 模块加载 / 构造出错时只跑 Claude，不崩，出错信息能取走', () => {
+  const h = makeHome();
+  const bad = { CodexProvider: class { constructor() { throw new Error('synthetic codex failure'); } } };
+  const mon = new Monitor(monitorCfg(h, { codex: { enabled: true, home: path.join(TMP, 'no-codex') } }), { codexModule: bad });
+  const snap = mon.snapshot(T(5));
+  assert.strictEqual(snap.sessions.length, 10);
+  assert.strictEqual(snap.sources.codex.ok, false);
+  assert.ok(/synthetic codex failure/.test(snap.sources.codex.error));
+  const errs = mon.takeErrors();
+  assert.ok(errs.some(([src]) => src === 'codex'));
+  assert.deepStrictEqual(mon.takeErrors(), []);
+  // scan 抛错也不影响
+  const throwsScan = { CodexProvider: class { scan() { throw new Error('scan boom'); } } };
+  const mon2 = new Monitor(monitorCfg(h, { codex: { enabled: true, home: path.join(TMP, 'no-codex') } }), { codexModule: throwsScan });
+  const s2 = mon2.snapshot(T(5));
+  assert.strictEqual(s2.sessions.length, 10);
+  assert.strictEqual(s2.sources.codex.ok, false);
+});
+
+test('Monitor：合并 Codex 会话（窗口过滤、存活不过滤、缺 startedMs 补首次看到的时间）、细节按 provider 分派', () => {
+  const h = makeHome();
+  const now = T(5);
+  const mk = (id, updatedMs, extra = {}) => ({ key: 'codex:' + id, provider: 'codex', id, updatedMs, main: { status: { code: 'done' } }, agents: [], workflows: [], ...extra });
+  const fake = {
+    CodexProvider: class {
+      constructor(opts) { this.opts = opts; }
+      scan(n, o) { this.lastKeep = o.keepKeys; return [mk('c1', n - 60e3, { startedMs: T(4) }), mk('c2', n - 400 * 86400e3 * 30), mk('c3', n - 400 * 86400e3 * 30, { live: true, startedMs: T(0, 30) }), mk('c4', n - 1000)]; }
+      quota() { return { observedMs: 1, planType: 'plus', limitId: 'codex', windows: [{ minutes: 300, usedPct: 12, resetsAtMs: 5, label: '5h' }], reachedType: null, credits: null }; }
+      detail(key) { return key === 'codex:c1' ? { key, agents: {} } : null; }
+    },
+  };
+  const mon = new Monitor(monitorCfg(h, { activeWindowMinutes: 1e6, codex: { enabled: true, home: '/tmp/am-fake-codex' } }), { codexModule: fake });
+  mon.setFocus(['codex:c1']);
+  const snap = mon.snapshot(now);
+  assert.strictEqual(mon.codex.opts.home, '/tmp/am-fake-codex');
+  assert.deepStrictEqual(mon.codex.lastKeep, ['codex:c1']);
+  const codexIds = snap.sessions.filter((s) => s.provider === 'codex').map((s) => s.id);
+  assert.deepStrictEqual(codexIds.sort(), ['c1', 'c3', 'c4']);
+  assert.strictEqual(snap.sessions.find((s) => s.id === 'c4').startedMs, now, '缺 startedMs：用首次看到的时间');
+  const again = mon.snapshot(now + 60e3);
+  assert.strictEqual(again.sessions.find((s) => s.id === 'c4').startedMs, now, '之后不变');
+  const st = snap.sessions.map((s) => s.startedMs);
+  assert.deepStrictEqual(st, [...st].sort((a, b) => b - a));
+  assert.strictEqual(snap.quota.codex.planType, 'plus');
+  assert.deepStrictEqual(snap.details['codex:c1'], { key: 'codex:c1', agents: {}, storage: null }, '存储占用第一次还没算完');
+});
+
+test('Monitor：接上真实的 Codex provider（合成的 test/fixtures/codex）不崩', () => {
+  const codexHome = path.join(__dirname, 'fixtures', 'codex', 'home');
+  if (!fs.existsSync(codexHome)) return;
+  const h = makeHome();
+  const mon = new Monitor(monitorCfg(h, { codex: { enabled: true, home: codexHome } }));
+  const snap = mon.snapshot(Date.now());
+  assert.strictEqual(snap.sources.codex.ok, true, snap.sources.codex.error || '');
+  assert.ok(Array.isArray(snap.quota.codex.windows));
+  for (const s of snap.sessions) assert.ok(s.key && Number.isFinite(s.startedMs));
+});
+
+test('Monitor 存储占用（§11.12.3，桩替换 lib/storage.js）：10 分钟内返回缓存、force 重算、并发共用一次；不可用 / 出错也 resolve', async () => {
+  const h = makeHome();
+  let calls = 0;
+  let lastArgs = null;
+  const stub = {
+    scanStorage: async (o) => {
+      calls++;
+      lastArgs = o;
+      await new Promise((r) => setImmediate(r));
+      return { at: 1000 + calls, claude: { dir: o.claudeDir, entries: [] }, codex: null, volumes: [{ mount: '/', freeBytes: 1, totalBytes: 2 }], cleanupPeriodDays: 30 };
+    },
+  };
+  const mon = new Monitor(monitorCfg(h, { claude: { projectsDir: h.projects, configDir: h.home, configDirSource: 'setting' } }), { storageModule: stub });
+  const now = T(5);
+  const r1 = await mon.storageReport({ now });
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(r1.cached, false);
+  assert.deepStrictEqual([r1.at, r1.claude.dir, r1.claude.dirSource, r1.cleanupPeriodDays], [1001, h.home, 'setting', 30]);
+  assert.deepStrictEqual([lastArgs.claudeDir, lastArgs.claudeDirSource, lastArgs.codexHome, lastArgs.projectsDir], [h.home, 'setting', path.join(TMP, 'no-codex'), h.projects]);
+  const r2 = await mon.storageReport({ now: now + 9 * 60e3 });
+  assert.deepStrictEqual([calls, r2.cached, r2.at], [1, true, 1001], '10 分钟内返回缓存');
+  const r3 = await mon.storageReport({ now: now + 10 * 60e3 });
+  assert.deepStrictEqual([calls, r3.cached], [2, false], '满 10 分钟重算');
+  const r4 = await mon.storageReport({ now: now + 10 * 60e3 + 1, force: true });
+  assert.deepStrictEqual([calls, r4.cached], [3, false], 'force 重算');
+  const [a, b] = await Promise.all([mon.storageReport({ now: now + 1e9, force: true }), mon.storageReport({ now: now + 1e9, force: true })]);
+  assert.strictEqual(calls, 4, '同时来的请求共用一次统计');
+  assert.strictEqual(a.at, b.at);
+  // lib/storage.js 不可用
+  const none = new Monitor(monitorCfg(h), { storageModule: null });
+  const e1 = await none.storageReport({ now });
+  assert.deepStrictEqual([e1.error, e1.claude, e1.codex, e1.volumes, e1.cleanupPeriodDays, e1.at], ['unavailable', null, null, [], null, now]);
+  // 统计出错：resolve 带 error，出错信息能取走；不缓存，下次再算
+  let boomCalls = 0;
+  const boom = new Monitor(monitorCfg(h), { storageModule: { scanStorage: async () => { boomCalls++; throw new Error('synthetic scan failure'); } } });
+  const e2 = await boom.storageReport({ now });
+  assert.ok(/synthetic scan failure/.test(e2.error));
+  assert.ok(boom.takeErrors().some(([src]) => src === 'storage'));
+  await boom.storageReport({ now: now + 1000 });
+  assert.strictEqual(boomCalls, 2);
+});
+
+async function until(pred, tries = 200) {
+  for (let i = 0; i < tries; i++) { if (pred()) return true; await new Promise((r) => setImmediate(r)); }
+  return pred();
+}
+
+test('Monitor：focus 会话的细节带 storage（60 秒最多统计一次，算完调 onChange）；不在 focus 的不算', async () => {
+  const h = makeHome();
+  const seen = [];
+  const stub = {
+    scanStorage: async () => ({}),
+    sessionStorage: async (o) => {
+      seen.push(o);
+      return { transcriptBytes: 11, subagentsBytes: 22, fileHistoryBytes: 33, transcript: o.transcript,
+        subagentsDir: path.join(o.projectDir, o.sessionId), fileHistoryDir: path.join(o.claudeDir, 'file-history', o.sessionId) };
+    },
+  };
+  const mon = new Monitor(monitorCfg(h), { storageModule: stub });
+  let changed = 0;
+  mon.onChange = () => { changed++; };
+  mon.setFocus([KEY.A]);
+  const t0 = T(5);
+  const s1 = mon.snapshot(t0);
+  assert.strictEqual(s1.details[KEY.A].storage, null, '第一次还没算完');
+  assert.ok(await until(() => changed === 1), 'onChange');
+  const s2 = mon.snapshot(t0 + 1000);
+  const main = path.join(h.dir, SID.A + '.jsonl');
+  assert.deepStrictEqual(s2.details[KEY.A].storage, {
+    transcriptBytes: 11, subagentsBytes: 22, fileHistoryBytes: 33, transcript: main,
+    subagentsDir: path.join(h.dir, SID.A), fileHistoryDir: path.join(h.home, 'file-history', SID.A), at: t0,
+  });
+  assert.deepStrictEqual(seen, [{ claudeDir: h.home, projectsDir: h.projects, projectDir: h.dir, sessionId: SID.A, transcript: main }]);
+  mon.snapshot(t0 + 59e3);
+  assert.strictEqual(seen.length, 1, '60 秒内不再统计');
+  mon.snapshot(t0 + 60e3);
+  assert.ok(await until(() => changed === 2));
+  assert.strictEqual(seen.length, 2);
+  mon.setFocus([]);
+  mon.snapshot(t0 + 200e3);
+  assert.strictEqual(seen.length, 2, '不在 focus 的会话不算');
+  assert.strictEqual(mon.sessStorage.size, 0);
+  // lib/storage.js 不可用：只给主记录大小
+  const bare = new Monitor(monitorCfg(h), { storageModule: null });
+  bare.setFocus([KEY.A]);
+  bare.snapshot(t0);
+  let st = null;
+  assert.ok(await until(() => { st = bare.snapshot(t0 + 1).details[KEY.A].storage; return !!st; }));
+  assert.deepStrictEqual([st.transcriptBytes, st.subagentsBytes, st.fileHistoryBytes], [fs.statSync(main).size, null, null]);
+});
+
+test('Monitor：Codex 会话的 storage = 主线程 rollout + 子线程 rollout 大小（合成 test/fixtures/codex）', async () => {
+  const codexHome = path.join(__dirname, 'fixtures', 'codex', 'home');
+  if (!fs.existsSync(codexHome)) return;
+  const h = makeHome();
+  const mon = new Monitor(monitorCfg(h, { codex: { enabled: true, home: codexHome } }), { storageModule: null });
+  const first = mon.snapshot(Date.now());
+  const withKids = first.sessions.find((s) => s.provider === 'codex' && s.agents.length > 0);
+  assert.ok(withKids, '夹具里有带子线程的 Codex 会话');
+  assert.strictEqual(withKids.transcript, withKids.main.file);
+  mon.setFocus([withKids.key]);
+  mon.snapshot(Date.now());
+  let st = null;
+  assert.ok(await until(() => { const d = mon.snapshot(Date.now()).details[withKids.key]; st = d && d.storage; return !!st; }));
+  const kids = withKids.agents.reduce((n, a) => n + fs.statSync(a.file).size, 0);
+  assert.deepStrictEqual([st.transcriptBytes, st.subagentsBytes, st.fileHistoryBytes, st.transcript],
+    [fs.statSync(withKids.transcript).size, kids, null, withKids.transcript]);
+});
+
+// ---------- worker（真线程） ----------
+
+function waitFor(w, pred, ms = 8000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { w.off('message', on); reject(new Error('等 worker 消息超时')); }, ms);
+    function on(m) { if (pred(m)) { clearTimeout(timer); w.off('message', on); resolve(m); } }
+    w.on('message', on);
+  });
+}
+
+test('worker：v2 快照；focus 后下一份带细节；refresh 立即扫；config 重建', async () => {
+  const h = makeHome();
+  const cfg = monitorCfg(h, { intervalMs: 60000, daily: true, codex: { enabled: false, home: path.join(TMP, 'no-codex') } });
+  const w = new Worker(path.join(ROOT, 'lib', 'worker.js'), { workerData: cfg });
+  try {
+    const first = await waitFor(w, (m) => m.type === 'snapshot');
+    assert.strictEqual(first.v, 2);
+    assert.strictEqual(first.sessions.length, 10);
+    assert.deepStrictEqual(first.details, {});
+    assert.ok(first.today && typeof first.today.partial === 'boolean');
+    w.postMessage({ type: 'focus', keys: [KEY.A] });
+    const withDetail = await waitFor(w, (m) => m.type === 'snapshot' && m.details[KEY.A]);
+    assert.ok(withDetail.details[KEY.A].agents.main);
+    const t0 = Date.now();
+    w.postMessage({ type: 'refresh' });
+    const r = await waitFor(w, (m) => m.type === 'snapshot');
+    assert.ok(r.now >= t0);
+    assert.ok(r.details[KEY.A], 'refresh 不丢 focus');
+    w.postMessage({ type: 'config', cfg: { ...cfg, claude: { projectsDir: path.join(TMP, 'empty-projects'), home: path.join(TMP, 'empty-home') } } });
+    const c = await waitFor(w, (m) => m.type === 'snapshot' && m.sessions.length === 0);
+    assert.strictEqual(c.v, 2);
+  } finally {
+    await w.terminate();
+  }
+});
+
+test('worker：storage 消息（真 lib/storage.js、合成目录）10 分钟内返回缓存、force 重算；只换实测压缩点表不重建', async () => {
+  const h = makeHome();
+  const cfg = monitorCfg(h, { intervalMs: 60000, claude: { projectsDir: h.projects, home: h.home, configDir: h.home },
+    codex: { enabled: false, home: path.join(TMP, 'no-codex') } });
+  const w = new Worker(path.join(ROOT, 'lib', 'worker.js'), { workerData: cfg });
+  try {
+    const first = await waitFor(w, (m) => m.type === 'snapshot');
+    assert.strictEqual(first.sessions.find((s) => s.key === KEY.A).compactAtSource, 'default');
+    w.postMessage({ type: 'storage' });
+    const r1 = await waitFor(w, (m) => m.type === 'storage', 30000);
+    assert.strictEqual(r1.cached, false);
+    assert.ok(Array.isArray(r1.volumes));
+    const ok = !r1.error;
+    if (ok) assert.strictEqual(r1.claude.dir, h.home);
+    w.postMessage({ type: 'storage' });
+    const r2 = await waitFor(w, (m) => m.type === 'storage');
+    assert.strictEqual(r2.cached, ok, '10 分钟内返回缓存');
+    if (ok) assert.strictEqual(r2.at, r1.at);
+    w.postMessage({ type: 'storage', force: true });
+    const r3 = await waitFor(w, (m) => m.type === 'storage', 30000);
+    assert.strictEqual(r3.cached, false);
+    // 只有 observedCompact 变了：换表、立即再扫，Monitor 不重建（存储缓存还在）
+    w.postMessage({ type: 'config', cfg: { ...cfg, observedCompact: { 'claude-opus-5-5|1000000': 950000 } } });
+    const snap = await waitFor(w, (m) => m.type === 'snapshot' && m.sessions.some((s) => s.compactAtSource === 'observed'));
+    const a = snap.sessions.find((s) => s.key === KEY.A);
+    assert.deepStrictEqual([a.compactAt, a.compactAtSource], [950000, 'observed']);
+    w.postMessage({ type: 'storage' });
+    const r4 = await waitFor(w, (m) => m.type === 'storage');
+    if (ok) assert.strictEqual(r4.cached, true, '只换实测表没有重建 Monitor');
+    // focus → 细节带 storage（算完后 worker 自己尽快再发一份）
+    w.postMessage({ type: 'focus', keys: [KEY.A] });
+    const d = await waitFor(w, (m) => m.type === 'snapshot' && m.details[KEY.A] && m.details[KEY.A].storage);
+    assert.strictEqual(d.details[KEY.A].storage.transcriptBytes, fs.statSync(path.join(h.dir, SID.A + '.jsonl')).size);
+  } finally {
+    await w.terminate();
+  }
+});
+
+// ---------- 真实数据冒烟（只读；只打印计数、状态分布与耗时） ----------
+
+test('真实数据冒烟（只读 ~/.claude、~/.codex）', () => {
+  const realProjects = path.join(os.homedir(), '.claude', 'projects');
+  if (process.env.AGENT_MONITOR_SKIP_REAL === '1' || !fs.existsSync(realProjects)) {
+    console.log('        （跳过：没有本机记录或设置了 AGENT_MONITOR_SKIP_REAL=1）');
+    return;
+  }
+  const report = {};
+  for (const win of [30, 720]) {
+    const t0 = process.hrtime.bigint();
+    const mon = new Monitor({ activeWindowMinutes: win, daily: false });
+    const snap = mon.snapshot();
+    const cold = Number(process.hrtime.bigint() - t0) / 1e6;
+    const ticks = [];
+    for (let i = 0; i < 5; i++) { const t = process.hrtime.bigint(); mon.snapshot(); ticks.push(Number(process.hrtime.bigint() - t) / 1e6); }
+    const dist = {};
+    let agents = 0;
+    for (const s of snap.sessions) {
+      for (const a of allAgents(s)) {
+        agents++;
+        const k = `${s.provider}/${a.kind}/${a.status.code}`;
+        dist[k] = (dist[k] || 0) + 1;
+      }
+      assert.ok(Number.isFinite(s.startedMs), 'startedMs');
+      assert.ok(typeof s.live === 'boolean');
+    }
+    const liveCount = snap.sessions.filter((s) => s.live).length;
+    report[win] = { coldMs: Math.round(cold), tickMs: +(ticks.reduce((a, b) => a + b, 0) / ticks.length).toFixed(1),
+      sessions: snap.sessions.length, live: liveCount, agents, errors: mon.takeErrors().map(([src]) => src), dist };
+    mon.dispose();
+  }
+  // 今日合计冷启动（分片）：走到读完为止
+  const t1 = process.hrtime.bigint();
+  const daily = new Monitor({ activeWindowMinutes: 30 }).daily;
+  let t = daily.tick(Date.now());
+  let n = 1;
+  while (t.partial && n < 400) { t = daily.tick(Date.now()); n++; }
+  const dailyMs = Number(process.hrtime.bigint() - t1) / 1e6;
+  for (const [win, r] of Object.entries(report)) {
+    console.log(`        窗口 ${win} 分钟：冷启动 ${r.coldMs}ms，每次刷新 ${r.tickMs}ms；会话 ${r.sessions}（在线 ${r.live}），智能体 ${r.agents}，出错来源 ${JSON.stringify(r.errors)}`);
+    console.log(`          状态分布 ${JSON.stringify(r.dist)}`);
+  }
+  console.log(`        今日合计：${n} 次 tick 读完，共 ${Math.round(dailyMs)}ms；Claude 模型 ${Object.keys(t.claude.byModel).length} 个，Codex 模型 ${Object.keys(t.codex.byModel).length} 个`);
+  console.log('        （v0.2 参考：12 小时窗口冷启动约 745ms，每次刷新约 4.5–5ms）');
+});
+
+// ---------- 运行 ----------
+
+(async () => {
+  let ok = 0;
+  let fail = 0;
+  console.log('test/claude.test.js');
+  for (const t of tests) {
+    try {
+      await t.fn();
+      ok++;
+      console.log(`  ok    ${t.name}`);
+    } catch (err) {
+      fail++;
+      console.log(`  FAIL  ${t.name}\n        ${String((err && err.stack) || err).split('\n').slice(0, 6).join('\n        ')}`);
+    }
+  }
+  fs.rmSync(TMP, { recursive: true, force: true });
+  console.log(`\n${ok}/${ok + fail} 通过`);
+  process.exitCode = fail ? 1 : 0;
+})();

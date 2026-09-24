@@ -1,0 +1,5 @@
+{
+  "agentType": "workflow-agent",
+  "description": "Phase two worker",
+  "workflowPhase": "build"
+}

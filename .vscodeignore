@@ -1,0 +1,34 @@
+# 打包时排除运行时不需要的文件。
+# 必须保留：extension.js、lib/、l10n/、media/（含 codicons 的 LICENSE）、package.json、package.nls*.json、
+#          LICENSE、README.md、CHANGELOG.md、THIRD_PARTY_NOTICES.md
+
+# 版本控制与仓库配置
+.git/**
+.github/**
+.gitignore
+.gitattributes
+.vscode/**
+.vscode-test/**
+.editorconfig
+.eslintrc*
+.prettierrc*
+jsconfig.json
+tsconfig.json
+
+# 开发文件
+test/**
+docs/**
+bin/**
+images/**
+scripts/**
+coverage/**
+DEVLOG.md
+SUPPORT.md
+SECURITY.md
+README.*.md
+**/*.map
+**/*.log
+**/.DS_Store
+*.vsix
+.env
+.env.*

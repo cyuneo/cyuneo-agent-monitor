@@ -1,0 +1,4 @@
+{"type":"launched"}
+{"type":"started","key":"k1","agentId":"w1","label":"Phase one worker","phase":"build"}
+{"type":"started","key":"k2","agentId":"w2","label":"Phase two worker","phase":"build"}
+{"type":"result","key":"k1","agentId":"w1","result":{"ok":true,"note":"synthetic"}}

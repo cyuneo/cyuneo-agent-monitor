@@ -1,0 +1,6 @@
+{
+  "agentType": "general-purpose",
+  "description": "Synthetic helper",
+  "toolUseId": "toolu_agent1",
+  "requestShape": "foreground"
+}

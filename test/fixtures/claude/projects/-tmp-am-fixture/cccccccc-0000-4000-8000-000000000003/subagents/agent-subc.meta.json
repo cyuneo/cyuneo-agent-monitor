@@ -1,0 +1,6 @@
+{
+  "agentType": "Explore",
+  "description": "Synthetic explorer",
+  "toolUseId": "toolu_agent_c",
+  "requestShape": "foreground"
+}

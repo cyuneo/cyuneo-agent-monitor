@@ -1,0 +1,25 @@
+{
+  "fetched_at": "2026-09-20T09:00:00Z",
+  "etag": "synthetic",
+  "client_version": "0.155.0",
+  "models": [
+    {
+      "slug": "gpt-5.6-sol",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "effective_context_window_percent": 95
+    },
+    {
+      "slug": "gpt-5.5",
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95
+    },
+    {
+      "slug": "codex-auto-review",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "effective_context_window_percent": 95
+    }
+  ]
+}

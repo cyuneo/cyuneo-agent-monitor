@@ -1,0 +1,763 @@
+{
+  "name": "cyuneo-agent-monitor",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.3.0",
+  "preview": true,
+  "publisher": "cyuneo",
+  "author": {
+    "name": "Chenyu Guo",
+    "url": "https://github.com/cyuneo"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cyuneo/cyuneo-agent-monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cyuneo/cyuneo-agent-monitor/issues"
+  },
+  "homepage": "https://github.com/cyuneo/cyuneo-agent-monitor#readme",
+  "qna": "https://github.com/cyuneo/cyuneo-agent-monitor/issues",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#080808",
+    "theme": "dark"
+  },
+  "categories": [
+    "AI",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "agents",
+    "subagent",
+    "multi-agent",
+    "coding agent",
+    "ai assistant",
+    "monitor",
+    "status",
+    "dashboard",
+    "token",
+    "tokens",
+    "context",
+    "context window",
+    "compact",
+    "usage",
+    "usage limit",
+    "cost",
+    "workflow",
+    "session",
+    "llm",
+    "ai agents",
+    "agentic",
+    "ai coding",
+    "vibe coding",
+    "token usage",
+    "context usage",
+    "prompt cache",
+    "auto compact",
+    "cost tracker"
+  ],
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "%capabilities.untrusted%",
+      "restrictedConfigurations": [
+        "agentMonitor.claude.cliPath",
+        "agentMonitor.claude.projectsDir",
+        "agentMonitor.codex.home"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "for f in test/*.test.js; do echo \"== $f\"; AGENT_MONITOR_SKIP_REAL=1 node \"$f\" || exit 1; done"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentMonitorSidebar",
+          "title": "%container.title%",
+          "icon": "media/icon.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "agentMonitor",
+          "title": "%container.title%",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentMonitorSidebar": [
+        {
+          "id": "agentMonitor.tree",
+          "name": "%view.overview%",
+          "icon": "media/icon.svg",
+          "contextualTitle": "%container.title%"
+        }
+      ],
+      "agentMonitor": [
+        {
+          "id": "agentMonitor.agents",
+          "type": "webview",
+          "name": "%view.agents%",
+          "icon": "media/icon.svg",
+          "contextualTitle": "%container.title%"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "agentMonitor.tree",
+        "contents": "%welcome.loading%",
+        "when": "!agentMonitor.loaded"
+      },
+      {
+        "view": "agentMonitor.tree",
+        "contents": "%welcome.empty.all%\n[%welcome.openSettings%](command:agentMonitor.openSettings)",
+        "when": "agentMonitor.loaded && !agentMonitor.filteredOut"
+      },
+      {
+        "view": "agentMonitor.tree",
+        "contents": "%welcome.empty.workspace%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
+        "when": "agentMonitor.filteredOut && !agentMonitor.noFolder"
+      },
+      {
+        "view": "agentMonitor.tree",
+        "contents": "%welcome.noFolder%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
+        "when": "agentMonitor.filteredOut && agentMonitor.noFolder"
+      }
+    ],
+    "commands": [
+      {
+        "command": "agentMonitor.show",
+        "title": "%cmd.show%",
+        "category": "%category%"
+      },
+      {
+        "command": "agentMonitor.showTree",
+        "title": "%cmd.showTree%",
+        "category": "%category%",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "agentMonitor.refresh",
+        "title": "%cmd.refresh%",
+        "category": "%category%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agentMonitor.openSettings",
+        "title": "%cmd.openSettings%",
+        "category": "%category%",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "agentMonitor.scope.all",
+        "title": "%cmd.scope.all%",
+        "category": "%category%",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "agentMonitor.scope.workspace",
+        "title": "%cmd.scope.workspace%",
+        "category": "%category%",
+        "icon": "$(root-folder)"
+      },
+      {
+        "command": "agentMonitor.markSeen",
+        "title": "%cmd.markSeen%",
+        "category": "%category%",
+        "icon": "$(check)"
+      },
+      {
+        "command": "agentMonitor.markAllSeen",
+        "title": "%cmd.markAllSeen%",
+        "category": "%category%",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "agentMonitor.hideCompleted",
+        "title": "%cmd.hideCompleted%",
+        "category": "%category%",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "agentMonitor.showCompleted",
+        "title": "%cmd.showCompleted%",
+        "category": "%category%",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "agentMonitor.openTranscript",
+        "title": "%cmd.openTranscript%",
+        "category": "%category%",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "agentMonitor.revealTranscript",
+        "title": "%cmd.revealTranscript%",
+        "category": "%category%",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "agentMonitor.copyTranscriptPath",
+        "title": "%cmd.copyTranscriptPath%",
+        "category": "%category%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "agentMonitor.copyResume",
+        "title": "%cmd.copyResume%",
+        "category": "%category%",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "agentMonitor.compact",
+        "title": "%cmd.compact%",
+        "category": "%category%",
+        "icon": "$(screen-normal)"
+      },
+      {
+        "command": "agentMonitor.handoff",
+        "title": "%cmd.handoff%",
+        "category": "%category%",
+        "icon": "$(export)"
+      },
+      {
+        "command": "agentMonitor.setAutoCompact",
+        "title": "%cmd.setAutoCompact%",
+        "category": "%category%",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "agentMonitor.storage",
+        "title": "%cmd.storage%",
+        "category": "%category%",
+        "icon": "$(database)"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "agentMonitor.scopeMenu.all",
+        "label": "%submenu.scope.all%",
+        "icon": "$(globe)"
+      },
+      {
+        "id": "agentMonitor.scopeMenu.workspace",
+        "label": "%submenu.scope.workspace%",
+        "icon": "$(root-folder)"
+      }
+    ],
+    "menus": {
+      "agentMonitor.scopeMenu.all": [
+        {
+          "command": "agentMonitor.scope.all",
+          "group": "1_scope@1"
+        },
+        {
+          "command": "agentMonitor.scope.workspace",
+          "group": "1_scope@2"
+        }
+      ],
+      "agentMonitor.scopeMenu.workspace": [
+        {
+          "command": "agentMonitor.scope.all",
+          "group": "1_scope@1"
+        },
+        {
+          "command": "agentMonitor.scope.workspace",
+          "group": "1_scope@2"
+        }
+      ],
+      "view/title": [
+        {
+          "submenu": "agentMonitor.scopeMenu.all",
+          "when": "view == agentMonitor.agents && config.agentMonitor.scope != 'workspace'",
+          "group": "navigation@1"
+        },
+        {
+          "submenu": "agentMonitor.scopeMenu.workspace",
+          "when": "view == agentMonitor.agents && config.agentMonitor.scope == 'workspace'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentMonitor.hideCompleted",
+          "when": "view == agentMonitor.agents && !config.agentMonitor.hideCompleted",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentMonitor.showCompleted",
+          "when": "view == agentMonitor.agents && config.agentMonitor.hideCompleted",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentMonitor.markAllSeen",
+          "when": "view == agentMonitor.agents",
+          "group": "navigation@3"
+        },
+        {
+          "command": "agentMonitor.refresh",
+          "when": "view == agentMonitor.agents",
+          "group": "navigation@4"
+        },
+        {
+          "command": "agentMonitor.storage",
+          "when": "view == agentMonitor.agents",
+          "group": "8_storage@1"
+        },
+        {
+          "command": "agentMonitor.openSettings",
+          "when": "view == agentMonitor.agents",
+          "group": "9_settings@1"
+        },
+        {
+          "command": "agentMonitor.hideCompleted",
+          "when": "view == agentMonitor.tree && !config.agentMonitor.hideCompleted",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentMonitor.showCompleted",
+          "when": "view == agentMonitor.tree && config.agentMonitor.hideCompleted",
+          "group": "navigation@1"
+        },
+        {
+          "submenu": "agentMonitor.scopeMenu.all",
+          "when": "view == agentMonitor.tree && config.agentMonitor.scope != 'workspace'",
+          "group": "navigation@2"
+        },
+        {
+          "submenu": "agentMonitor.scopeMenu.workspace",
+          "when": "view == agentMonitor.tree && config.agentMonitor.scope == 'workspace'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentMonitor.refresh",
+          "when": "view == agentMonitor.tree",
+          "group": "navigation@3"
+        },
+        {
+          "command": "agentMonitor.openSettings",
+          "when": "view == agentMonitor.tree",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentMonitor.compact",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bcompactable\\b/",
+          "group": "1_session@1"
+        },
+        {
+          "command": "agentMonitor.handoff",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "group": "1_session@2"
+        },
+        {
+          "command": "agentMonitor.setAutoCompact",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "group": "1_session@3"
+        },
+        {
+          "command": "agentMonitor.copyResume",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bresumable\\b/",
+          "group": "1_session@4"
+        },
+        {
+          "command": "agentMonitor.markSeen",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "group": "1_session@5"
+        },
+        {
+          "command": "agentMonitor.openTranscript",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
+          "group": "2_open@1"
+        },
+        {
+          "command": "agentMonitor.revealTranscript",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "group": "2_open@2"
+        },
+        {
+          "command": "agentMonitor.copyTranscriptPath",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bsession\\b/",
+          "group": "2_open@3"
+        },
+        {
+          "command": "agentMonitor.openTranscript",
+          "when": "view == agentMonitor.tree && viewItem =~ /\\bagent\\b/",
+          "group": "inline@1"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "agentMonitor.compact",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session' && compactable",
+          "group": "1_session@1"
+        },
+        {
+          "command": "agentMonitor.handoff",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "1_session@2"
+        },
+        {
+          "command": "agentMonitor.setAutoCompact",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "1_session@3"
+        },
+        {
+          "command": "agentMonitor.copyResume",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session' && resumable",
+          "group": "1_session@4"
+        },
+        {
+          "command": "agentMonitor.markSeen",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "1_session@5"
+        },
+        {
+          "command": "agentMonitor.openTranscript",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "2_open@1"
+        },
+        {
+          "command": "agentMonitor.revealTranscript",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "2_open@2"
+        },
+        {
+          "command": "agentMonitor.copyTranscriptPath",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "2_open@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "agentMonitor.openTranscript",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.revealTranscript",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.copyTranscriptPath",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.markSeen",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.copyResume",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.scope.all",
+          "when": "config.agentMonitor.scope == 'workspace'"
+        },
+        {
+          "command": "agentMonitor.scope.workspace",
+          "when": "config.agentMonitor.scope != 'workspace'"
+        },
+        {
+          "command": "agentMonitor.hideCompleted",
+          "when": "!config.agentMonitor.hideCompleted"
+        },
+        {
+          "command": "agentMonitor.showCompleted",
+          "when": "config.agentMonitor.hideCompleted"
+        }
+      ]
+    },
+    "colors": [
+      {
+        "id": "agentMonitor.lampWorking",
+        "description": "%color.lampWorking%",
+        "defaults": {
+          "dark": "#00AFFF",
+          "light": "#0078D4",
+          "highContrast": "#00AFFF",
+          "highContrastLight": "#005A9E"
+        }
+      },
+      {
+        "id": "agentMonitor.lampNeedsYou",
+        "description": "%color.lampNeedsYou%",
+        "defaults": {
+          "dark": "#EE2B7B",
+          "light": "#C4004F",
+          "highContrast": "#FF3D8B",
+          "highContrastLight": "#B0004A"
+        }
+      },
+      {
+        "id": "agentMonitor.lampDoneUnseen",
+        "description": "%color.lampDoneUnseen%",
+        "defaults": {
+          "dark": "#5FFF00",
+          "light": "#2E9E00",
+          "highContrast": "#5FFF00",
+          "highContrastLight": "#1F6F00"
+        }
+      },
+      {
+        "id": "agentMonitor.lampDoneSeen",
+        "description": "%color.lampDoneSeen%",
+        "defaults": {
+          "dark": "#008700",
+          "light": "#1A5C1A",
+          "highContrast": "#3FBF3F",
+          "highContrastLight": "#2D5A2D"
+        }
+      },
+      {
+        "id": "agentMonitor.lampError",
+        "description": "%color.lampError%",
+        "defaults": {
+          "dark": "#FF0000",
+          "light": "#E51400",
+          "highContrast": "#FF4D4D",
+          "highContrastLight": "#B5200D"
+        }
+      },
+      {
+        "id": "agentMonitor.lampIdle",
+        "description": "%color.lampIdle%",
+        "defaults": {
+          "dark": "#808080",
+          "light": "#767676",
+          "highContrast": "#B0B0B0",
+          "highContrastLight": "#5A5A5A"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "%config.title%",
+      "properties": {
+        "agentMonitor.scope": {
+          "type": "string",
+          "enum": [
+            "all",
+            "workspace"
+          ],
+          "enumDescriptions": [
+            "%config.scope.all%",
+            "%config.scope.workspace%"
+          ],
+          "default": "all",
+          "description": "%config.scope%",
+          "order": 1
+        },
+        "agentMonitor.followActiveChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.followActiveChat%",
+          "order": 2
+        },
+        "agentMonitor.hideCompleted": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.hideCompleted%",
+          "order": 3
+        },
+        "agentMonitor.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.showStatusBar%",
+          "order": 4
+        },
+        "agentMonitor.statusBarBackground": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.statusBarBackground%",
+          "order": 5
+        },
+        "agentMonitor.showCost": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.showCost%",
+          "order": 6
+        },
+        "agentMonitor.sessionListPosition": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "left",
+            "right"
+          ],
+          "enumDescriptions": [
+            "%config.sessionListPosition.auto%",
+            "%config.sessionListPosition.left%",
+            "%config.sessionListPosition.right%"
+          ],
+          "default": "auto",
+          "markdownDescription": "%config.sessionListPosition%",
+          "order": 7
+        },
+        "agentMonitor.refreshSeconds": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "%config.refreshSeconds%",
+          "order": 10
+        },
+        "agentMonitor.activeWindowMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "%config.activeWindowMinutes%",
+          "order": 11
+        },
+        "agentMonitor.staleMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "%config.staleMinutes%",
+          "order": 12
+        },
+        "agentMonitor.approvalGuess": {
+          "type": "string",
+          "enum": [
+            "fastTools",
+            "allTools",
+            "off"
+          ],
+          "enumDescriptions": [
+            "%config.approvalGuess.fastTools%",
+            "%config.approvalGuess.allTools%",
+            "%config.approvalGuess.off%"
+          ],
+          "default": "fastTools",
+          "markdownDescription": "%config.approvalGuess%",
+          "order": 13
+        },
+        "agentMonitor.approvalGuessSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "description": "%config.approvalGuessSeconds%",
+          "order": 14
+        },
+        "agentMonitor.claude.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.claude.enabled%",
+          "order": 20
+        },
+        "agentMonitor.claude.projectsDir": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "%config.claude.projectsDir%",
+          "order": 21
+        },
+        "agentMonitor.claude.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "%config.claude.cliPath%",
+          "order": 22
+        },
+        "agentMonitor.codex.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.codex.enabled%",
+          "order": 23
+        },
+        "agentMonitor.codex.home": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "%config.codex.home%",
+          "order": 24
+        },
+        "agentMonitor.compactConfirm": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.compactConfirm%",
+          "order": 30
+        },
+        "agentMonitor.compactTemplate": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "markdownDescription": "%config.compactTemplate%",
+          "order": 31
+        },
+        "agentMonitor.contextHintStart": {
+          "type": "number",
+          "default": 200000,
+          "minimum": 0,
+          "markdownDescription": "%config.contextHintStart%",
+          "order": 32
+        },
+        "agentMonitor.contextHintAct": {
+          "type": "number",
+          "default": 500000,
+          "minimum": 0,
+          "markdownDescription": "%config.contextHintAct%",
+          "order": 33
+        },
+        "agentMonitor.cacheReminder": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.cacheReminder%",
+          "order": 34
+        },
+        "agentMonitor.cacheReminderMinutes": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 59,
+          "description": "%config.cacheReminderMinutes%",
+          "order": 35
+        },
+        "agentMonitor.cacheReminderMinContext": {
+          "type": "number",
+          "default": 150000,
+          "minimum": 0,
+          "description": "%config.cacheReminderMinContext%",
+          "order": 36
+        },
+        "agentMonitor.cacheReminderShortTtl": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.cacheReminderShortTtl%",
+          "order": 37
+        },
+        "agentMonitor.closeReminder": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.closeReminder%",
+          "order": 38
+        },
+        "agentMonitor.postCompactHint": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.postCompactHint%",
+          "order": 39
+        },
+        "agentMonitor.onlyWorkspace": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.onlyWorkspace%",
+          "deprecationMessage": "%config.onlyWorkspace.deprecated%",
+          "order": 99
+        }
+      }
+    }
+  }
+}
