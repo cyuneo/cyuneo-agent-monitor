@@ -1,7 +1,7 @@
 {
   "scope.all": "所有工作階段",
   "scope.workspace": "目前的工作區",
-  "scope.empty.all": "最近沒有活躍的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 工作階段。",
+  "scope.empty.all": "最近沒有活躍的 Claude Code、Codex 或 Copilot 工作階段。",
   "scope.empty.workspace": "最近沒有來自目前工作區的活躍工作階段。",
   "scope.noFolder": "沒有開啟資料夾，無法比對目前工作區的工作階段。",
   "scope.showAll": "顯示所有工作階段",

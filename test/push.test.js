@@ -800,24 +800,23 @@ function trackerTests() {
     assert.deepStrictEqual(feed(tr, [s], reset + MIN, claudeHit(NOW - 2000, reset, s.key)), []);
   });
 
-  test('limitHit / limitReset (Copilot, Gemini CLI, Qwen Code): their lastHit works like Claude\'s, and the message names the tool', () => {
+  test('limitHit / limitReset (Copilot): its lastHit works like Claude\'s, and the message names the tool', () => {
     const tr = push.createPushTracker();
     const s = asking(NOW - 10 * MIN);
     const reset = NOW + 2 * HOUR;
     const hitOf = (provider, ms, resetsAtMs) => ({ ...emptyQuota(), [provider]: { lastHit: { kind: 'unknown', model: null, resetsAtMs, resetsText: null, source: 'turnError', autoContinue: null, ms, sessionKey: s.key } } });
-    feed(tr, [s], NOW, { ...emptyQuota(), copilot: { lastHit: null }, gemini: { lastHit: null }, qwen: { lastHit: null } });
+    feed(tr, [s], NOW, { ...emptyQuota(), copilot: { lastHit: null } });
     const cp = feed(tr, [s], NOW, hitOf('copilot', NOW - 2000, null));
     assert.deepStrictEqual(cp.map((e) => [e.type, e.provider, e.transitionId, e.resetAt, e.key]), [['limitHit', 'copilot', `limitHit|copilot|at${NOW - 2000}`, null, s.key]]);
-    const gm = feed(tr, [s], NOW + SEC, hitOf('gemini', NOW - 1000, reset));
-    assert.deepStrictEqual(gm.map((e) => [e.type, e.provider, e.resetAt]), [['limitHit', 'gemini', reset]]);
-    const qw = feed(tr, [s], NOW + 2 * SEC, { ...hitOf('qwen', NOW, null), gemini: hitOf('gemini', NOW - 1000, reset).gemini });
-    assert.deepStrictEqual(qw.map((e) => [e.type, e.provider]), [['limitHit', 'qwen']], 'the Gemini hit is not news any more');
-    const r = feed(tr, [s], reset + SEC, hitOf('gemini', NOW - 1000, reset));
-    assert.deepStrictEqual(r.map((e) => [e.type, e.transitionId]), [['limitReset', `limitReset|gemini|${reset}`]]);
+    assert.deepStrictEqual(feed(tr, [s], NOW + SEC, hitOf('copilot', NOW - 2000, null)), [], 'the same hit is not news any more');
+    const cr = feed(tr, [s], NOW + 2 * SEC, hitOf('copilot', NOW - 1000, reset));
+    assert.deepStrictEqual(cr.map((e) => [e.type, e.provider, e.resetAt]), [['limitHit', 'copilot', reset]]);
+    const r = feed(tr, [s], reset + SEC, hitOf('copilot', NOW - 1000, reset));
+    assert.deepStrictEqual(r.map((e) => [e.type, e.transitionId]), [['limitReset', `limitReset|copilot|${reset}`]]);
     // the tool is named in every language (never the raw id)
     for (const i18n of [en, zh, i18nLib.createI18n('ja'), i18nLib.createI18n('ko'), i18nLib.createI18n('zh-tw')]) {
-      const names = ['copilot', 'gemini', 'qwen'].map((p) => push.formatPush([{ ...cp[0], provider: p, transitionId: p }], i18n).title);
-      for (const [i, want] of [[0, 'Copilot'], [1, 'Gemini CLI'], [2, 'Qwen Code']]) assert.ok(names[i].includes(want), `${i18n.locale || ''}: ${names[i]}`);
+      const title = push.formatPush([{ ...cp[0], transitionId: 'copilot' }], i18n).title;
+      assert.ok(title.includes('Copilot'), `${i18n.locale || ''}: ${title}`);
     }
   });
 

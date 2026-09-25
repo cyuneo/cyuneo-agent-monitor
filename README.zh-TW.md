@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · **繁體中文** · [한국어](README.ko.md) · [日本語](README.ja.md)
 
-在一個地方看到你所有的 AI 程式設計聊天視窗，就在終端機旁邊：哪些智慧體正在執行、哪些需要你處理，以及每個上下文用了多少。支援 Claude Code、Codex 和 GitHub Copilot Chat，Gemini CLI 和 Qwen Code 目前是預覽。
+在一個地方看到你所有的 AI 程式設計聊天視窗，就在終端機旁邊：哪些智慧體正在執行、哪些需要你處理，以及每個上下文用了多少。支援 Claude Code、Codex 和 GitHub Copilot Chat。
 
 [**在 VS Code 中安裝**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [在 VS Code Marketplace 查看](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
@@ -37,9 +37,8 @@ Claude Code 和 Codex 現在會同時跑好幾個智慧體：子智慧體、背�
 
 - **Claude Code** 和 **Codex**：VS Code 擴充功能、命令列或桌面應用程式裡的，包括它們的子智慧體。
 - **GitHub Copilot Chat**：VS Code 內建的聊天，包括智慧體模式。
-- **Gemini CLI** 和 **Qwen Code**，目前是**預覽**。對它們的支援是依照官方公開的記錄格式做的，還沒有用真實工作階段驗證過。如果發現不對勁的地方，歡迎到 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 回報。
 
-沒安裝的工具會直接略過，每個工具也都能在設定裡個別關閉。各工具能看到的內容不完全一樣：例如 Copilot Chat 顯示的是 Copilot credits，而不是美元費用；Gemini CLI 的狀態是推測出來的。壓縮、用量歷史、今日總費用和儲存頁面只涵蓋 Claude Code 和 Codex。詳見完整使用指南裡的[支援的工具](docs/GUIDE.zh-TW.md#支援的工具)。
+沒安裝的工具會直接略過，每個工具也都能在設定裡個別關閉。各工具能看到的內容不完全一樣：例如 Copilot Chat 顯示的是 Copilot credits，而不是美元費用。壓縮、用量歷史、今日總費用和儲存頁面只涵蓋 Claude Code 和 Codex。詳見完整使用指南裡的[支援的工具](docs/GUIDE.zh-TW.md#支援的工具)。
 
 ## 開始使用
 
@@ -52,7 +51,7 @@ Claude Code 和 Codex 現在會同時跑好幾個智慧體：子智慧體、背�
 ## 系統需求
 
 - VS Code 1.94 或更高版本。
-- 在同一台電腦上使用至少一個支援的工具：Claude Code 或 Codex（VS Code 擴充功能、命令列或桌面應用程式）、VS Code 裡的 GitHub Copilot Chat、Gemini CLI 或 Qwen Code。
+- 在同一台電腦上使用至少一個支援的工具：Claude Code 或 Codex（VS Code 擴充功能、命令列或桌面應用程式），或是 VS Code 裡的 GitHub Copilot Chat。
 - 要在背景壓縮一個已關閉的聊天視窗，還需要 Claude Code 命令列。擴充功能會先在 PATH 裡找 `claude`，再到已安裝的 Claude Code 擴充功能裡找。你也可以設定 `agentMonitor.claude.cliPath`。
 - 自動化測試在 macOS、Windows 和 Linux 上執行（Node.js 22，Linux 上另有 Node.js 20）。在 VS Code 裡的實際使用測試目前只在 macOS 上做過。
 
@@ -67,7 +66,7 @@ Claude Code 和 Codex 現在會同時跑好幾個智慧體：子智慧體、背�
 
 ## 非官方聲明
 
-CYUNEO Agent Monitor 是一個獨立的、非官方的專案，與 Anthropic、OpenAI、GitHub、Microsoft、Google 或 Alibaba 沒有關聯，未獲其認可或贊助。產品名稱歸其各自所有者所有，這裡使用它們僅為說明本擴充功能所對接的對象。
+CYUNEO Agent Monitor 是一個獨立的、非官方的專案，與 Anthropic、OpenAI、GitHub 或 Microsoft 沒有關聯，未獲其認可或贊助。產品名稱歸其各自所有者所有，這裡使用它們僅為說明本擴充功能所對接的對象。
 
 ## 授權條款
 

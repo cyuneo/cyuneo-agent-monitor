@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [한국어](README.ko.md) · **日本語**
 
-すべてのAIコーディングのチャットを、ターミナルのすぐ隣で一箇所から確認できます。どのエージェントが動いているか、どれが対応待ちか、各コンテキストがどれくらい埋まっているか。Claude Code、Codex、GitHub Copilot Chatに対応し、Gemini CLIとQwen Codeにはプレビューとして対応しています。
+すべてのAIコーディングのチャットを、ターミナルのすぐ隣で一箇所から確認できます。どのエージェントが動いているか、どれが対応待ちか、各コンテキストがどれくらい埋まっているか。Claude Code、Codex、GitHub Copilot Chatに対応しています。
 
 [**VS Codeにインストール**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [Visual Studio Marketplaceで見る](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
@@ -37,9 +37,8 @@ Claude CodeとCodexは今や、複数のエージェントを同時に動かし�
 
 - **Claude Code**と**Codex**: VS Code拡張機能、コマンドライン、デスクトップアプリで、サブエージェントを含みます。
 - **GitHub Copilot Chat**: VS Codeに組み込まれたチャットで、エージェントモードを含みます。
-- **Gemini CLI**と**Qwen Code**は**プレビュー**です。公開されている記録形式をもとに作っており、まだ実際のセッションでは確認していません。おかしな点があれば、[GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues)で報告してください。
 
-インストールされていないツールはスキップされ、各ツールは設定で個別にオフにできます。ツールによって見える内容は少しずつ異なります。たとえばCopilot Chatではドル建てのコストの代わりにCopilot creditsが表示され、Gemini CLIの状態は推測です。圧縮、使用量の履歴、今日の合計コスト、保存場所のページはClaude CodeとCodexのみが対象です。詳しくは完全ガイドの[対応ツール](docs/GUIDE.ja.md#対応ツール)をご覧ください。
+インストールされていないツールはスキップされ、各ツールは設定で個別にオフにできます。ツールによって見える内容は少しずつ異なります。たとえばCopilot Chatではドル建てのコストの代わりにCopilot creditsが表示されます。圧縮、使用量の履歴、今日の合計コスト、保存場所のページはClaude CodeとCodexのみが対象です。詳しくは完全ガイドの[対応ツール](docs/GUIDE.ja.md#対応ツール)をご覧ください。
 
 ## 使い始める
 
@@ -52,7 +51,7 @@ Claude CodeとCodexは今や、複数のエージェントを同時に動かし�
 ## 必要環境
 
 - VS Code 1.94以降。
-- 同じコンピューター上で使う、対応ツールのいずれか1つ以上: Claude CodeまたはCodex（VS Code拡張機能、コマンドライン、またはデスクトップアプリ）、VS CodeのGitHub Copilot Chat、Gemini CLI、Qwen Code。
+- 同じコンピューター上で使う、対応ツールのいずれか1つ以上: Claude CodeまたはCodex（VS Code拡張機能、コマンドライン、またはデスクトップアプリ）、またはVS CodeのGitHub Copilot Chat。
 - 閉じたチャットをバックグラウンドで圧縮するには、Claude Codeのコマンドラインも必要です。拡張機能はPATH上の`claude`をまず探し、次にインストール済みのClaude Code拡張機能内を探します。`agentMonitor.claude.cliPath`を設定することもできます。
 - 自動テストはmacOS、Windows、Linuxで実行しています（Node.js 22、LinuxではNode.js 20も）。VS Code上で実際に使ってのテストは、今のところmacOSでしか行っていません。
 
@@ -67,7 +66,7 @@ Claude CodeとCodexは今や、複数のエージェントを同時に動かし�
 
 ## 非公式であることについて
 
-CYUNEO Agent Monitorは独立した非公式のプロジェクトです。Anthropic、OpenAI、GitHub、Microsoft、Google、Alibabaのいずれとも提携、承認、後援の関係はありません。製品名はそれぞれの所有者の財産であり、ここではこの拡張機能が扱う対象を説明するためだけに使用しています。
+CYUNEO Agent Monitorは独立した非公式のプロジェクトです。Anthropic、OpenAI、GitHub、Microsoftのいずれとも提携、承認、後援の関係はありません。製品名はそれぞれの所有者の財産であり、ここではこの拡張機能が扱う対象を説明するためだけに使用しています。
 
 ## ライセンス
 

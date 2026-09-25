@@ -8,7 +8,7 @@
 //   and globalThis.fetch is a fake that only records requests, so nothing ever goes out on the network.
 // - Sounds, quiet hours and threshold alerts: lib/alerts.js is the real module, but playSound runs a fake execFile that only
 //   records the command, so no sound is ever played. The usage-history page (lib/history-view.js) only records how it is opened.
-// - Go to Chat: lib/jump.js is the real module, but its process list, open-file holders, Claude live registry, Qwen pid,
+// - Go to Chat: lib/jump.js is the real module, but its process list, open-file holders, Claude live registry,
 //   window raising and osascript calls come from fakes (jumpFake), so no process is ever listed or run; terminals are fake
 //   objects in window.terminals.
 // - All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
@@ -355,7 +355,7 @@ function peerWindow(dir, cfgKey, extra = {}) {
   return rec;
 }
 
-// Go to Chat: the real lib/jump.js with a fake process list, Claude live registry and Qwen pid (tests fill jumpFake)
+// Go to Chat: the real lib/jump.js with a fake process list and Claude live registry (tests fill jumpFake)
 const realJump = require(path.join(ROOT, 'lib', 'jump'));
 // platform is darwin everywhere, so the Terminal.app / iTerm2 path runs the same on every OS (osascript is jumpFake.osa)
 const jumpFake = { procs: [], live: new Map(), holders: null, lists: 0, raised: 0, raise: true, osa: [], osaOut: 'ok', replyWaitMs: 40 };
@@ -368,7 +368,6 @@ const jumpWrap = {
     processCwds: async () => new Map(),
     fileHolders: async (file, pids) => (jumpFake.holders ? new Set(pids.filter((p) => jumpFake.holders.has(p))) : null),
     claudeLive: (id) => jumpFake.live.get(id) || null,
-    qwenPid: () => null,
     raiseWindow: async () => { jumpFake.raised++; return jumpFake.raise; },
     execFile: (cmd, args, opts, cb) => {
       jumpFake.osa.push([cmd, ...args]);
@@ -616,7 +615,7 @@ async function extensionTests() {
     assert.ok(log.webviews['agentMonitor.agents'].provider instanceof RecordingAgentsView);
     assert.strictEqual(w0.file, path.join(ROOT, 'lib', 'worker.js'));
     const cfg = w0.opts.workerData;
-    assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'cfgGen', 'claude', 'codex', 'copilot', 'gemini', 'historyCacheFile', 'intervalMs', 'observedCompact', 'paused', 'qwen', 'staleMinutes']);
+    assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'cfgGen', 'claude', 'codex', 'copilot', 'historyCacheFile', 'intervalMs', 'observedCompact', 'paused', 'staleMinutes']);
     assert.strictEqual(cfg.historyCacheFile, path.join(TMP, 'usage-history.jsonl'), 'the usage-history cache lives in global storage');
     // windows share one scan by default: the worker starts paused and resumes once this window leads (the only window here)
     assert.strictEqual(cfg.paused, true);
@@ -628,12 +627,6 @@ async function extensionTests() {
     assert.deepStrictEqual(Object.keys(cfg.claude).sort(), ['configDir', 'configDirSource', 'enabled', 'home', 'projectsDir', 'settingsPath']);
     assert.deepStrictEqual(Object.keys(cfg.codex).sort(), ['enabled', 'home', 'homeSource']);
     assert.deepStrictEqual(cfg.copilot, { enabled: true, userDir: null }, 'TMP is no …/User/globalStorage/<id> path: the provider keeps its default dirs');
-    for (const k of ['gemini', 'qwen']) {
-      assert.deepStrictEqual(Object.keys(cfg[k]).sort(), ['enabled', 'home', 'homeSource'], k);
-      assert.strictEqual(cfg[k].enabled, true, k);
-    }
-    if (!process.env.GEMINI_CLI_HOME) assert.deepStrictEqual([cfg.gemini.home, cfg.gemini.homeSource], [path.join(os.homedir(), '.gemini'), 'default']);
-    if (!process.env.QWEN_RUNTIME_DIR && !process.env.QWEN_HOME) assert.deepStrictEqual([cfg.qwen.home, cfg.qwen.homeSource], [path.join(os.homedir(), '.qwen'), 'default']);
     assert.strictEqual(cfg.claude.home, path.dirname(cfg.claude.projectsDir));
     // CLAUDE_CONFIG_DIR wins, otherwise ~/.claude; the registry and settings.json both live under it
     if (process.env.CLAUDE_CONFIG_DIR) {
@@ -3785,11 +3778,11 @@ async function manifestTests() {
   });
 
   await test('name, keywords and icon path do not contain Claude / Anthropic / Codex / OpenAI; the description carries an unofficial disclaimer', () => {
-    const banned = /claude|anthropic|codex|openai|copilot|github|gemini|google|qwen|alibaba/i;
+    const banned = /claude|anthropic|codex|openai|copilot|github/i;
     for (const s of [pkg.name, nls.displayName, pkg.icon, ...pkg.keywords]) assert.ok(!banned.test(s), `third-party name found: ${s}`);
-    assert.ok(/Unofficial; not affiliated with Anthropic, OpenAI, GitHub, Google or Alibaba Cloud\./.test(nls.description), nls.description);
+    assert.ok(/Unofficial; not affiliated with Anthropic, OpenAI or GitHub\./.test(nls.description), nls.description);
     assert.ok(/session logs/.test(nls.description) && /Claude Code/.test(nls.description) && /Codex/.test(nls.description));
-    for (const name of ['Copilot', 'Gemini CLI', 'Qwen Code']) assert.ok(nls.description.includes(name), name);
+    assert.ok(nls.description.includes('Copilot'));
   });
 
   await test('every %key% has a value in package.nls.json, with no extra keys', () => {
@@ -3931,7 +3924,7 @@ async function manifestTests() {
       ['goToChat', 'compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
     assert.deepStrictEqual(shown(row({ compactable: false, resumable: true, ...cc })),
       ['goToChat', 'handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-    // Copilot / Gemini CLI / Qwen Code rows: no handoff note and no auto-compact setting (Go to Chat is always there and says why when it can't)
+    // Copilot rows: no handoff note and no auto-compact setting (Go to Chat is always there and says why when it can't)
     assert.deepStrictEqual(shown(row({ compactable: false, resumable: false, handoff: false, autoCompact: false })),
       ['goToChat', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
     assert.deepStrictEqual(shown({}), [], 'no session menu in the content area (no webviewSection)');
@@ -3976,7 +3969,7 @@ async function manifestTests() {
       const clauses = [...it.when.matchAll(/viewItem =~ \/(.+?)\/(?:\s|$)/g)].map((m) => new RegExp(m[1].replace(/\\\\/g, '\\')));
       const ok = (provider) => clauses.every((r) => r.test(fmt.sessionContextValue({ ...fixtures()[0], provider }, 'idle')));
       assert.ok(ok('claude') && ok('codex'), cmd);
-      for (const p of ['copilot', 'gemini', 'qwen']) assert.ok(!ok(p), cmd + ' hidden for ' + p);
+      assert.ok(!ok('copilot'), cmd + ' hidden for copilot');
     }
   });
 
@@ -4027,8 +4020,7 @@ async function manifestTests() {
       approvalGuess: ['string', 'fastTools'], approvalGuessSeconds: ['number', 60],
       'claude.enabled': ['boolean', true], 'claude.projectsDir': ['string', ''], 'claude.cliPath': ['string', ''],
       'codex.enabled': ['boolean', true], 'codex.home': ['string', ''],
-      'copilot.enabled': ['boolean', true], 'gemini.enabled': ['boolean', true], 'gemini.home': ['string', ''],
-      'qwen.enabled': ['boolean', true], 'qwen.home': ['string', ''],
+      'copilot.enabled': ['boolean', true],
       compactConfirm: ['boolean', true], compactTemplate: ['string', ''],
       contextHintStart: ['number', 200000], contextHintAct: ['number', 500000],
       sessionListPosition: ['string', 'auto'],
@@ -4061,7 +4053,7 @@ async function manifestTests() {
     assert.ok(nls['config.sessionListPosition'].includes('#terminal.integrated.tabs.location#'), 'description links to the terminal setting');
     assert.ok(props['agentMonitor.onlyWorkspace'].deprecationMessage);
     // settings that point to programs / directories can only be set in user settings (machine scope), so workspace settings cannot swap the program that gets executed
-    for (const k of ['claude.cliPath', 'claude.projectsDir', 'codex.home', 'gemini.home', 'qwen.home']) {
+    for (const k of ['claude.cliPath', 'claude.projectsDir', 'codex.home']) {
       assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
       assert.ok(pkg.capabilities.untrustedWorkspaces.restrictedConfigurations.includes('agentMonitor.' + k), `${k} is not restricted`);
     }
@@ -4183,13 +4175,13 @@ async function manifestTests() {
 }
 
 // ---------------------------------------------------------------------------
-// Copilot, Gemini CLI, Qwen Code: settings → worker config, Copilot's user dir, workspace scope
+// Copilot: settings → worker config, Copilot's user dir, workspace scope
 // ---------------------------------------------------------------------------
 
 async function providerTests() {
   const { vscodeUserDir } = require(EXT_FILE)._internal;
 
-  await test('provider settings: Copilot user dir from global storage (profiles too), else null; Gemini / Qwen homes from the settings (~ expanded) or the defaults', () => {
+  await test('provider settings: Copilot user dir from global storage (profiles too), else null', () => {
     const U = path.join(TMP, 'Code', 'User');
     const id = 'cyuneo.cyuneo-agent-monitor';
     assert.strictEqual(vscodeUserDir(Uri.file(path.join(U, 'globalStorage', id))), U);
@@ -4198,12 +4190,10 @@ async function providerTests() {
       assert.strictEqual(vscodeUserDir(bad), null, JSON.stringify(bad));
     }
     const name = path.join('Code', 'User', 'globalStorage', id);
-    const win = activateWindow(name, { 'gemini.home': '~/gem-home', 'qwen.enabled': false, 'qwen.home': '/data/qwen' });
+    const win = activateWindow(name);
     try {
       const cfg = win.worker.opts.workerData;
       assert.deepStrictEqual(cfg.copilot, { enabled: true, userDir: U });
-      assert.deepStrictEqual(cfg.gemini, { enabled: true, home: path.join(os.homedir(), 'gem-home'), homeSource: 'setting' });
-      assert.deepStrictEqual(cfg.qwen, { enabled: false, home: '/data/qwen', homeSource: 'setting' });
     } finally {
       win.close();
     }
@@ -4214,9 +4204,7 @@ async function providerTests() {
     try {
       const w = win.w();
       const key0 = win.ctl.cfgKey();
-      const cases = [['copilot.enabled', false, (c) => c.copilot.enabled === false], ['gemini.enabled', false, (c) => c.gemini.enabled === false],
-        ['gemini.home', '/g/home', (c) => c.gemini.home === '/g/home'], ['qwen.enabled', false, (c) => c.qwen.enabled === false],
-        ['qwen.home', '/q/home', (c) => c.qwen.home === '/q/home' && c.qwen.homeSource === 'setting']];
+      const cases = [['copilot.enabled', false, (c) => c.copilot.enabled === false]];
       for (const [k, v, ok] of cases) {
         const n = w.messages.length;
         setConfig(k, v);
@@ -4230,7 +4218,7 @@ async function providerTests() {
     }
   });
 
-  await test('workspace scope: a Copilot chat belongs to the window whose workspace storage holds it, or by cwd; Gemini / Qwen by cwd', () => {
+  await test('workspace scope: a Copilot chat belongs to the window whose workspace storage holds it, or by cwd', () => {
     const U = path.join(TMP, 'Code', 'User');
     const here = path.join(U, 'workspaceStorage', 'aaa111');
     const win = activateWindow('win-provider-scope', { scope: 'workspace' }, { storageUri: Uri.file(path.join(here, 'cyuneo.cyuneo-agent-monitor')) });
@@ -4242,11 +4230,9 @@ async function providerTests() {
         mk('copilot', 'cp-other', { transcript: path.join(U, 'workspaceStorage', 'bbb222', 'chatSessions', 'cp-other.jsonl'), copilot: { storage: 'workspace', workspaceFile: null } }),
         mk('copilot', 'cp-cwd', { cwd: WS, transcript: path.join(U, 'workspaceStorage', 'ccc333', 'chatSessions', 'cp-cwd.jsonl'), copilot: { storage: 'workspace', workspaceFile: null } }),
         mk('copilot', 'cp-empty', { transcript: path.join(U, 'globalStorage', 'emptyWindowChatSessions', 'cp-empty.jsonl'), copilot: { storage: 'emptyWindow', workspaceFile: null } }),
-        mk('gemini', 'gm-here', { cwd: path.join(WS, 'pkg') }),
-        mk('qwen', 'qw-other', { cwd: '/elsewhere' }),
       ];
       win.send(list);
-      assert.deepStrictEqual(win.ctl.scoped.map((s) => s.id).sort(), ['cp-cwd', 'cp-here', 'gm-here']);
+      assert.deepStrictEqual(win.ctl.scoped.map((s) => s.id).sort(), ['cp-cwd', 'cp-here']);
     } finally {
       win.close();
     }
@@ -4261,7 +4247,7 @@ async function providerTests() {
     results.push(false);
     console.log('  FAIL  (extension tests aborted)', err && err.stack);
   }
-  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Network access', networkTests], ['Copilot, Gemini CLI, Qwen Code', providerTests]]) {
+  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Network access', networkTests], ['Copilot', providerTests]]) {
     console.log(`\n${title}`);
     try {
       await fn();

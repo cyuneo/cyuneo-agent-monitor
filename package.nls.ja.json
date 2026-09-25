@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "すべてのClaude Code、Codex、Copilot、Gemini CLI、Qwen Codeのチャットをターミナルの隣で確認できます。どのエージェントが動いているか、どれが対応待ちか、各コンテキストがどれくらい埋まっているかがわかります。安いモデルでの圧縮、キャッシュが切れる前の通知、使用量の上限後の再開に対応しています。ローカルのセッション記録を読むだけで、ネットワークアクセスを許可しない限り（既定はオフ）、拡張機能自体はネットワークに接続しません。現在これを使うのはオプションのプッシュ通知だけです。非公式であり、Anthropic、OpenAI、GitHub、Google、Alibaba Cloudとは提携していません。個人および非商用目的は無料です。商用目的には別途ライセンスが必要です。",
-  "capabilities.untrusted": "制限モードでは、他のフォルダーやプログラムを指す設定（Claude Code CLIのパス、Claudeプロジェクトフォルダー、Codex・Gemini CLI・Qwen Codeのフォルダー）はユーザー設定からのみ読み込まれます。プッシュ通知の設定とネットワークアクセスの設定は常にユーザー設定からのみ読み込まれます。",
+  "description": "すべてのClaude Code、Codex、Copilotのチャットをターミナルの隣で確認できます。どのエージェントが動いているか、どれが対応待ちか、各コンテキストがどれくらい埋まっているかがわかります。安いモデルでの圧縮、キャッシュが切れる前の通知、使用量の上限後の再開に対応しています。ローカルのセッション記録を読むだけで、ネットワークアクセスを許可しない限り（既定はオフ）、拡張機能自体はネットワークに接続しません。現在これを使うのはオプションのプッシュ通知だけです。非公式であり、Anthropic、OpenAI、GitHubとは提携していません。個人および非商用目的は無料です。商用目的には別途ライセンスが必要です。",
+  "capabilities.untrusted": "制限モードでは、他のフォルダーやプログラムを指す設定（Claude Code CLIのパス、Claudeプロジェクトフォルダー、Codexのフォルダー）はユーザー設定からのみ読み込まれます。プッシュ通知の設定とネットワークアクセスの設定は常にユーザー設定からのみ読み込まれます。",
 
   "container.title": "エージェントモニター",
   "view.overview": "概要",
@@ -9,7 +9,7 @@
   "category": "エージェントモニター",
 
   "welcome.loading": "ローカルのエージェントのセッション記録を読み込み中…",
-  "welcome.empty.all": "最近アクティブな Claude Code、Codex、Copilot、Gemini CLI、Qwen Code のセッションはありません。",
+  "welcome.empty.all": "最近アクティブな Claude Code、Codex、Copilot のセッションはありません。",
   "welcome.empty.workspace": "最近このワークスペースでアクティブなセッションはありません。",
   "welcome.noFolder": "フォルダーが開かれていないため、このワークスペースに一致するセッションはありません。",
   "welcome.openSettings": "設定を開く",
@@ -79,10 +79,6 @@
   "config.codex.enabled": "Codexのセッション記録を読み込みます。",
   "config.codex.home": "Codexのホームフォルダーです。空欄の場合は`$CODEX_HOME`または`~/.codex`を使用します。",
   "config.copilot.enabled": "VS Codeが保存するGitHub Copilot Chatのセッション記録（チャットとエージェントモード）を読み込みます。",
-  "config.gemini.enabled": "Gemini CLIのセッション記録を読み込みます。",
-  "config.gemini.home": "Gemini CLIのフォルダーです。空欄の場合は`$GEMINI_CLI_HOME/.gemini`または`~/.gemini`を使用します。",
-  "config.qwen.enabled": "Qwen Codeのセッション記録を読み込みます。",
-  "config.qwen.home": "Qwen Codeのフォルダーです。空欄の場合は`$QWEN_RUNTIME_DIR`、`$QWEN_HOME`または`~/.qwen`を使用します。",
   "config.compactConfirm": "閉じたセッションをバックグラウンドで圧縮する前に確認を求めます。",
   "config.compactTemplate": "セッションを圧縮するときに`/compact`の後に事前入力されるテキストです（要約が必ず残すべき内容）。空欄の場合は表示言語に応じた組み込みテンプレートを使用します。",
   "config.contextHintStart": "ウィンドウが50万トークン以上のモデルの場合: コンテキストがこのトークン数を超えたら、次の良い区切りで圧縮または新しいセッションの開始を提案します。",
@@ -98,7 +94,7 @@
   "config.push.events": "プッシュがオンのとき、どのイベントでプッシュを送るかを選びます。",
   "config.push.events.needsYou": "エージェントが返信や承認を待っている（待ち時間を過ぎてもまだ待っている場合のみ）。",
   "config.push.events.error": "エージェントが API エラーで停止した。",
-  "config.push.events.limitHit": "Claude Code、Codex、Copilot、Gemini CLI、Qwen Code のいずれかの使用上限に達した。",
+  "config.push.events.limitHit": "Claude Code、Codex、Copilot のいずれかの使用上限に達した。",
   "config.push.events.limitReset": "使用上限がリセットされた。",
   "config.push.events.usageHigh": "使用量ウィンドウが使用量アラートの割合に達した。",
   "config.push.events.costDaily": "今日の推定コストが1日の予算を超えた（金額は送りません）。",

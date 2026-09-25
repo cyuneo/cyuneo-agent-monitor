@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · **한국어** · [日本語](README.ja.md)
 
-터미널 바로 옆에서 모든 AI 코딩 채팅을 한눈에 확인하세요: 어떤 에이전트가 작업 중인지, 어떤 것이 확인을 기다리는지, 각 컨텍스트가 얼마나 찼는지. Claude Code, Codex, GitHub Copilot Chat을 지원하며, Gemini CLI와 Qwen Code는 프리뷰로 지원합니다.
+터미널 바로 옆에서 모든 AI 코딩 채팅을 한눈에 확인하세요: 어떤 에이전트가 작업 중인지, 어떤 것이 확인을 기다리는지, 각 컨텍스트가 얼마나 찼는지. Claude Code, Codex, GitHub Copilot Chat을 지원합니다.
 
 [**VS Code에 설치**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [Visual Studio Marketplace에서 보기](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
@@ -37,9 +37,8 @@ Claude Code와 Codex는 이제 여러 에이전트를 동시에 실행합니다.
 
 - **Claude Code**와 **Codex**: VS Code 확장 프로그램, 명령줄, 데스크톱 앱에서, 서브에이전트를 포함합니다.
 - **GitHub Copilot Chat**: VS Code 내장 채팅으로, 에이전트 모드를 포함합니다.
-- **Gemini CLI**와 **Qwen Code**는 **프리뷰**입니다. 공개된 기록 형식을 바탕으로 만들었고, 아직 실제 세션으로 확인하지 않았습니다. 이상한 점이 보이면 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues)에 알려 주세요.
 
-설치되지 않은 도구는 건너뛰며, 각 도구는 설정에서 따로 끌 수 있습니다. 도구마다 볼 수 있는 내용이 조금씩 다릅니다. 예를 들어 Copilot Chat은 달러 비용 대신 Copilot credits를 표시하고, Gemini CLI의 상태는 추측입니다. 압축, 사용량 기록, 오늘의 합계 비용, 저장 위치 페이지는 Claude Code와 Codex만 다룹니다. 자세한 내용은 전체 가이드의 [지원 도구](docs/GUIDE.ko.md#지원-도구)를 참고하세요.
+설치되지 않은 도구는 건너뛰며, 각 도구는 설정에서 따로 끌 수 있습니다. 도구마다 볼 수 있는 내용이 조금씩 다릅니다. 예를 들어 Copilot Chat은 달러 비용 대신 Copilot credits를 표시합니다. 압축, 사용량 기록, 오늘의 합계 비용, 저장 위치 페이지는 Claude Code와 Codex만 다룹니다. 자세한 내용은 전체 가이드의 [지원 도구](docs/GUIDE.ko.md#지원-도구)를 참고하세요.
 
 ## 시작하기
 
@@ -52,7 +51,7 @@ Claude Code와 Codex는 이제 여러 에이전트를 동시에 실행합니다.
 ## 요구 사항
 
 - VS Code 1.94 이상.
-- 같은 컴퓨터에서 사용하는 지원 도구 하나 이상: Claude Code 또는 Codex(VS Code 확장 프로그램, 명령줄, 또는 데스크톱 앱), VS Code의 GitHub Copilot Chat, Gemini CLI, Qwen Code.
+- 같은 컴퓨터에서 사용하는 지원 도구 하나 이상: Claude Code 또는 Codex(VS Code 확장 프로그램, 명령줄, 또는 데스크톱 앱), 또는 VS Code의 GitHub Copilot Chat.
 - 닫힌 채팅을 백그라운드에서 압축하려면 Claude Code 명령줄도 필요합니다. 확장 프로그램은 PATH에서 `claude`를 먼저 찾고, 그다음 설치된 Claude Code 확장 프로그램에서 찾습니다. `agentMonitor.claude.cliPath`를 직접 설정할 수도 있습니다.
 - 자동 테스트는 macOS, Windows, Linux에서 실행됩니다(Node.js 22, Linux에서는 Node.js 20도). VS Code 안에서 직접 사용해 본 테스트는 아직 macOS에서만 했습니다.
 
@@ -67,7 +66,7 @@ Claude Code와 Codex는 이제 여러 에이전트를 동시에 실행합니다.
 
 ## 비공식 프로젝트임을 알림
 
-CYUNEO Agent Monitor는 독립적인 비공식 프로젝트입니다. Anthropic, OpenAI, GitHub, Microsoft, Google, Alibaba와 제휴, 승인, 후원 관계가 없습니다. 제품명은 각 소유자의 자산이며, 여기서는 이 확장 프로그램이 다루는 대상을 설명하기 위해서만 사용합니다.
+CYUNEO Agent Monitor는 독립적인 비공식 프로젝트입니다. Anthropic, OpenAI, GitHub, Microsoft와 제휴, 승인, 후원 관계가 없습니다. 제품명은 각 소유자의 자산이며, 여기서는 이 확장 프로그램이 다루는 대상을 설명하기 위해서만 사용합니다.
 
 ## 라이선스
 

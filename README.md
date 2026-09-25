@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [한국어](README.ko.md) · [日本語](README.ja.md)
 
-See all your AI coding chats in one place, next to your terminal: which agents are working, which ones need you, and how full each context is. Works with Claude Code, Codex and GitHub Copilot Chat, and, as a preview, Gemini CLI and Qwen Code.
+See all your AI coding chats in one place, next to your terminal: which agents are working, which ones need you, and how full each context is. Works with Claude Code, Codex and GitHub Copilot Chat.
 
 [**Install in VS Code**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [View on the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
@@ -37,9 +37,8 @@ It only reads the records the supported tools already write on your computer, an
 
 - **Claude Code** and **Codex**, in the VS Code extension, the command line or the desktop app, including their subagents.
 - **GitHub Copilot Chat**: VS Code's built-in chat, agent mode included.
-- **Gemini CLI** and **Qwen Code**, as a **preview**. Support for them is built from their published record formats and hasn't been checked against real sessions yet. If something looks wrong, please report it in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
 
-Tools that aren't installed are skipped, and each one can be turned off in the settings. What the extension can see differs between tools: for example, Copilot Chat shows Copilot credits instead of a dollar cost, and Gemini CLI's states are guesses. Compacting, usage history, today's total cost and the storage page cover only Claude Code and Codex. Details: [Supported tools](docs/GUIDE.md#supported-tools) in the full guide.
+Tools that aren't installed are skipped, and each one can be turned off in the settings. What the extension can see differs between tools: for example, Copilot Chat shows Copilot credits instead of a dollar cost. Compacting, usage history, today's total cost and the storage page cover only Claude Code and Codex. Details: [Supported tools](docs/GUIDE.md#supported-tools) in the full guide.
 
 ## Get started
 
@@ -52,7 +51,7 @@ Every feature, command and setting is explained in the **[full guide](docs/GUIDE
 ## Requirements
 
 - VS Code 1.94 or later.
-- At least one supported tool, used on the same computer: Claude Code or Codex (VS Code extension, command line or desktop app), GitHub Copilot Chat in VS Code, Gemini CLI or Qwen Code.
+- At least one supported tool, used on the same computer: Claude Code or Codex (VS Code extension, command line or desktop app), or GitHub Copilot Chat in VS Code.
 - To compact a closed chat in the background, you also need the Claude Code command line. The extension looks for `claude` on your PATH, then in the installed Claude Code extension. You can also set `agentMonitor.claude.cliPath`.
 - The automated tests run on macOS, Windows and Linux (Node.js 22, and also Node.js 20 on Linux). Hands-on testing inside VS Code has only been done on macOS so far.
 
@@ -67,7 +66,7 @@ Every feature, command and setting is explained in the **[full guide](docs/GUIDE
 
 ## Unofficial
 
-CYUNEO Agent Monitor is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, GitHub, Microsoft, Google or Alibaba. Product names are the property of their respective owners and are used here only to describe what the extension works with.
+CYUNEO Agent Monitor is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, GitHub or Microsoft. Product names are the property of their respective owners and are used here only to describe what the extension works with.
 
 ## License
 

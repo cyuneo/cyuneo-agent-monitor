@@ -35,8 +35,6 @@
   "status.apiError": "API error",
   "status.apiError.http": "API error ({http})",
   "status.guess.note": "Guessed: a quick tool has had no result for a while, which usually means it is waiting for permission.",
-  "status.guessed": "~{status}",
-  "status.guess.timing": "Guessed from when the session log was last written. This tool doesn't record whether it is still working, so this can be briefly wrong.",
   "status.lag.copilot": "VS Code saves Copilot chats about once a minute, so this status can lag by up to about 60 seconds.",
 
   "step.tool": "{tool} {detail}",
@@ -105,7 +103,7 @@
   "cost.label": "API-equivalent cost",
   "cost.note": "Estimated from token counts at list API prices ({date}). Subscription plans are not billed this way; this is only for comparison.",
   "cost.today": "Today",
-  "cost.today.scope": "Today's total counts Claude Code and Codex only; Copilot, Gemini CLI and Qwen Code aren't included.",
+  "cost.today.scope": "Today's total counts Claude Code and Codex only; Copilot isn't included.",
   "cost.unpriced": "No public price",
   "cost.unpricedTokens": "{tokens} tokens from models without a public price",
   "cost.estimated": "est.",
@@ -131,7 +129,6 @@
   "ctx.trigger.manual": "manually",
   "ctx.compactUnknown": "This tool doesn't report when it auto-compacts, so usage is shown against the full window.",
   "ctx.src.copilotModel": "from the model info VS Code keeps with this chat",
-  "ctx.src.qwenRecord": "from the Qwen Code session log",
   "ctx.unknown": "Token usage not recorded",
   "ctx.unknown.note": "No token counts were recorded for this chat, so its context use is unknown.",
   "ctx.unknown.sub": "Copilot doesn't record token counts for sub-agents.",
@@ -186,19 +183,14 @@
   "entry.sdk": "SDK",
   "entry.exec": "Non-interactive",
   "entry.other": "Other",
-  "entry.openGuess": "probably open",
-  "entry.notOpenGuess": "probably not open",
 
   "provider.claude": "Claude",
   "provider.codex": "Codex",
   "provider.copilot": "Copilot",
-  "provider.gemini": "Gemini CLI",
-  "provider.qwen": "Qwen Code",
 
   "count.tokens": "{n} tokens",
   "count.toolCalls": "Tool calls: {n}",
   "count.toolErrors": "Tool errors: {n}",
   "count.filesChanged": "Files changed: {n}",
-  "count.apiCalls": "API calls: {n}",
-  "count.breakdown": "Input {input} (cached {cached}) · thoughts {thoughts} · tool use {tool}"
+  "count.apiCalls": "API calls: {n}"
 }

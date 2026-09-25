@@ -35,8 +35,6 @@
   "status.apiError": "API 오류",
   "status.apiError.http": "API 오류 ({http})",
   "status.guess.note": "추측: 빠른 도구가 한동안 결과를 반환하지 않았습니다. 보통 권한 승인을 기다리는 상태입니다.",
-  "status.guessed": "~{status}",
-  "status.guess.timing": "세션 로그가 마지막으로 기록된 시각으로 추측한 상태입니다. 이 도구는 아직 작업 중인지 기록하지 않으므로 잠시 틀릴 수 있습니다.",
   "status.lag.copilot": "VS Code는 Copilot 채팅을 약 1분마다 저장하므로 이 상태는 최대 약 60초 늦을 수 있습니다.",
 
   "step.tool": "{tool} {detail}",
@@ -105,7 +103,7 @@
   "cost.label": "API 환산 비용",
   "cost.note": "토큰 수와 공개 API 가격({date} 기준)으로 추정한 값입니다. 구독 요금제는 이렇게 청구되지 않으며, 비교 목적으로만 참고하세요.",
   "cost.today": "오늘",
-  "cost.today.scope": "오늘 합계에는 Claude Code와 Codex만 포함되며 Copilot, Gemini CLI, Qwen Code는 포함되지 않습니다.",
+  "cost.today.scope": "오늘 합계에는 Claude Code와 Codex만 포함되며 Copilot은 포함되지 않습니다.",
   "cost.unpriced": "공개 가격 없음",
   "cost.unpricedTokens": "공개 가격이 없는 모델에서 사용한 {tokens} 토큰",
   "cost.estimated": "추정",
@@ -131,7 +129,6 @@
   "ctx.trigger.manual": "수동으로",
   "ctx.compactUnknown": "이 도구는 자동 압축 시점을 알려 주지 않으므로 전체 창 기준으로 사용량을 표시합니다.",
   "ctx.src.copilotModel": "VS Code가 이 채팅과 함께 저장한 모델 정보에서",
-  "ctx.src.qwenRecord": "Qwen Code 세션 로그에서",
   "ctx.unknown": "토큰 사용량 기록 없음",
   "ctx.unknown.note": "이 채팅에는 토큰 수가 기록되지 않아 컨텍스트 사용량을 알 수 없습니다.",
   "ctx.unknown.sub": "Copilot은 서브에이전트의 토큰 수를 기록하지 않습니다.",
@@ -186,19 +183,14 @@
   "entry.sdk": "SDK",
   "entry.exec": "비대화형",
   "entry.other": "기타",
-  "entry.openGuess": "열려 있을 가능성 높음",
-  "entry.notOpenGuess": "닫혔을 가능성 높음",
 
   "provider.claude": "Claude",
   "provider.codex": "Codex",
   "provider.copilot": "Copilot",
-  "provider.gemini": "Gemini CLI",
-  "provider.qwen": "Qwen Code",
 
   "count.tokens": "{n} 토큰",
   "count.toolCalls": "도구 호출 {n}회",
   "count.toolErrors": "도구 오류 {n}회",
   "count.filesChanged": "파일 {n}개 변경",
-  "count.apiCalls": "API 호출 {n}회",
-  "count.breakdown": "입력 {input}(캐시 {cached}) · 생각 {thoughts} · 도구 사용 {tool}"
+  "count.apiCalls": "API 호출 {n}회"
 }

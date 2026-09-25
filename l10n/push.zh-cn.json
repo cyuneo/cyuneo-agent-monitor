@@ -88,8 +88,6 @@
   "push.provider.claude": "Claude Code",
   "push.provider.codex": "Codex",
   "push.provider.copilot": "Copilot",
-  "push.provider.gemini": "Gemini CLI",
-  "push.provider.qwen": "Qwen Code",
   "push.event.needsYou": "智能体在等你",
   "push.event.error": "智能体因 API 出错停止",
   "push.event.limitHit": "额度用完",

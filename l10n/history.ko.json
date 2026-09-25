@@ -57,5 +57,5 @@
   "history.note.local": "날짜는 이 컴퓨터의 현지 시간을 기준으로 나눕니다.",
   "history.note.retention": "이 컴퓨터에 남아 있는 대화 기록만 계산합니다. Claude Code는 정리 기간(기본 30일)이 지나면 오래된 기록을 삭제하므로, 오래된 날짜는 실제보다 적게 보일 수 있습니다.",
   "history.note.columns": "입력에는 캐시 읽기가 포함되지 않습니다. Codex는 추론을 출력에 포함하고, Claude Code는 추론을 따로 기록하지 않습니다.",
-  "history.note.scope": "여기에는 Claude Code와 Codex만 집계되며 Copilot, Gemini CLI, Qwen Code는 포함되지 않습니다."
+  "history.note.scope": "여기에는 Claude Code와 Codex만 집계되며 Copilot은 포함되지 않습니다."
 }

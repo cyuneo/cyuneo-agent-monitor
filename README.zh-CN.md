@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文** · [繁體中文](README.zh-TW.md) · [한국어](README.ko.md) · [日本語](README.ja.md)
 
-在一个地方看到你所有的 AI 编程聊天窗口，就在终端旁边：哪些智能体在运行，哪些需要你处理，每个上下文用了多少。支持 Claude Code、Codex 和 GitHub Copilot Chat，Gemini CLI 和 Qwen Code 目前是预览。
+在一个地方看到你所有的 AI 编程聊天窗口，就在终端旁边：哪些智能体在运行，哪些需要你处理，每个上下文用了多少。支持 Claude Code、Codex 和 GitHub Copilot Chat。
 
 [**在 VS Code 中安装**](https://vscode.dev/redirect?url=vscode:extension/cyuneo.cyuneo-agent-monitor) · [在 VS Code 市场查看](https://marketplace.visualstudio.com/items?itemName=cyuneo.cyuneo-agent-monitor)
 
@@ -37,9 +37,8 @@ Claude Code 和 Codex 现在会同时跑好几个智能体：子智能体、后�
 
 - **Claude Code** 和 **Codex**：VS Code 扩展、命令行或桌面应用里的，包括它们的子智能体。
 - **GitHub Copilot Chat**：VS Code 内置的聊天，包括智能体模式。
-- **Gemini CLI** 和 **Qwen Code**，目前是**预览**。对它们的支持是按官方公开的记录格式做的，还没有拿真实会话验证过。发现不对劲的地方，欢迎到 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 反馈。
 
-没安装的工具会直接跳过，每个工具也都能在设置里单独关闭。各工具能看到的内容不完全一样：比如 Copilot Chat 显示的是 Copilot credits，而不是美元费用；Gemini CLI 的状态是推测出来的。压缩、用量历史、今日总费用和存储页面只覆盖 Claude Code 和 Codex。详见完整使用指南里的[支持的工具](docs/GUIDE.zh-CN.md#支持的工具)。
+没安装的工具会直接跳过，每个工具也都能在设置里单独关闭。各工具能看到的内容不完全一样：比如 Copilot Chat 显示的是 Copilot credits，而不是美元费用。压缩、用量历史、今日总费用和存储页面只覆盖 Claude Code 和 Codex。详见完整使用指南里的[支持的工具](docs/GUIDE.zh-CN.md#支持的工具)。
 
 ## 开始使用
 
@@ -52,7 +51,7 @@ Claude Code 和 Codex 现在会同时跑好几个智能体：子智能体、后�
 ## 系统要求
 
 - VS Code 1.94 或更高版本。
-- 在同一台电脑上使用至少一个支持的工具：Claude Code 或 Codex（VS Code 扩展、命令行或桌面应用）、VS Code 里的 GitHub Copilot Chat、Gemini CLI 或 Qwen Code。
+- 在同一台电脑上使用至少一个支持的工具：Claude Code 或 Codex（VS Code 扩展、命令行或桌面应用），或者 VS Code 里的 GitHub Copilot Chat。
 - 要在后台压缩一个已关闭的聊天窗口，还需要 Claude Code 命令行。扩展会先在 PATH 里找 `claude`，再到已安装的 Claude Code 扩展里找。你也可以设置 `agentMonitor.claude.cliPath`。
 - 自动化测试在 macOS、Windows 和 Linux 上运行（Node.js 22，Linux 上还有 Node.js 20）。在 VS Code 里的实际使用测试目前只在 macOS 上做过。
 
@@ -67,7 +66,7 @@ Claude Code 和 Codex 现在会同时跑好几个智能体：子智能体、后�
 
 ## 非官方声明
 
-CYUNEO Agent Monitor 是一个独立的、非官方的项目，与 Anthropic、OpenAI、GitHub、Microsoft、Google 或 Alibaba 没有关联，未获其认可或赞助。产品名称归其各自所有者所有，这里使用它们仅为说明本扩展所对接的对象。
+CYUNEO Agent Monitor 是一个独立的、非官方的项目，与 Anthropic、OpenAI、GitHub 或 Microsoft 没有关联，未获其认可或赞助。产品名称归其各自所有者所有，这里使用它们仅为说明本扩展所对接的对象。
 
 ## 许可证
 

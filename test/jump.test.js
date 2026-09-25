@@ -55,7 +55,6 @@ function env(o = {}) {
     processCwds: async () => o.cwds === undefined ? new Map() : o.cwds,
     fileHolders: async (file, pids) => (o.holders ? new Set(pids.filter((p) => o.holders.has(p))) : null),
     claudeLive: (id) => (o.live || {})[id] || null,
-    qwenPid: () => o.qwenPid || null,
     local: { hostPid: 100, terminals: [], folders: ['/w/here'], ...(o.local || {}) },
     windows: o.windows || [],
   };
@@ -206,7 +205,7 @@ test('placesOf / findOwner: this window\'s places come first (a stale record of 
 
 // ---------- Finding CLI processes ----------
 
-test('isAgentProcess: Codex / Gemini CLIs (binary, npm script, quoted Windows path); not editor-bundled binaries, codex app-server, CodexBar or other programs', () => {
+test('isAgentProcess: Codex CLI (binary, npm script, quoted Windows path); not editor-bundled binaries, codex app-server, CodexBar or other programs', () => {
   const yes = (tool, cmd) => assert.ok(I.isAgentProcess(tool, cmd), `${tool}: ${cmd}`);
   const no = (tool, cmd) => assert.ok(!I.isAgentProcess(tool, cmd), `not ${tool}: ${cmd}`);
   yes('codex', '/opt/homebrew/bin/codex --full-auto');
@@ -217,10 +216,9 @@ test('isAgentProcess: Codex / Gemini CLIs (binary, npm script, quoted Windows pa
   no('codex', '/opt/homebrew/bin/codex app-server');
   no('codex', '/Applications/CodexBar.app/Contents/MacOS/CodexBar');
   no('codex', 'vim codex.md');
-  yes('gemini', 'node /opt/homebrew/bin/gemini');
-  yes('gemini', 'node --no-warnings /x/node_modules/@google/gemini-cli/dist/index.js');
-  no('gemini', 'node /x/gemini-helper.js');
-  no('qwen', '/bin/qwen');
+  yes('codex', 'node --no-warnings /opt/homebrew/bin/codex');
+  no('codex', 'node /x/my-codex.js');
+  no('aider', '/bin/aider');
   assert.ok(I.isCodexAppServer('/Users/x/.vscode/extensions/openai.chatgpt-26.1.0/bin/macos-aarch64/codex app-server'));
   assert.ok(!I.isCodexAppServer('/opt/homebrew/bin/codex'));
   assert.deepStrictEqual(I.splitCommand('"a b" c  "" d'), ['a b', 'c', '', 'd']);
@@ -255,8 +253,6 @@ test('resolverFor / worthTrying: one resolver per target; live-certain targets n
   assert.strictEqual(r({ provider: 'codex', entry: 'vscode' }), 'codexVscode');
   assert.strictEqual(r({ provider: 'codex', entry: 'desktop' }), 'codexDesktop');
   assert.strictEqual(r({ provider: 'codex', entry: 'exec' }), 'codexCli');
-  assert.strictEqual(r({ provider: 'gemini', entry: 'cli' }), 'geminiCli');
-  assert.strictEqual(r({ provider: 'qwen', entry: 'cli' }), 'qwenCli');
   assert.strictEqual(r({ provider: 'copilot', entry: 'vscode' }), 'copilot');
   assert.deepStrictEqual(J.resolverFor({ provider: 'aider' }), { id: 'unknown', unsupported: 'aider' });
   const w = (s) => J.worthTrying(s, NOW);
@@ -301,7 +297,7 @@ test('planJump, CLI in a terminal: this window\'s or another window\'s integrate
   assert.deepStrictEqual(await plan([proc(600, 1, '/usr/sbin/sshd'), proc(601, 600, '/x/claude')], 601), { ok: false, reason: REASON.EXTERNAL, target: 'claudeCli' });
 });
 
-test('planJump: a registry pid whose process started after the session registered it was reused → notRunning (Claude VS Code / CLI, Qwen); an older process is still the agent', async () => {
+test('planJump: a registry pid whose process started after the session registered it was reused → notRunning (Claude VS Code / CLI); an older process is still the agent', async () => {
   const base = [proc(1, 0, '/sbin/launchd'), proc(100, 1, CODE), proc(50, 1, PTY), proc(110, 50, '/bin/zsh')];
   const vs = { provider: 'claude', id: UUID, entry: 'vscode', entrypoint: 'claude-vscode', live: true };
   const cli = { provider: 'claude', id: UUID, entry: 'cli', entrypoint: 'cli', live: true };
@@ -311,12 +307,11 @@ test('planJump: a registry pid whose process started after the session registere
   assert.strictEqual((await J.planJump(cli, env({ procs: young, local: { terminals: [110] }, live: live(111) }))).reason, REASON.NOT_RUNNING);
   const old = [...base, proc(101, 100, '/x/claude', { startMs: NOW - HOUR - 1500 })];
   assert.ok((await J.planJump(vs, env({ procs: old, live: live(101) }))).ok, 'started (just) before it registered: the agent');
-  const qw = { provider: 'qwen', id: 'q1', entry: 'cli', live: true };
-  const qprocs = [...base, proc(122, 110, 'node /x/qwen', { startMs: NOW - 60e3 })];
-  const q = (startedMs) => J.planJump(qw, { ...env({ procs: qprocs, local: { terminals: [110] } }), qwenPid: () => ({ pid: 122, startedMs }) });
-  assert.strictEqual((await q(NOW - HOUR)).reason, REASON.NOT_RUNNING);
-  assert.strictEqual((await q(NOW - 61e3)).action.pid, 110);
-  assert.strictEqual((await q(null)).action.pid, 110, 'no start time in runtime.json: no check');
+  const cprocs = [...base, proc(122, 110, '/x/claude', { startMs: NOW - 60e3 })];
+  const c = (startedAt) => J.planJump(cli, env({ procs: cprocs, local: { terminals: [110] }, live: { [UUID]: { pid: 122, startedAt } } }));
+  assert.strictEqual((await c(NOW - HOUR)).reason, REASON.NOT_RUNNING);
+  assert.strictEqual((await c(NOW - 61e3)).action.pid, 110);
+  assert.strictEqual((await c(undefined)).action.pid, 110, 'no start time in the registry: no check');
 });
 
 test('planJump, external terminal apps: no AppleScript plan in a remote window or for a tty that is not a plain terminal device', async () => {
@@ -336,7 +331,7 @@ test('planJump, external terminal apps: no AppleScript plan in a remote window o
   assert.strictEqual(exec.calls.length, 0);
 });
 
-test('planJump, Codex / Gemini / Qwen CLI: Codex first asks which process holds the rollout file; otherwise the folder and the newest process; Qwen uses its runtime pid', async () => {
+test('planJump, Codex CLI: first asks which process holds the rollout file; otherwise the folder and the newest process', async () => {
   const early = { startMs: NOW - 5 * HOUR };
   const base = [proc(1, 0, '/sbin/launchd', early), proc(50, 1, PTY, early), proc(110, 50, '/bin/zsh', early), proc(120, 50, '/bin/zsh', early)];
   const procs = [...base, proc(111, 110, '/opt/homebrew/bin/codex', { startMs: NOW - 2 * HOUR }), proc(121, 120, '/opt/homebrew/bin/codex', { startMs: NOW - HOUR })];
@@ -346,13 +341,9 @@ test('planJump, Codex / Gemini / Qwen CLI: Codex first asks which process holds 
   assert.deepStrictEqual([held.action, held.candidates], [{ kind: ACTION.TERMINAL, pid: 110 }, undefined], 'the holder, even though 121 is newer');
   const guess = await J.planJump(s, env({ procs, local, cwds: new Map([[111, '/w/a'], [121, '/w/a']]) }));
   assert.deepStrictEqual([guess.action.pid, guess.candidates], [120, 2], 'no holder info: the newest, counted');
-  const gem = { provider: 'gemini', id: 'g1', entry: 'cli', cwd: '/w/g', updatedMs: NOW };
-  const gprocs = [...base, proc(111, 110, 'node /opt/homebrew/bin/gemini'), proc(121, 120, 'node /opt/homebrew/bin/gemini')];
-  assert.strictEqual((await J.planJump(gem, env({ procs: gprocs, local, cwds: new Map([[111, '/w/g'], [121, '/w/other']]) }))).action.pid, 110);
-  assert.strictEqual((await J.planJump(gem, env({ procs: base, local }))).reason, REASON.NOT_FOUND);
-  const qw = { provider: 'qwen', id: 'q1', entry: 'cli', live: true };
-  assert.strictEqual((await J.planJump(qw, env({ procs: [...base, proc(122, 120, 'node /x/qwen')], local, qwenPid: 122 }))).action.pid, 120);
-  assert.strictEqual((await J.planJump(qw, env({ procs: base, local }))).reason, REASON.NOT_RUNNING);
+  const folder = await J.planJump(s, env({ procs, local, cwds: new Map([[111, '/w/a'], [121, '/w/other']]) }));
+  assert.deepStrictEqual([folder.action.pid, folder.candidates], [110, undefined], 'no holder info: the one in the session folder');
+  assert.strictEqual((await J.planJump(s, env({ procs: base, local }))).reason, REASON.NOT_FOUND);
 });
 
 test('planJump, Codex extension: the window whose app-server holds the rollout file; without holder info the only window running Codex, else the folder match; no app-server → here', async () => {
@@ -644,7 +635,7 @@ test('messageOf: every outcome has a short message in all 5 languages with its p
     { ok: false, reason: REASON.WINDOW_CLOSED },
     ...J.TOOL_KEYS.map((tool) => ({ ok: false, reason: REASON.NO_COMMAND, tool })),
     ...J.TOOL_KEYS.map((tool) => ({ ok: false, reason: REASON.UNSUPPORTED, tool })),
-    { ok: false, reason: REASON.UNSUPPORTED, tool: 'gemini' },
+    { ok: false, reason: REASON.UNSUPPORTED, tool: 'aider' },
     { ok: false, reason: REASON.AUTOMATION_DENIED, app: 'Terminal' },
     { ok: false, reason: REASON.FAILED, error: 'ps timed out' },
     { ok: false, reason: REASON.NO_COMMAND, tool: 'copilot', remote: true, folder: '/w/peer' },
@@ -668,7 +659,7 @@ test('messageOf: every outcome has a short message in all 5 languages with its p
   assert.strictEqual(J.messageOf({ ok: true, remote: true, raised: true, replied: true }, en), null);
   assert.strictEqual(J.messageOf({ ok: false, reason: REASON.CANCELLED }, en), null);
   assert.strictEqual(J.messageOf({ ok: true, remote: true, folder: '/w/peer', replied: true }, en).text, en.t('ext.jump.sentToWindow', { folder: 'peer' }));
-  assert.strictEqual(J.messageOf({ ok: false, reason: REASON.NOT_FOUND }, en, { provider: 'gemini' }).text, en.t('ext.jump.notFound', { tool: 'Gemini CLI' }));
+  assert.strictEqual(J.messageOf({ ok: false, reason: REASON.NOT_FOUND }, en, { provider: 'codex' }).text, en.t('ext.jump.notFound', { tool: 'Codex' }));
   assert.strictEqual(J.messageOf({ ok: false, reason: REASON.NO_COMMAND, tool: 'copilot' }, en).text, en.t('ext.jump.noCommand', { tool: 'GitHub Copilot Chat' }));
   assert.strictEqual(J.messageOf({ ok: false, reason: REASON.FAILED, error: 'boom' }, en).level, 'warn');
 });

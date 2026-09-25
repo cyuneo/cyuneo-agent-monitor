@@ -76,8 +76,6 @@
         "agentMonitor.claude.cliPath",
         "agentMonitor.claude.projectsDir",
         "agentMonitor.codex.home",
-        "agentMonitor.gemini.home",
-        "agentMonitor.qwen.home",
         "agentMonitor.network.allow",
         "agentMonitor.push.enabled",
         "agentMonitor.push.events",
@@ -818,32 +816,6 @@
           "default": true,
           "description": "%config.copilot.enabled%",
           "order": 25
-        },
-        "agentMonitor.gemini.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "%config.gemini.enabled%",
-          "order": 26
-        },
-        "agentMonitor.gemini.home": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "%config.gemini.home%",
-          "order": 27
-        },
-        "agentMonitor.qwen.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "%config.qwen.enabled%",
-          "order": 28
-        },
-        "agentMonitor.qwen.home": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "%config.qwen.home%",
-          "order": 29
         },
         "agentMonitor.compactConfirm": {
           "type": "boolean",

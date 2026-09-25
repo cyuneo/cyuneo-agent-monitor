@@ -1,7 +1,7 @@
 {
   "scope.all": "すべてのセッション",
   "scope.workspace": "現在のワークスペース",
-  "scope.empty.all": "最近アクティブな Claude Code、Codex、Copilot、Gemini CLI、Qwen Code のセッションはありません。",
+  "scope.empty.all": "最近アクティブな Claude Code、Codex、Copilot のセッションはありません。",
   "scope.empty.workspace": "最近このワークスペースでアクティブなセッションはありません。",
   "scope.noFolder": "フォルダーが開かれていないため、このワークスペースに一致するセッションはありません。",
   "scope.showAll": "すべてのセッションを表示",

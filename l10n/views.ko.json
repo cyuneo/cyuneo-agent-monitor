@@ -1,7 +1,7 @@
 {
   "scope.all": "모든 세션",
   "scope.workspace": "현재 워크스페이스",
-  "scope.empty.all": "최근에 활성화된 Claude Code, Codex, Copilot, Gemini CLI, Qwen Code 세션이 없습니다.",
+  "scope.empty.all": "최근에 활성화된 Claude Code, Codex, Copilot 세션이 없습니다.",
   "scope.empty.workspace": "최근에 이 워크스페이스에서 활성화된 세션이 없습니다.",
   "scope.noFolder": "열려 있는 폴더가 없어 이 워크스페이스에 맞는 세션이 없습니다.",
   "scope.showAll": "모든 세션 표시",

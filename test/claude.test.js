@@ -909,8 +909,6 @@ function noOtherTools() {
   const none = path.join(TMP, 'no-other-tools');
   return {
     copilot: { userDir: path.join(none, 'Code', 'User') },
-    gemini: { home: path.join(none, '.gemini'), homeSource: 'setting' },
-    qwen: { home: path.join(none, '.qwen') },
   };
 }
 
@@ -920,8 +918,8 @@ function monitorCfg(h, extra = {}) {
     staleMinutes: 5,
     claude: { projectsDir: h.projects, home: h.home },
     codex: { enabled: false, home: path.join(TMP, 'no-codex') },
-    // Copilot / Gemini / Qwen stay on but point at missing temp dirs (never the real VS Code / ~/.gemini / ~/.qwen), so a
-    // machine with those tools installed behaves like CI without them
+    // Copilot stays on but points at a missing temp dir (never the real VS Code dir), so a machine with Copilot Chat
+    // installed behaves like CI without it
     ...noOtherTools(),
     daily: false,
     ...extra,
@@ -979,7 +977,7 @@ test('Monitor test config: every provider looks only inside the temp dir (same r
   const allowed = [TMP, '/tmp/am-fixture', path.join(__dirname, '..')].map((d) => path.resolve(d) + path.sep);
   const outside = touched.filter((p) => !allowed.some((d) => path.resolve(p).startsWith(d)));
   assert.deepStrictEqual(outside, [], 'nothing outside the temp dir is read');
-  for (const name of ['copilot', 'gemini', 'qwen']) {
+  for (const name of ['copilot']) {
     assert.deepStrictEqual([snap.sources[name].enabled, snap.sources[name].found, snap.sources[name].ok], [true, false, true], name);
   }
   assert.ok(snap.sessions.every((s) => s.provider === 'claude'));
@@ -1251,7 +1249,7 @@ test('worker: storage message (real lib/storage.js, synthetic dirs) cached withi
 
 // ---------- Real-data smoke test (read-only; prints only counts, status distribution and timings) ----------
 
-test('real-data smoke test (read-only: the real Claude, Codex, Copilot, Gemini and Qwen dirs)', () => {
+test('real-data smoke test (read-only: the real Claude, Codex and Copilot dirs)', () => {
   const realProjects = path.join(os.homedir(), '.claude', 'projects');
   if (process.env.AGENT_MONITOR_SKIP_REAL === '1' || !fs.existsSync(realProjects)) {
     console.log('        (skipped: no local transcripts, or AGENT_MONITOR_SKIP_REAL=1 is set)');

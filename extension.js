@@ -92,7 +92,7 @@ const STORAGE_WAIT_MS = 120000; // the storage scan stats recursively; large dir
 const MONITOR_KEYS = [
   'refreshSeconds', 'activeWindowMinutes', 'staleMinutes',
   'claude.enabled', 'claude.projectsDir', 'codex.enabled', 'codex.home',
-  'copilot.enabled', 'gemini.enabled', 'gemini.home', 'qwen.enabled', 'qwen.home',
+  'copilot.enabled',
   'approvalGuess', 'approvalGuessSeconds',
 ];
 const NOTIFY_DIR = 'notify';           // under globalStorageUri: claim markers, so one window reports each wait
@@ -644,15 +644,6 @@ class Controller {
     const codexSetting = expandHome(c.get('codex.home', ''), home);
     const codexHome = codexSetting || (env.CODEX_HOME ? expandHome(env.CODEX_HOME, home) : path.join(home, '.codex'));
     const codexHomeSource = codexSetting ? 'setting' : env.CODEX_HOME ? 'env' : 'default';
-    // Gemini CLI: the setting, else $GEMINI_CLI_HOME/.gemini, else ~/.gemini
-    const geminiSetting = expandHome(c.get('gemini.home', ''), home);
-    const geminiHome = geminiSetting || path.join(env.GEMINI_CLI_HOME ? expandHome(env.GEMINI_CLI_HOME, home) : home, '.gemini');
-    const geminiHomeSource = geminiSetting ? 'setting' : env.GEMINI_CLI_HOME ? 'env' : 'default';
-    // Qwen Code: the setting, else $QWEN_RUNTIME_DIR, $QWEN_HOME, else ~/.qwen
-    const qwenSetting = expandHome(c.get('qwen.home', ''), home);
-    const qwenEnv = env.QWEN_RUNTIME_DIR || env.QWEN_HOME || '';
-    const qwenHome = qwenSetting || (qwenEnv ? expandHome(qwenEnv, home) : path.join(home, '.qwen'));
-    const qwenHomeSource = qwenSetting ? 'setting' : qwenEnv ? 'env' : 'default';
     const storage = this.context.globalStorageUri;
     return {
       intervalMs: this.refreshMs(),
@@ -669,8 +660,6 @@ class Controller {
       codex: { enabled: c.get('codex.enabled', true) !== false, home: codexHome, homeSource: codexHomeSource },
       // Copilot Chat logs live in this VS Code's user dir (null: the provider's defaults, e.g. when it cannot be derived)
       copilot: { enabled: c.get('copilot.enabled', true) !== false, userDir: vscodeUserDir(storage) },
-      gemini: { enabled: c.get('gemini.enabled', true) !== false, home: geminiHome, homeSource: geminiHomeSource },
-      qwen: { enabled: c.get('qwen.enabled', true) !== false, home: qwenHome, homeSource: qwenHomeSource },
       approvalGuess: c.get('approvalGuess', S.APPROVAL_GUESS.FAST_TOOLS),
       approvalGuessSeconds: num(c.get('approvalGuessSeconds', S.APPROVAL_GUESS_DEFAULT_SECONDS), S.APPROVAL_GUESS_DEFAULT_SECONDS),
       observedCompact: { ...this.observed },

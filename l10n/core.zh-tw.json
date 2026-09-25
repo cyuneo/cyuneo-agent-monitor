@@ -35,8 +35,6 @@
   "status.apiError": "API 錯誤",
   "status.apiError.http": "API 錯誤（{http}）",
   "status.guess.note": "推測：某個快速工具長時間沒有回傳結果，通常表示正在等待權限核准。",
-  "status.guessed": "~{status}",
-  "status.guess.timing": "依工作階段記錄最後寫入的時間推測。這個工具不會記錄是否仍在執行，所以可能短暫不準。",
   "status.lag.copilot": "VS Code 大約每分鐘儲存一次 Copilot 對話，所以這個狀態最多可能延遲約 60 秒。",
 
   "step.tool": "{tool} {detail}",
@@ -105,7 +103,7 @@
   "cost.label": "等值 API 費用",
   "cost.note": "依 token 數與官網價目表估算（{date}）。訂閱方案不是這樣計費，僅供比較參考。",
   "cost.today": "今日",
-  "cost.today.scope": "今日合計只統計 Claude Code 和 Codex，不含 Copilot、Gemini CLI 和 Qwen Code。",
+  "cost.today.scope": "今日合計只統計 Claude Code 和 Codex，不含 Copilot。",
   "cost.unpriced": "無公開價格",
   "cost.unpricedTokens": "{tokens} token 來自沒有公開價格的模型",
   "cost.estimated": "估算",
@@ -131,7 +129,6 @@
   "ctx.trigger.manual": "手動",
   "ctx.compactUnknown": "這個工具不回報何時自動壓縮，所以依完整視窗顯示用量。",
   "ctx.src.copilotModel": "來自 VS Code 隨這個對話儲存的模型資訊",
-  "ctx.src.qwenRecord": "來自 Qwen Code 工作階段記錄",
   "ctx.unknown": "未記錄 token 用量",
   "ctx.unknown.note": "這個對話沒有記錄 token 數，所以上下文用量未知。",
   "ctx.unknown.sub": "Copilot 不記錄子智慧體的 token 數。",
@@ -186,19 +183,14 @@
   "entry.sdk": "SDK",
   "entry.exec": "非互動",
   "entry.other": "其他",
-  "entry.openGuess": "可能仍開啟",
-  "entry.notOpenGuess": "可能未開啟",
 
   "provider.claude": "Claude",
   "provider.codex": "Codex",
   "provider.copilot": "Copilot",
-  "provider.gemini": "Gemini CLI",
-  "provider.qwen": "Qwen Code",
 
   "count.tokens": "{n} 個 token",
   "count.toolCalls": "{n} 次工具呼叫",
   "count.toolErrors": "{n} 次工具錯誤",
   "count.filesChanged": "修改了 {n} 個檔案",
-  "count.apiCalls": "{n} 次 API 呼叫",
-  "count.breakdown": "輸入 {input}（快取 {cached}）· 思考 {thoughts} · 工具呼叫 {tool}"
+  "count.apiCalls": "{n} 次 API 呼叫"
 }

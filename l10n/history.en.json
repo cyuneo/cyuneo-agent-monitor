@@ -57,5 +57,5 @@
   "history.note.local": "Days follow this computer's local time.",
   "history.note.retention": "Only transcripts still on this computer are counted. Claude Code deletes old transcripts after its cleanup period (30 days by default), so older days can show less than you used.",
   "history.note.columns": "Input excludes cache reads. Codex counts reasoning as part of output; Claude Code doesn't report it separately.",
-  "history.note.scope": "Only Claude Code and Codex are counted here; Copilot, Gemini CLI and Qwen Code aren't included."
+  "history.note.scope": "Only Claude Code and Codex are counted here; Copilot isn't included."
 }

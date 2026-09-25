@@ -1,7 +1,7 @@
 {
   "scope.all": "所有会话",
   "scope.workspace": "当前工作区",
-  "scope.empty.all": "最近没有活跃的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 会话。",
+  "scope.empty.all": "最近没有活跃的 Claude Code、Codex 或 Copilot 会话。",
   "scope.empty.workspace": "最近没有来自当前工作区的活跃会话。",
   "scope.noFolder": "没有打开文件夹，无法匹配当前工作区的会话。",
   "scope.showAll": "显示所有会话",

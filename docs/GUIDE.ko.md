@@ -11,7 +11,7 @@
 ![하단 패널의 에이전트 모니터 탭입니다. 데이터는 가상의 예시입니다. 왼쪽에는 선택한 Claude Code 채팅의 메인 에이전트, 서브에이전트 두 개, 워크플로의 에이전트가, 오른쪽에는 열림과 최근 채팅 목록이 있습니다](../images/split-view.png)
 
 - **에이전트 모니터**(영어 UI에서는 Agent Monitor)는 터미널 옆, 하단 패널의 탭으로 열리며 터미널처럼 보입니다: 별도의 뷰 제목 표시줄 없이 하나의 패널입니다. 선택한 채팅의 에이전트가 패널 대부분을 차지하고, 좁은 채팅 목록이 터미널 탭 목록처럼 한쪽에 놓입니다.
-- **채팅 목록.** 열려 있거나 최근에 사용한 모든 채팅이 각각 상태등과 함께 표시됩니다. **열림**(Claude Code가 아직 채팅을 열어 두었거나, Codex나 GitHub Copilot Chat이 한 턴을 진행 중이거나, Qwen Code 프로세스가 아직 실행 중이거나, Gemini CLI가 최근에 채팅을 기록한 것으로 추측되는 경우)과 **최근**으로 그룹화됩니다. 행 높이는 터미널 탭과 같고, 선택한 채팅은 강조 표시됩니다. 제목이 잘 보이도록 각 행에는 상태등과 제목만 표시됩니다. 컨텍스트가 커서 처리할 가치가 있을 때는 제목 뒤에 작은 표시가 붙습니다: **◔** 압축을 고려하세요, **◕** 곧 처리하세요. 행에 마우스를 올리면 상태, 컨텍스트 등 자세한 내용을 볼 수 있습니다.
+- **채팅 목록.** 열려 있거나 최근에 사용한 모든 채팅이 각각 상태등과 함께 표시됩니다. **열림**(Claude Code가 아직 채팅을 열어 두었거나, Codex나 GitHub Copilot Chat이 한 턴을 진행 중인 경우)과 **최근**으로 그룹화됩니다. 행 높이는 터미널 탭과 같고, 선택한 채팅은 강조 표시됩니다. 제목이 잘 보이도록 각 행에는 상태등과 제목만 표시됩니다. 컨텍스트가 커서 처리할 가치가 있을 때는 제목 뒤에 작은 표시가 붙습니다: **◔** 압축을 고려하세요, **◕** 곧 처리하세요. 행에 마우스를 올리면 상태, 컨텍스트 등 자세한 내용을 볼 수 있습니다.
 - **목록은 터미널 탭 목록이 있는 쪽에 놓입니다**(기본값은 오른쪽이며 `terminal.integrated.tabs.location`을 따릅니다). `agentMonitor.sessionListPosition`을 설정해 직접 왼쪽이나 오른쪽으로 바꿀 수 있습니다. 구분선을 드래그해 너비를 조절하고, 두 번 클릭하면 기본값인 200px로 돌아가며, 거의 닫힐 때까지 드래그하면 상태등만 보이는 좁은 막대로 줄어듭니다. 패널이 500px보다 좁으면 자동으로 좁은 막대가 사용됩니다. 너비는 저장됩니다.
 - **채팅에 마우스를 올리면** **압축…** 버튼(컨텍스트가 20K 이상일 때)과 오른쪽 클릭 메뉴와 같은 작업을 담은 **…** 버튼이 나타납니다. 키보드도 사용할 수 있습니다: 화살표 키, Home, End로 목록을 이동하고, Enter나 Space로 선택하고, 문자를 입력하면 첫 글자로 채팅을 찾아가며, Shift+F10으로 작업 메뉴를 엽니다.
 - **에이전트.** 채팅을 클릭하면 그 안에서 무엇이 실행 중인지 볼 수 있습니다: 맨 위에 메인 대화, 그다음 서브에이전트와 백그라운드 에이전트, 워크플로 에이전트는 해당 워크플로 아래에 묶여 표시됩니다.
@@ -34,7 +34,7 @@
 
 표시등은 모양도 다르므로(채워짐 또는 윤곽선) 색상에만 의존하지 않습니다. 라이트 테마와 고대비 테마는 각자의 색조를 사용하며, `workbench.colorCustomizations`에서 모든 색을 바꿀 수 있습니다.
 
-실시간 상태를 보고하는 Claude Code 버전("[읽는 내용](#읽는-내용)" 참고)과 GitHub Copilot Chat에서는 "확인 필요"가 정확합니다. 다만 Copilot Chat에서는 최대 1분 정도 늦게 표시될 수 있습니다. 더 오래된 Claude Code 버전, Codex, Gemini CLI, Qwen Code에서는 확장 프로그램이 추측할 수밖에 없습니다. 빠른 도구(파일 읽기·쓰기·편집, 검색, 패치)가 60초 동안 결과가 없으면 채팅에 **승인 대기 중일 수 있음**이 표시됩니다. 셸 명령 같은 긴 명령은 절대 추측하지 않습니다. `agentMonitor.approvalGuess`로 이 추측을 바꾸거나 끌 수 있습니다.
+실시간 상태를 보고하는 Claude Code 버전("[읽는 내용](#읽는-내용)" 참고)과 GitHub Copilot Chat에서는 "확인 필요"가 정확합니다. 다만 Copilot Chat에서는 최대 1분 정도 늦게 표시될 수 있습니다. 더 오래된 Claude Code 버전과 Codex에서는 확장 프로그램이 추측할 수밖에 없습니다. 빠른 도구(파일 읽기·쓰기·편집, 검색, 패치)가 60초 동안 결과가 없으면 채팅에 **승인 대기 중일 수 있음**이 표시됩니다. 셸 명령 같은 긴 명령은 절대 추측하지 않습니다. `agentMonitor.approvalGuess`로 이 추측을 바꾸거나 끌 수 있습니다.
 
 ### 채팅이 실행 중인 곳으로 이동
 
@@ -45,16 +45,16 @@
 | Claude Code 확장 | Claude Code에서 채팅이 열리며, `claudeCode.preferredLocation` 설정에 따라 탭이나 사이드바에 표시됩니다. 이 설정은 바뀌지 않습니다 |
 | Codex 확장 | 대화가 편집기 탭에서 열립니다 |
 | GitHub Copilot Chat | 채팅이 속한 작업 영역의 창에서 편집기 탭으로 열립니다 |
-| VS Code 통합 터미널의 Claude Code, Codex, Gemini CLI, Qwen Code | 그 터미널이 표시됩니다 |
+| VS Code 통합 터미널의 Claude Code 또는 Codex | 그 터미널이 표시됩니다 |
 | 다른 VS Code 창 | 그 창이 채팅을 열거나 터미널을 표시하고 앞으로 나옵니다. `agentMonitor.shareScanAcrossWindows`가 켜져 있어야 합니다(기본값). 그 창이 앞으로 나오지 못하면 어느 창으로 전환할지 메시지로 알려 줍니다 |
 | macOS의 Terminal.app 또는 iTerm2 | 그 앱이 앞으로 나오고 채팅의 탭이 선택됩니다(아래 참고) |
 | Claude 또는 Codex 데스크톱 앱, 다른 터미널 앱(Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal 등) | 아직 지원하지 않으며, 메시지로 알려 줍니다 |
 
 - **Terminal.app과 iTerm2:** 처음에는 에이전트 모니터가 그 앱에서 이 채팅의 탭으로 전환할지 먼저 묻습니다. **계속**을 선택하면 macOS가 VS Code(또는 사용 중인 편집기)가 그 앱을 제어해도 되는지 묻습니다. 허용을 선택하세요. 앱마다 한 번만 묻습니다. 허용하지 않았다면 다음에 시도할 때 **자동화 설정 열기** 버튼이 있는 메시지가 나타납니다. 시스템 설정 > 개인정보 보호 및 보안 > 자동화에서 허용한 뒤 다시 시도하세요. 나중에 그곳에서 바꿀 수도 있습니다.
-- **Codex CLI와 Gemini CLI:** 이 채팅들에는 쓸 수 있는 프로세스 ID가 없어서, 에이전트 모니터는 채팅의 폴더에서 실행 중인 `codex` 또는 `gemini` 프로세스를 찾습니다(Codex는 어느 프로세스가 채팅의 기록 파일을 열고 있는지 알 수 있으면 그 프로세스를 씁니다). 같은 폴더에서 여러 개가 실행 중이면 가장 최근에 시작된 것을 고르며, 그것이 다른 채팅일 수도 있습니다. Windows에서는 프로세스의 폴더를 읽을 수 없어 가장 최근 것을 고릅니다.
+- **Codex CLI:** 이 채팅들에는 쓸 수 있는 프로세스 ID가 없어서, 에이전트 모니터는 채팅의 폴더에서 실행 중인 `codex` 프로세스를 찾습니다(어느 프로세스가 채팅의 기록 파일을 열고 있는지 알 수 있으면 그 프로세스를 씁니다). 같은 폴더에서 여러 개가 실행 중이면 가장 최근에 시작된 것을 고르며, 그것이 다른 채팅일 수도 있습니다. Windows에서는 프로세스의 폴더를 읽을 수 없어 가장 최근 것을 고릅니다.
 - **이동할 수 없을 때는** 이유를 메시지로 알려 줍니다. 예를 들어 채팅이 더 이상 실행 중이 아니거나, VS Code 밖의 터미널에서 실행 중이거나, 터미널이나 대화 패널이 아니라 다른 도구나 에이전트가 시작했거나, 그 Copilot 채팅의 작업 영역을 연 VS Code 창이 없는 경우입니다.
-- **이동 버튼**(과 개요의 인라인 버튼)은 이동할 수 있을 가능성이 높을 때만 나타납니다: 아직 열려 있는 Claude Code와 Qwen Code 채팅, 그리고 열려 있거나 최근 24시간 안에 활동한 Codex, Gemini CLI, Copilot Chat 채팅입니다. 두 번 클릭과 메뉴는 항상 시도합니다.
-- **요청할 때만 확인합니다.** 에이전트 모니터는 이동을 사용할 때만 실행 중인 프로세스 목록을 가져옵니다: macOS와 Linux에서는 `ps`를 한 번, Windows에서는 PowerShell을 한 번 호출합니다. Codex CLI와 Gemini CLI는 프로세스의 작업 폴더도, Codex는 어느 프로세스가 채팅의 기록 파일을 열고 있는지도 확인합니다(macOS는 `lsof`, Linux는 `/proc`). 이를 위해 채팅 내용을 읽지 않으며, 어디로도 보내지 않습니다. 다른 VS Code 창과는 [읽는 내용](#읽는-내용)에서 설명한 공유 폴더를 통해 연락합니다.
+- **이동 버튼**(과 개요의 인라인 버튼)은 이동할 수 있을 가능성이 높을 때만 나타납니다: 아직 열려 있는 Claude Code 채팅, 그리고 열려 있거나 최근 24시간 안에 활동한 Codex와 Copilot Chat 채팅입니다. 두 번 클릭과 메뉴는 항상 시도합니다.
+- **요청할 때만 확인합니다.** 에이전트 모니터는 이동을 사용할 때만 실행 중인 프로세스 목록을 가져옵니다: macOS와 Linux에서는 `ps`를 한 번, Windows에서는 PowerShell을 한 번 호출합니다. Codex CLI는 프로세스의 작업 폴더와 어느 프로세스가 채팅의 기록 파일을 열고 있는지도 확인합니다(macOS는 `lsof`, Linux는 `/proc`). 이를 위해 채팅 내용을 읽지 않으며, 어디로도 보내지 않습니다. 다른 VS Code 창과는 [읽는 내용](#읽는-내용)에서 설명한 공유 폴더를 통해 연락합니다.
 
 ### "확인 필요" 알림
 
@@ -108,7 +108,7 @@
 - **채팅이 끝났는데 아직 확인하지 않았을 때**, 즉 표시등이 밝은 녹색 **완료(새 결과)**로 바뀔 때(`agentMonitor.sound.done`)
 - **임계값 알림이 왔을 때**(`agentMonitor.sound.alert`, [임계값 알림](#임계값-알림) 참고)
 
-각 설정에는 `default`, `off`, 또는 Glass, Ping, Pop, Tink, Submarine, Funk, Hero, Basso 중 하나를 지정할 수 있습니다. `default`는 경우마다 다른 소리를 씁니다. 에이전트가 기다릴 때는 Glass, 오류는 Basso, 완료는 Hero, 임계값 알림은 Funk입니다. 이 이름들은 macOS 시스템 사운드이며 `afplay`로 재생합니다. Linux에서는 시스템 사운드 테마에서 비슷한 소리를 `canberra-gtk-play`나 `paplay`로 재생하며, 둘 중 하나가 설치되어 있어야 합니다. Windows에서는 Windows `Media` 폴더에서 비슷한 소리를 재생합니다. "확인 필요" 소리는 ["확인 필요" 알림](#확인-필요-알림)과 함께 울리므로 `agentMonitor.notifyNeedsYou`도 켜져 있어야 합니다. 지금 보고 있는 채팅에는 "확인 필요" 소리도 "완료" 소리도 나지 않으며, 완료가 추측일 뿐일 때(Gemini CLI는 보통 그렇습니다)도 "완료" 소리가 나지 않습니다. 소리는 한 VS Code 창에서만 나며, 여러 일이 한꺼번에 일어나도 한 번만 납니다. 모든 창을 통틀어 3초에 한 번이 최대입니다. 원격 창(SSH, WSL, 컨테이너)과 [방해 금지 시간](#방해-금지-시간)에는 소리가 나지 않습니다.
+각 설정에는 `default`, `off`, 또는 Glass, Ping, Pop, Tink, Submarine, Funk, Hero, Basso 중 하나를 지정할 수 있습니다. `default`는 경우마다 다른 소리를 씁니다. 에이전트가 기다릴 때는 Glass, 오류는 Basso, 완료는 Hero, 임계값 알림은 Funk입니다. 이 이름들은 macOS 시스템 사운드이며 `afplay`로 재생합니다. Linux에서는 시스템 사운드 테마에서 비슷한 소리를 `canberra-gtk-play`나 `paplay`로 재생하며, 둘 중 하나가 설치되어 있어야 합니다. Windows에서는 Windows `Media` 폴더에서 비슷한 소리를 재생합니다. "확인 필요" 소리는 ["확인 필요" 알림](#확인-필요-알림)과 함께 울리므로 `agentMonitor.notifyNeedsYou`도 켜져 있어야 합니다. 지금 보고 있는 채팅에는 "확인 필요" 소리도 "완료" 소리도 나지 않으며, 완료가 추측일 뿐일 때도 "완료" 소리가 나지 않습니다. 소리는 한 VS Code 창에서만 나며, 여러 일이 한꺼번에 일어나도 한 번만 납니다. 모든 창을 통틀어 3초에 한 번이 최대입니다. 원격 창(SSH, WSL, 컨테이너)과 [방해 금지 시간](#방해-금지-시간)에는 소리가 나지 않습니다.
 
 ### 방해 금지 시간
 
@@ -132,7 +132,7 @@
 | --- | --- | --- |
 | `agentMonitor.alerts.usagePercent` | `90` | Codex의 5시간 또는 주간 사용량이 이 비율에 도달했을 때. Codex 전용입니다. Claude Code의 로컬 로그에는 한도에 도달한 사실만 남고 비율은 남지 않습니다 |
 | `agentMonitor.alerts.dailyCost` | `0`(꺼짐) | 오늘의 예상 API 환산 비용(Claude Code와 Codex 합계)이 이 금액(미국 달러)에 도달했을 때 |
-| `agentMonitor.alerts.contextPercent` | `0`(꺼짐) | 채팅의 메인 대화가 자동 압축 지점의 이 비율에 도달했을 때(Claude Code와 Codex. 다른 도구에는 자동 압축 지점이 없습니다) |
+| `agentMonitor.alerts.contextPercent` | `0`(꺼짐) | 채팅의 메인 대화가 자동 압축 지점의 이 비율에 도달했을 때(Claude Code와 Codex. GitHub Copilot Chat에는 자동 압축 지점이 없습니다) |
 
 - 알림은 한 번씩만 옵니다. 사용량은 한도가 초기화될 때까지 기간마다 한 번, 비용은 하루에 한 번, 컨텍스트는 채팅마다 다음 압축 전까지 한 번입니다. 값을 0으로 하면 해당 알림이 꺼집니다.
 - 창을 열 때나 설정을 바꿀 때 이미 기준을 넘어 있던 것은 알리지 않습니다.
@@ -217,7 +217,7 @@ Claude Code는 컨텍스트가 특정 용량에 도달하면 스스로 압축합
 
 ### 사용량 기록
 
-패널 제목 표시줄의 **…** 메뉴나 명령 팔레트에서 **에이전트 모니터: 사용량 기록 보기**를 실행하면 Claude Code와 Codex의 최근 30일 사용량을 보여 주는 페이지가 열립니다(GitHub Copilot Chat, Gemini CLI, Qwen Code는 포함되지 않음).
+패널 제목 표시줄의 **…** 메뉴나 명령 팔레트에서 **에이전트 모니터: 사용량 기록 보기**를 실행하면 Claude Code와 Codex의 최근 30일 사용량을 보여 주는 페이지가 열립니다(GitHub Copilot Chat은 포함되지 않음).
 
 - 하루별 예상 비용이나 토큰 수를 막대 차트로 보여 줍니다. Claude Code와 Codex는 쌓아서 표시합니다(**비용**과 **토큰** 사이를 전환하거나 **표로 보기**를 선택할 수 있습니다).
 - 기간 합계, 일평균, 사용한 날 수를 보여 줍니다.
@@ -286,20 +286,16 @@ Claude Code는 컨텍스트가 특정 용량에 도달하면 스스로 압축합
 - **Claude Code**: VS Code 확장 프로그램, 터미널, 데스크톱 앱에서, 서브에이전트, 백그라운드 에이전트, 워크플로를 포함합니다.
 - **Codex**: VS Code 확장 프로그램, CLI, 데스크톱 앱에서, 서브에이전트와 리뷰 스레드를 포함합니다.
 - **GitHub Copilot Chat**: VS Code 내장 채팅으로, 에이전트 모드와 그 서브에이전트를 포함합니다.
-- **Gemini CLI**(프리뷰): 서브에이전트를 포함합니다.
-- **Qwen Code**(프리뷰): 서브에이전트를 포함합니다.
 - 설치되지 않은 도구는 건너뜁니다. 각 도구는 설정에서 따로 끌 수 있습니다([설정](#설정) 참고).
-
-> **Gemini CLI와 Qwen Code는 프리뷰입니다.** 공개된 기록 형식을 바탕으로 만들었고, 아직 실제 세션으로 확인하지 않았습니다. 채팅이 이상하게 보이면 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues)에 알려 주세요.
 
 도구마다 기록하는 내용이 달라서 확장 프로그램이 볼 수 있는 것도 다릅니다.
 
-| | GitHub Copilot Chat | Gemini CLI(프리뷰) | Qwen Code(프리뷰) |
-| --- | --- | --- | --- |
-| **열림, 작업 중, 완료** | 채팅 기록에서 읽지만 최대 1분 정도 늦을 수 있음: VS Code가 채팅을 약 1분에 한 번 저장하기 때문 | 채팅이 마지막으로 기록된 시각으로 추측하므로, 완료로 보이던 채팅이 다시 작업 중으로 바뀔 수 있음. 도구 이름은 도구가 끝난 뒤에야 표시됨 | 채팅이 열려 있는지는 정확함: Qwen Code 프로세스 ID로 확인 |
-| **확인 필요** | 정확함(같은 지연이 있음) | 추측 | 추측 |
-| **토큰과 비용** | 채팅 전체의 토큰(서브에이전트별은 없음), 달러 비용 대신 Copilot credits | 토큰과 예상 비용 | 토큰, 그리고 Alibaba Cloud 국제 사이트 공개 가격 기준 예상 비용. 무료 OAuth 모델은 토큰만 표시 |
-| **컨텍스트** | VS Code가 채팅과 함께 저장한 모델 정보의 창 크기. 자동 압축 지점 없음 | 모델의 표준 창. 자동 압축 지점 없음 | Qwen Code 기록의 창 크기. 자동 압축 지점 없음 |
+| | GitHub Copilot Chat |
+| --- | --- |
+| **열림, 작업 중, 완료** | 채팅 기록에서 읽지만 최대 1분 정도 늦을 수 있음: VS Code가 채팅을 약 1분에 한 번 저장하기 때문 |
+| **확인 필요** | 정확함(같은 지연이 있음) |
+| **토큰과 비용** | 채팅 전체의 토큰(서브에이전트별은 없음), 달러 비용 대신 Copilot credits |
+| **컨텍스트** | VS Code가 채팅과 함께 저장한 모델 정보의 창 크기. 자동 압축 지점 없음 |
 
 사용량 기록, 오늘의 합계 비용(과 그 알림), [저장 위치 페이지](#채팅이-저장되는-위치와-이동-방법)는 Claude Code와 Codex만 다룹니다. **압축…**, 인수인계 메모, 자동 압축 임계값, 재개 프롬프트도 Claude Code와 Codex 채팅에만 제공되며, 백그라운드 압축은 여전히 Claude Code 전용입니다.
 
@@ -317,7 +313,7 @@ node bin/agent-monitor.js --session 1a2b   # 채팅 하나를 자세히 표시: 
 node bin/agent-monitor.js --json           # 데이터를 JSON으로 출력
 ```
 
-그 밖의 옵션으로 `--provider all|claude|codex|copilot|gemini|qwen`(기본값 `all`), `--window <minutes>`, `--here`(현재 폴더의 채팅만), `--today`, `--lang en|zh-cn|zh-tw|ko|ja`, `--no-color`가 있습니다. 전체 목록은 `--help`로 확인하세요.
+그 밖의 옵션으로 `--provider all|claude|codex|copilot`(기본값 `all`), `--window <minutes>`, `--here`(현재 폴더의 채팅만), `--today`, `--lang en|zh-cn|zh-tw|ko|ja`, `--no-color`가 있습니다. 전체 목록은 `--help`로 확인하세요.
 
 ## 설치
 
@@ -349,14 +345,10 @@ node bin/agent-monitor.js --json           # 데이터를 JSON으로 출력
 | `<User>/workspaceStorage/<workspace>/chatSessions/<session>.jsonl`(또는 `.json`) | 폴더나 작업 영역을 연 창의 GitHub Copilot Chat 채팅. `<User>`는 사용 중인 VS Code의 User 폴더입니다. 예: macOS는 `~/Library/Application Support/Code/User`, Linux는 `~/.config/Code/User`, Windows는 `%APPDATA%\Code\User` |
 | `<User>/globalStorage/emptyWindowChatSessions/<session>.jsonl`, 그리고 `<User>/profiles/<profile>/` 아래의 같은 위치 | 폴더를 열지 않은 창의 Copilot Chat 채팅(다른 프로필 포함) |
 | `<User>/workspaceStorage/<workspace>/workspace.json` | Copilot Chat 채팅이 어느 폴더에 속하는지 |
-| `~/.gemini/tmp/<project>/chats/session-*.jsonl`(또는 `.json`)과 `~/.gemini/tmp/<project>/chats/<session>/…` | Gemini CLI 채팅과 그 서브에이전트. Gemini CLI가 macOS 샌드박스에서 실행될 때는 `~/.cache/.gemini` 아래의 같은 파일. `agentMonitor.gemini.home`을 설정하지 않았다면 이곳도 읽습니다 |
-| `~/.gemini/tmp/<project>/.project_root`, `~/.gemini/projects.json` | Gemini CLI 채팅이 어느 폴더에 속하는지 |
-| `~/.qwen/projects/<project>/chats/<session>.jsonl` | Qwen Code 채팅(서브에이전트 포함) |
-| `~/.qwen/projects/<project>/chats/<session>.runtime.json` | 채팅이 아직 열려 있는지 판단하기 위한 Qwen Code 프로세스 ID. 확장 프로그램은 그 프로세스가 아직 실행 중인지만 확인합니다 |
 
-위의 경로는 기본값입니다. `CLAUDE_CONFIG_DIR`와 `CODEX_HOME`을 따르며, `GEMINI_CLI_HOME`이 설정되어 있으면 Gemini CLI 폴더를 `~` 대신 `$GEMINI_CLI_HOME` 아래에서 찾습니다. Qwen Code는 `~/.qwen` 대신 `QWEN_RUNTIME_DIR`, 없으면 `QWEN_HOME`을 씁니다. `agentMonitor.claude.projectsDir`, `agentMonitor.codex.home`, `agentMonitor.gemini.home`, `agentMonitor.qwen.home`으로 다른 위치를 지정할 수도 있습니다.
+위의 경로는 기본값입니다. `CLAUDE_CONFIG_DIR`와 `CODEX_HOME`을 따릅니다. `agentMonitor.claude.projectsDir`와 `agentMonitor.codex.home`으로 다른 위치를 지정할 수도 있습니다.
 
-확장 프로그램은 GitHub Copilot Chat, Gemini CLI, Qwen Code의 파일을 읽기만 하며, 그 파일이나 해당 도구의 폴더에 아무것도 쓰지 않습니다. 그 내용은 어디에도 보내지 않으며, 푸시를 켠 경우에만 [휴대폰이나 팀 채팅으로 푸시](#휴대폰이나-팀-채팅으로-푸시)에서 설명한 짧은 메시지가 전송됩니다.
+확장 프로그램은 GitHub Copilot Chat의 파일을 읽기만 하며, 그 파일이나 해당 도구의 폴더에 아무것도 쓰지 않습니다. 그 내용은 어디에도 보내지 않으며, 푸시를 켠 경우에만 [휴대폰이나 팀 채팅으로 푸시](#휴대폰이나-팀-채팅으로-푸시)에서 설명한 짧은 메시지가 전송됩니다.
 
 확장 프로그램은 VS Code 자체 저장소에 몇 가지 작은 정보만 보관합니다: 이미 확인한 채팅, 꺼 둔 알림, 각 모델이 실측으로 자동 압축된 지점, 그리고 변경한 설정 파일의 백업. 복사나 압축 관련 동작을 클릭할 때만 클립보드에 씁니다.
 
@@ -431,10 +423,6 @@ node bin/agent-monitor.js --json           # 데이터를 JSON으로 출력
 | `agentMonitor.codex.enabled` | `true` | Codex 기록 읽기 |
 | `agentMonitor.codex.home` | `""` | Codex 폴더(비워 두면 `$CODEX_HOME` 또는 `~/.codex`) |
 | `agentMonitor.copilot.enabled` | `true` | GitHub Copilot Chat 세션 읽기(VS Code 내장 채팅) |
-| `agentMonitor.gemini.enabled` | `true` | Gemini CLI 기록 읽기(프리뷰) |
-| `agentMonitor.gemini.home` | `""` | Gemini CLI 폴더(비워 두면 `$GEMINI_CLI_HOME/.gemini` 또는 `~/.gemini`, 그리고 macOS 샌드박스 폴더 `$GEMINI_CLI_HOME/.cache/.gemini` 또는 `~/.cache/.gemini`) |
-| `agentMonitor.qwen.enabled` | `true` | Qwen Code 기록 읽기(프리뷰) |
-| `agentMonitor.qwen.home` | `""` | Qwen Code 폴더(비워 두면 `$QWEN_RUNTIME_DIR`, 없으면 `$QWEN_HOME`, 없으면 `~/.qwen`) |
 | `agentMonitor.compactConfirm` | `true` | 닫힌 채팅을 백그라운드에서 압축하기 전에 확인 |
 | `agentMonitor.compactTemplate` | `""` | `/compact` 뒤에 무엇을 유지할지 적는 텍스트(비워 두면 표시 언어에 맞는 내장 템플릿 사용) |
 | `agentMonitor.contextHintStart` | `200000` | 창 크기가 500K 토큰 이상인 모델의 경우: 이 토큰 수를 넘으면 다음 적절한 지점에서 압축을 제안 |
@@ -482,13 +470,12 @@ node bin/agent-monitor.js --json           # 데이터를 JSON으로 출력
 
 ## 알려진 한계
 
-- **기록 형식이 바뀔 수 있습니다.** 다섯 도구의 기록 형식은 모두 내부 형식이라 업데이트마다 바뀔 수 있습니다. 확장 프로그램이 읽을 수 없는 줄은 건너뜁니다.
-- **Gemini CLI와 Qwen Code 지원은 프리뷰입니다.** 공개된 기록 형식을 바탕으로 만들었고, 아직 실제 세션으로 확인하지 않았습니다. 채팅이 이상하게 보이면 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues)에 알려 주세요.
+- **기록 형식이 바뀔 수 있습니다.** 세 도구의 기록 형식은 모두 내부 형식이라 업데이트마다 바뀔 수 있습니다. 확장 프로그램이 읽을 수 없는 줄은 건너뜁니다.
 - **단계 표시가 지연될 수 있습니다.** 기록은 모델 호출마다 기록되므로 긴 생각 구간에서는 마지막으로 기록된 단계가 표시됩니다.
-- **"확인 필요"는 앱이 상태를 보고할 때만 정확합니다.** 즉 `~/.claude/sessions`에서 실시간 상태를 보고하는 Claude Code 버전과 GitHub Copilot Chat에서만 정확합니다. 더 오래된 Claude Code 버전, Codex, Gemini CLI, Qwen Code는 위에서 설명한 추측에 의존하며, Codex는 승인이나 오류에 대해 디스크에 거의 기록하지 않습니다. Gemini CLI는 실행 중인 세션 목록도 남기지 않으므로, 채팅이 작업 중인지 완료됐는지도 추측입니다.
+- **"확인 필요"는 앱이 상태를 보고할 때만 정확합니다.** 즉 `~/.claude/sessions`에서 실시간 상태를 보고하는 Claude Code 버전과 GitHub Copilot Chat에서만 정확합니다. 더 오래된 Claude Code 버전과 Codex는 위에서 설명한 추측에 의존하며, Codex는 승인이나 오류에 대해 디스크에 거의 기록하지 않습니다.
 - **GitHub Copilot Chat은 최대 1분 정도 늦을 수 있습니다.** VS Code는 채팅을 약 1분에 한 번 디스크에 저장하므로, 새 단계, 끝난 답변, 사용자를 기다리는 프롬프트가 최대 1분 늦게 표시될 수 있습니다.
-- **비용은 추정치입니다.** 툴팁에 표시된 날짜 기준 공개 가격을 사용하므로 가격이 바뀔 수 있습니다. Codex의 리뷰 모델처럼 공개 가격이 없는 모델도 있습니다. GitHub Copilot Chat은 비용이 아니라 Copilot credits를 표시합니다. Qwen Code 비용은 Alibaba Cloud 국제 사이트의 공개 가격을 기준으로 하며(다른 리전은 가격이 다름), 기록에 캐시 종류가 나오지 않아 캐시 적중은 명시적 캐시 가격으로 계산합니다. 무료 OAuth 모델은 가격이 없어 토큰만 표시합니다.
-- **일부 기능은 Claude Code와 Codex만 다룹니다.** 사용량 기록, 오늘의 합계 비용(과 일일 비용 알림), 저장 위치 페이지에는 GitHub Copilot Chat, Gemini CLI, Qwen Code가 포함되지 않으며, 이 세 도구에는 자동 압축 지점도 없습니다. **압축…**, 인수인계 메모, 자동 압축 임계값, 재개 프롬프트도 Claude Code와 Codex 채팅에만 제공됩니다.
+- **비용은 추정치입니다.** 툴팁에 표시된 날짜 기준 공개 가격을 사용하므로 가격이 바뀔 수 있습니다. Codex의 리뷰 모델처럼 공개 가격이 없는 모델도 있습니다. GitHub Copilot Chat은 비용이 아니라 Copilot credits를 표시합니다.
+- **일부 기능은 Claude Code와 Codex만 다룹니다.** 사용량 기록, 오늘의 합계 비용(과 일일 비용 알림), 저장 위치 페이지에는 GitHub Copilot Chat이 포함되지 않으며, Copilot Chat에는 자동 압축 지점도 없습니다. **압축…**, 인수인계 메모, 자동 압축 임계값, 재개 프롬프트도 Claude Code와 Codex 채팅에만 제공됩니다.
 - **Claude Code의 사용률은 표시되지 않습니다.** Claude Code가 이를 로컬 파일에 저장하지 않으므로, Claude에 대해서는 한도 도달과 초기화 시각만 표시되며, 사용량 임계값 알림도 Codex 전용입니다.
 - **탭 추적에는 빈틈이 있습니다.** Claude Code는 탭 제목으로, Codex는 대화 ID로 추적합니다. 사이드바 보기(편집기 탭이 아닌)에 표시된 채팅은 감지할 수 없습니다.
 - **모델을 선택하는 백그라운드 압축은 Claude Code 전용입니다.** Codex는 자체적으로 압축합니다. 채팅이 열려 있는 동안에는 백그라운드에서 압축할 수 없습니다.
@@ -497,7 +484,7 @@ node bin/agent-monitor.js --json           # 데이터를 JSON으로 출력
 - **시스템 알림은 기본 기능만 있습니다.** macOS에서는 AppleScript로 표시하므로 알림이 **스크립트 편집기**(Script Editor) 이름으로 나타나며, 허용하거나 끄는 것도 시스템 설정 > 알림의 스크립트 편집기 항목에서 합니다. 알림을 클릭하면 VS Code가 아니라 스크립트 편집기가 열리므로 VS Code로 직접 전환하세요. 기다리는 채팅에는 마젠타 표시등이 켜져 있습니다. Windows와 원격 창에서는 당분간 시스템 알림이 없고, 대신 다음에 전환하는 VS Code 창에 메시지가 표시됩니다. Linux에서는 `notify-send`가 설치되어 있지 않으면 VS Code 메시지를 표시합니다.
 - **알림에서 바로 승인하거나 답할 수 없습니다.** 에이전트 모니터는 기록을 읽기만 합니다. 알림에서 답하려면 Claude Code나 Codex의 hooks에 연결하거나 원격으로 제어해야 합니다. 해당 채팅으로 전환해서 답하세요.
 - **시스템 알림을 클릭해도 해당 채팅으로 이동할 수 없습니다.** 시스템 알림은 시스템이 따로 표시하므로 확장 프로그램을 다시 호출할 수 없습니다. 대신 패널의 **이동**을 사용하세요. VS Code 메시지의 **보기**는 패널에서 해당 채팅을 선택하고, **이동**은 그 채팅이 어느 창에 있든 실행 중인 곳으로 데려갑니다.
-- **이동은 아직 모든 곳에 가지 못합니다.** Claude와 Codex 데스크톱 앱의 채팅, 그리고 Terminal.app과 iTerm2 외의 터미널 앱(Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal 등)의 채팅은 아직 지원하지 않습니다. Codex CLI와 Gemini CLI는 같은 폴더에서 여러 개가 실행 중이면 가장 최근에 시작된 것을 고릅니다. 다른 VS Code 창의 채팅으로는 `agentMonitor.shareScanAcrossWindows`가 켜져 있을 때만 이동할 수 있습니다.
+- **이동은 아직 모든 곳에 가지 못합니다.** Claude와 Codex 데스크톱 앱의 채팅, 그리고 Terminal.app과 iTerm2 외의 터미널 앱(Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal 등)의 채팅은 아직 지원하지 않습니다. Codex CLI는 같은 폴더에서 여러 개가 실행 중이면 가장 최근에 시작된 것을 고릅니다. 다른 VS Code 창의 채팅으로는 `agentMonitor.shareScanAcrossWindows`가 켜져 있을 때만 이동할 수 있습니다.
 - **알림음은 macOS에서만 직접 확인했습니다.** Linux에서는 `canberra-gtk-play`나 `paplay`로, Windows에서는 PowerShell로 Windows `Media` 폴더의 소리를 재생하며, 두 플랫폼 모두 아직 직접 확인하지 않았습니다.
 - **Windows용 이동 명령은 아직 Windows에서 직접 테스트하지 않았습니다.** 저장 위치 페이지의 `robocopy`, `mklink /J` 명령은 텍스트로만 확인했습니다. 실행하기 전에 한 번 읽어 보시고, 모든 것이 정상인지 확인할 때까지 `.bak` 백업 폴더를 지우지 마세요.
 - **터미널 버전은 푸시하지 않습니다.** 푸시 알림은 VS Code 확장 프로그램에서만 보냅니다.

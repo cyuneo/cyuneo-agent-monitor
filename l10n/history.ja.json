@@ -57,5 +57,5 @@
   "history.note.local": "日付はこのコンピューターのローカル時刻で区切っています。",
   "history.note.retention": "このコンピューターに残っている会話記録だけを数えます。Claude Code はクリーンアップ期間（既定では 30 日）を過ぎた古い記録を削除するため、古い日付は実際の使用量より少なく表示されることがあります。",
   "history.note.columns": "入力にはキャッシュ読み取りを含みません。Codex は推論を出力に含め、Claude Code は推論を個別に記録しません。",
-  "history.note.scope": "ここでは Claude Code と Codex のみを集計し、Copilot、Gemini CLI、Qwen Code は含みません。"
+  "history.note.scope": "ここでは Claude Code と Codex のみを集計し、Copilot は含みません。"
 }

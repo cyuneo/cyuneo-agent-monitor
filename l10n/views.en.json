@@ -1,7 +1,7 @@
 {
   "scope.all": "All sessions",
   "scope.workspace": "This workspace",
-  "scope.empty.all": "No Claude Code, Codex, Copilot, Gemini CLI or Qwen Code sessions were active recently.",
+  "scope.empty.all": "No Claude Code, Codex or Copilot sessions were active recently.",
   "scope.empty.workspace": "No sessions from this workspace were active recently.",
   "scope.noFolder": "No folder is open, so no session can match this workspace.",
   "scope.showAll": "Show all sessions",

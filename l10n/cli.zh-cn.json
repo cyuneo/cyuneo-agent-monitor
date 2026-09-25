@@ -1,5 +1,5 @@
 {
-  "cli.help.intro": "显示你的 Claude Code、Codex、Copilot、Gemini CLI 和 Qwen Code 会话及其中的智能体，数据读取自本机的会话记录。",
+  "cli.help.intro": "显示你的 Claude Code、Codex 和 Copilot 会话及其中的智能体，数据读取自本机的会话记录。",
   "cli.help.usage": "用法",
   "cli.help.options": "选项",
   "cli.help.optionsArg": "选项",
@@ -11,7 +11,7 @@
   "cli.opt.interval": "--watch 时的刷新间隔秒数（默认 {n}）",
   "cli.opt.window": "显示最近 N 分钟内活跃的会话（默认 {n}）",
   "cli.opt.stale": "多少分钟没有新记录就算智能体不活跃（默认 {n}）",
-  "cli.opt.provider": "读取哪家的记录：all、claude、codex、copilot、gemini 或 qwen（默认 all）",
+  "cli.opt.provider": "读取哪家的记录：all、claude、codex 或 copilot（默认 all）",
   "cli.opt.here": "只显示文件夹是当前目录或其子目录的会话",
   "cli.opt.session": "详细显示一个会话：时间线、结果、改过的文件、报错和续跑方法（填 ID 或 ID 开头部分）",
   "cli.opt.today": "同时统计今日等价 API 费用（会读取今天全部记录）",
@@ -26,7 +26,7 @@
   "cli.opt.help": "显示本帮助",
   "cli.opt.version": "显示版本号",
 
-  "cli.empty": "最近 {n} 分钟内没有活跃的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 会话。",
+  "cli.empty": "最近 {n} 分钟内没有活跃的 Claude Code、Codex 或 Copilot 会话。",
   "cli.empty.here": "最近 {n} 分钟内没有来自 {dir} 的活跃会话。",
   "cli.today": "今日（{label}）：{usd}",
   "cli.seeDetail": "详情：--session {id}",
@@ -49,7 +49,7 @@
   "cli.error.noValue": "{flag} 不接受值。",
   "cli.error.needsValue": "{flag} 需要一个值。",
   "cli.error.badNumber": "{flag} 需要一个正数（收到的是“{value}”）。",
-  "cli.error.badProvider": "未知的 provider “{value}”，请用 all、claude、codex、copilot、gemini 或 qwen。",
+  "cli.error.badProvider": "未知的 provider “{value}”，请用 all、claude、codex 或 copilot。",
   "cli.error.seeHelp": "加 --help 查看所有选项。",
   "cli.error.source": "无法读取 {source} 的记录：{message}",
   "cli.error.noSession": "没有会话匹配“{id}”。它可能已超过 {n} 分钟没有活动，试试加大 --window。",

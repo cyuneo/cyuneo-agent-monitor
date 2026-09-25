@@ -870,11 +870,9 @@ function workerCfg(h, extra = {}) {
     staleMinutes: 5,
     claude: { projectsDir: h.projects, home: h.home, configDir: h.home },
     codex: { enabled: false, home: path.join(TMP, 'no-codex') },
-    // Copilot / Gemini / Qwen stay on but point at missing temp dirs (never the real VS Code / ~/.gemini / ~/.qwen), so a
-    // machine with those tools installed behaves like CI without them
+    // Copilot stays on but points at a missing temp dir (never the real VS Code dir), so a machine with Copilot Chat
+    // installed behaves like CI without it
     copilot: { userDir: path.join(TMP, 'no-other-tools', 'Code', 'User') },
-    gemini: { home: path.join(TMP, 'no-other-tools', '.gemini'), homeSource: 'setting' },
-    qwen: { home: path.join(TMP, 'no-other-tools', '.qwen') },
     daily: false,
     ...extra,
   };

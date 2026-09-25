@@ -88,8 +88,6 @@
   "push.provider.claude": "Claude Code",
   "push.provider.codex": "Codex",
   "push.provider.copilot": "Copilot",
-  "push.provider.gemini": "Gemini CLI",
-  "push.provider.qwen": "Qwen Code",
   "push.event.needsYou": "An agent is waiting for you",
   "push.event.error": "An agent stops with an API error",
   "push.event.limitHit": "A usage limit is reached",

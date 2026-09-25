@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "在終端機旁邊看到你所有的 Claude Code、Codex、Copilot、Gemini CLI 和 Qwen Code 聊天：哪些智慧體在工作、哪些在等你、每個上下文用了多少。可以用便宜的模型壓縮，快取過期前提醒你，碰到額度上限後幫你接著做。只讀取本機的工作階段記錄；除非你允許連網（預設關閉），擴充功能本身不連網；目前只有選用的推播通知會用到連網。非官方專案，與 Anthropic、OpenAI、GitHub、Google 或阿里雲沒有關聯。個人和非商業用途免費；商業用途需另行授權。",
-  "capabilities.untrusted": "在受限模式下，指向其他資料夾或程式的設定（Claude Code 命令列路徑、Claude 專案資料夾，以及 Codex、Gemini CLI、Qwen Code 的目錄）只會從你的使用者設定裡讀取。推播通知的設定和連網開關則一律只從你的使用者設定裡讀取。",
+  "description": "在終端機旁邊看到你所有的 Claude Code、Codex 和 Copilot 聊天：哪些智慧體在工作、哪些在等你、每個上下文用了多少。可以用便宜的模型壓縮，快取過期前提醒你，碰到額度上限後幫你接著做。只讀取本機的工作階段記錄；除非你允許連網（預設關閉），擴充功能本身不連網；目前只有選用的推播通知會用到連網。非官方專案，與 Anthropic、OpenAI 或 GitHub沒有關聯。個人和非商業用途免費；商業用途需另行授權。",
+  "capabilities.untrusted": "在受限模式下，指向其他資料夾或程式的設定（Claude Code 命令列路徑、Claude 專案資料夾、Codex 主目錄）只會從你的使用者設定裡讀取。推播通知的設定和連網開關則一律只從你的使用者設定裡讀取。",
 
   "container.title": "智慧體監視器",
   "view.overview": "總覽",
@@ -9,7 +9,7 @@
   "category": "智慧體監視器",
 
   "welcome.loading": "正在讀取本機的智慧體工作階段記錄…",
-  "welcome.empty.all": "最近沒有活躍的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 工作階段。",
+  "welcome.empty.all": "最近沒有活躍的 Claude Code、Codex 或 Copilot 工作階段。",
   "welcome.empty.workspace": "最近沒有來自目前工作區的活躍工作階段。",
   "welcome.noFolder": "沒有開啟資料夾，無法比對目前工作區的工作階段。",
   "welcome.openSettings": "開啟設定",
@@ -79,10 +79,6 @@
   "config.codex.enabled": "讀取 Codex 的工作階段記錄。",
   "config.codex.home": "Codex 主目錄。留空則使用 `$CODEX_HOME` 或 `~/.codex`。",
   "config.copilot.enabled": "讀取 VS Code 儲存的 GitHub Copilot Chat 工作階段記錄（聊天和智慧體模式）。",
-  "config.gemini.enabled": "讀取 Gemini CLI 的工作階段記錄。",
-  "config.gemini.home": "Gemini CLI 目錄。留空則使用 `$GEMINI_CLI_HOME/.gemini` 或 `~/.gemini`。",
-  "config.qwen.enabled": "讀取 Qwen Code 的工作階段記錄。",
-  "config.qwen.home": "Qwen Code 目錄。留空則使用 `$QWEN_RUNTIME_DIR`、`$QWEN_HOME` 或 `~/.qwen`。",
   "config.compactConfirm": "在背景壓縮已關閉的工作階段前先詢問確認。",
   "config.compactTemplate": "壓縮工作階段時，在 `/compact` 後面預填的文字（說明摘要必須保留什麼）。留空則使用你顯示語言對應的內建範本。",
   "config.contextHintStart": "對於視窗達到 50 萬 token 以上的模型：上下文超過這個 token 數後，會在下一個合適的節點建議壓縮或開新工作階段。",
@@ -98,7 +94,7 @@
   "config.push.events": "推播開啟時，哪些事件會傳送推播。",
   "config.push.events.needsYou": "智慧體在等你回覆或核准（過了延遲時間仍在等才推播）。",
   "config.push.events.error": "智慧體因 API 錯誤停止。",
-  "config.push.events.limitHit": "Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 的使用額度用完。",
+  "config.push.events.limitHit": "Claude Code、Codex 或 Copilot 的使用額度用完。",
   "config.push.events.limitReset": "使用額度已重置。",
   "config.push.events.usageHigh": "某個用量視窗達到用量提醒百分比。",
   "config.push.events.costDaily": "今日估算費用超過每日預算（不傳送金額）。",

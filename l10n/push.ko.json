@@ -88,8 +88,6 @@
   "push.provider.claude": "Claude Code",
   "push.provider.codex": "Codex",
   "push.provider.copilot": "Copilot",
-  "push.provider.gemini": "Gemini CLI",
-  "push.provider.qwen": "Qwen Code",
   "push.event.needsYou": "에이전트가 기다리는 중",
   "push.event.error": "에이전트가 API 오류로 멈춤",
   "push.event.limitHit": "사용 한도 도달",

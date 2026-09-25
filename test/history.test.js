@@ -457,10 +457,8 @@ function monitorCfg(h, extra = {}) {
   return {
     claude: { projectsDir: h.claudeDir, home: path.join(h.base, 'claude') },
     codex: { home: h.codexHome },
-    // Point the other providers at missing dirs so the real VS Code / ~/.gemini / ~/.qwen folders are never read
+    // Point Copilot at a missing dir so the real VS Code folder is never read
     copilot: { userDir: path.join(h.base, 'no-vscode', 'User') },
-    gemini: { home: path.join(h.base, 'no-gemini'), homeSource: 'setting' },
-    qwen: { home: path.join(h.base, 'no-qwen') },
     daily: false,
     historyCacheFile: h.cache,
     ...extra,
@@ -694,7 +692,7 @@ test('view model: screen-reader announcements only on scan start / finish; an er
   assert.ok(vm.chart.bars.every((b) => b.text.cost.codex === '$0.00'), vm.chart.bars[0].text.cost.codex);
   const empty = HV.buildHistoryVm({ report: H.emptyHistoryReport(30, NOW), i18n: en, now: NOW });
   assert.deepStrictEqual(empty.totals.filter((x) => x.key !== 'tokens').map((x) => x.value), ['$0.00', '$0.00', '$0.00', '$0.00']);
-  assert.ok(done.notes.items.includes(en.t('history.note.scope')), 'says Copilot / Gemini CLI / Qwen Code are not counted');
+  assert.ok(done.notes.items.includes(en.t('history.note.scope')), 'says Copilot is not counted');
   for (const loc of LOCALES) {
     const i18n = i18nLib.createI18n(loc);
     for (const k of ['history.live.done', 'history.note.scope']) assert.ok(i18n.t(k) !== k, `${loc}: ${k}`);

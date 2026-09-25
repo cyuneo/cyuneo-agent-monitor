@@ -88,8 +88,6 @@
   "push.provider.claude": "Claude Code",
   "push.provider.codex": "Codex",
   "push.provider.copilot": "Copilot",
-  "push.provider.gemini": "Gemini CLI",
-  "push.provider.qwen": "Qwen Code",
   "push.event.needsYou": "エージェントが対応を待っている",
   "push.event.error": "エージェントが API エラーで停止した",
   "push.event.limitHit": "使用上限に達した",

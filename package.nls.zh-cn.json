@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "在终端旁边看到你所有的 Claude Code、Codex、Copilot、Gemini CLI 和 Qwen Code 聊天：哪些智能体在干活、哪些在等你、每个上下文用了多少。可以用便宜的模型压缩，缓存过期前提醒你，撞额度后帮你接着干。只读取本机的会话记录；除非你允许联网（默认关闭），扩展本身不联网；目前只有可选的推送通知会用到联网。非官方项目，与 Anthropic、OpenAI、GitHub、Google 或阿里云没有关联。个人和非商业用途免费；商业用途需另行授权。",
-  "capabilities.untrusted": "在受限模式下，指向其它文件夹或程序的设置（Claude Code 命令行路径、Claude 项目文件夹，以及 Codex、Gemini CLI、Qwen Code 的目录）只会从你的用户设置里读取。推送通知的设置和联网开关则始终只从你的用户设置里读取。",
+  "description": "在终端旁边看到你所有的 Claude Code、Codex 和 Copilot 聊天：哪些智能体在干活、哪些在等你、每个上下文用了多少。可以用便宜的模型压缩，缓存过期前提醒你，撞额度后帮你接着干。只读取本机的会话记录；除非你允许联网（默认关闭），扩展本身不联网；目前只有可选的推送通知会用到联网。非官方项目，与 Anthropic、OpenAI 或 GitHub没有关联。个人和非商业用途免费；商业用途需另行授权。",
+  "capabilities.untrusted": "在受限模式下，指向其它文件夹或程序的设置（Claude Code 命令行路径、Claude 项目文件夹、Codex 主目录）只会从你的用户设置里读取。推送通知的设置和联网开关则始终只从你的用户设置里读取。",
 
   "container.title": "智能体监视器",
   "view.overview": "总览",
@@ -9,7 +9,7 @@
   "category": "智能体监视器",
 
   "welcome.loading": "正在读取本机的智能体会话记录…",
-  "welcome.empty.all": "最近没有活跃的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 会话。",
+  "welcome.empty.all": "最近没有活跃的 Claude Code、Codex 或 Copilot 会话。",
   "welcome.empty.workspace": "最近没有来自当前工作区的活跃会话。",
   "welcome.noFolder": "没有打开文件夹，无法匹配当前工作区的会话。",
   "welcome.openSettings": "打开设置",
@@ -79,10 +79,6 @@
   "config.codex.enabled": "读取 Codex 的会话记录。",
   "config.codex.home": "Codex 主目录。留空则使用 `$CODEX_HOME` 或 `~/.codex`。",
   "config.copilot.enabled": "读取 VS Code 保存的 GitHub Copilot Chat 会话记录（聊天和智能体模式）。",
-  "config.gemini.enabled": "读取 Gemini CLI 的会话记录。",
-  "config.gemini.home": "Gemini CLI 目录。留空则使用 `$GEMINI_CLI_HOME/.gemini` 或 `~/.gemini`。",
-  "config.qwen.enabled": "读取 Qwen Code 的会话记录。",
-  "config.qwen.home": "Qwen Code 目录。留空则使用 `$QWEN_RUNTIME_DIR`、`$QWEN_HOME` 或 `~/.qwen`。",
   "config.compactConfirm": "在后台压缩已关闭的会话前先询问确认。",
   "config.compactTemplate": "压缩会话时，在 `/compact` 后面预填的文字（说明摘要必须保留什么）。留空则使用你显示语言对应的内置模板。",
   "config.contextHintStart": "对于窗口达到 50 万 token 及以上的模型：上下文超过这个 token 数后，会在下一个合适的节点建议压缩或开新会话。",
@@ -98,7 +94,7 @@
   "config.push.events": "推送开启时，哪些事件会发送推送。",
   "config.push.events.needsYou": "智能体在等你回复或批准（过了延迟时间仍在等才推送）。",
   "config.push.events.error": "智能体因 API 错误停止。",
-  "config.push.events.limitHit": "Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 的使用额度用完。",
+  "config.push.events.limitHit": "Claude Code、Codex 或 Copilot 的使用额度用完。",
   "config.push.events.limitReset": "使用额度已重置。",
   "config.push.events.usageHigh": "某个用量窗口达到用量提醒百分比。",
   "config.push.events.costDaily": "今日估算费用超过每日预算（不发送金额）。",

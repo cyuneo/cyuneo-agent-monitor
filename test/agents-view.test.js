@@ -578,7 +578,7 @@ test('provider: goTo (session bar button, double-click on a list or agent row) r
   assert.strictEqual(AV.GOTO_COMMAND, 'agentMonitor.goToChat');
 });
 
-test('Go to button: shown for a live Claude / Qwen session and a recent Codex / Gemini / Copilot session; hidden when not running, old or not supported yet', () => {
+test('Go to button: shown for a live Claude session and a recent Codex / Copilot session; hidden when not running, old or not supported yet', () => {
   const goTo = (o) => build(session(o)).session.goTo;
   assert.strictEqual(goTo({ live: true }), true, 'Claude VS Code chat, live');
   assert.strictEqual(goTo({ live: false }), false, 'Claude, not running');
@@ -588,9 +588,6 @@ test('Go to button: shown for a live Claude / Qwen session and a recent Codex / 
   assert.strictEqual(goTo({ provider: 'codex', id: 'c2', entry: 'cli', entrypoint: null, live: false, updatedMs: NOW - 3 * 86400e3 }), false, 'Codex CLI, days old');
   assert.strictEqual(goTo({ provider: 'codex', id: 'c3', entry: 'vscode', entrypoint: null, live: true }), true, 'Codex extension thread');
   assert.strictEqual(goTo({ provider: 'codex', id: 'c4', entry: 'desktop', entrypoint: null, live: true }), false, 'Codex app: not supported yet');
-  assert.strictEqual(goTo({ provider: 'gemini', id: 'g1', entry: 'cli', entrypoint: null }), true);
-  assert.strictEqual(goTo({ provider: 'qwen', id: 'q1', entry: 'cli', entrypoint: null, live: true }), true);
-  assert.strictEqual(goTo({ provider: 'qwen', id: 'q2', entry: 'cli', entrypoint: null, live: false }), false);
   assert.strictEqual(goTo({ provider: 'copilot', id: 'p1', entry: 'vscode', entrypoint: null, live: true }), true, 'Copilot Chat');
   assert.strictEqual(goTo({ provider: 'copilot', id: 'p2', entry: 'vscode', entrypoint: null, live: false, updatedMs: NOW - 3 * 86400e3 }), false, 'Copilot Chat, days old');
 });
@@ -657,7 +654,7 @@ test('provider: openFile only opens existing files listed in the details; openTr
   assert.strictEqual(st.log.opened.length, 0, 'not a .jsonl: not opened');
   st.listeners.msg({ type: 'openTranscript', sessionKey: s.key, rowId: 'main', file: '/etc/passwd' });
   assert.deepStrictEqual(st.log.opened, [[transcript, { preview: true }]], 'path comes from session data, not from the webview');
-  // Whole-file JSON sessions (older Copilot Chat / Gemini CLI) can be opened too
+  // Whole-file JSON sessions (older Copilot Chat) can be opened too
   const legacy = path.join(TMP, 'legacy.json');
   fs.writeFileSync(legacy, '{}');
   const s2 = session({ provider: 'copilot', id: 'legacy', main: agent({ file: legacy }) });
@@ -884,7 +881,7 @@ test('session menu: SESSION_MENU matches webview/context in package.json one to 
   assert.ok(names({ resumable: true }).includes('copyResume'));
   assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-idle resumable compactable'), { compactable: true, resumable: true, handoff: true, autoCompact: true });
   assert.deepStrictEqual(AV._internal.flagsOf('session provider-codex lamp-idle'), { compactable: false, resumable: false, handoff: true, autoCompact: true });
-  for (const p of ['copilot', 'gemini', 'qwen']) assert.deepStrictEqual(AV._internal.flagsOf(`session provider-${p} lamp-idle`), { compactable: false, resumable: false, handoff: false, autoCompact: false }, p);
+  for (const p of ['copilot']) assert.deepStrictEqual(AV._internal.flagsOf(`session provider-${p} lamp-idle`), { compactable: false, resumable: false, handoff: false, autoCompact: false }, p);
   assert.deepStrictEqual(AV._internal.flagsOf('session lamp-compactable'), { compactable: false, resumable: false, handoff: false, autoCompact: false }, 'whole-word match');
 });
 
@@ -1025,17 +1022,15 @@ test('provider description: set on the webview view; remembered until the view e
   assert.strictEqual(st.view.description, undefined);
 });
 
-// ---------- Copilot / Gemini CLI / Qwen Code ----------
+// ---------- Copilot ----------
 
-// Sessions shaped like lib/providers/{copilot,gemini,qwen}.js produce them: no auto-compact point, no cache, no resume hints
+// Sessions shaped like lib/providers/copilot.js produces them: no auto-compact point, no cache, no resume hints
 const noCompact = (used, window, o = {}) => ({ display: used, contextUsed: used, contextWindow: window, compactAt: null, toCompact: null,
   output: 900, processed: 50000, apiCalls: 4, ...o });
 function providerSession(provider, o = {}) {
   const base = {
     copilot: { entry: 'vscode', model: 'copilot/claude-sonnet-4.5', contextWindow: 128000, contextWindowSource: 'copilot-model', costUsd: null,
       copilot: { credits: 1.5, multiplier: 1, cachedTokens: 0, requests: 2, queued: 0, modelState: 4, mode: 'agent', permissionLevel: 'default', storage: 'workspace', workspaceFile: null } },
-    gemini: { entry: 'cli', model: 'gemini-2.5-pro', contextWindow: 1048576, contextWindowSource: 'model-rule', costUsd: 0.05, liveCertainty: 'guess' },
-    qwen: { entry: 'cli', model: 'coder-model', contextWindow: 1000000, contextWindowSource: 'qwen-record', costUsd: null, unpricedModel: 'coder-model' },
   }[provider];
   return session({
     provider, id: provider + '-1', entryRaw: null, entrypoint: null, cacheExpiresMs: null, compactAt: null, compactAtSource: null, resume: [],
@@ -1122,10 +1117,10 @@ test('Copilot without token counts (and its sub-agents, never counted): "—" in
   assert.ok(/at\(u\.tok, 'title', r\.tokensTip/.test(js));
 });
 
-test('last usage-limit hit banner: Copilot / Gemini CLI / Qwen Code for an hour after the hit, Claude until its reset time, never on other tools', () => {
-  const hit = (o) => ({ kind: 'unknown', model: null, resetsAtMs: null, resetsText: null, source: 'text', autoContinue: null, ms: NOW - 10 * MIN, sessionKey: 'qwen:other', ...o });
+test('last usage-limit hit banner: Copilot for an hour after the hit, Claude until its reset time, never on other tools', () => {
+  const hit = (o) => ({ kind: 'unknown', model: null, resetsAtMs: null, resetsText: null, source: 'text', autoContinue: null, ms: NOW - 10 * MIN, sessionKey: 'copilot:other', ...o });
   const info = (vm) => vm.session.banners.filter((b) => b.tone === 'info' && b.text.startsWith('Last '));
-  for (const p of ['copilot', 'gemini', 'qwen']) {
+  for (const p of ['copilot']) {
     const s = providerSession(p);
     const b = info(build(s, { quota: { [p]: { lastHit: hit() } } }));
     assert.strictEqual(b.length, 1, p);
@@ -1136,55 +1131,18 @@ test('last usage-limit hit banner: Copilot / Gemini CLI / Qwen Code for an hour 
     const own = providerSession(p, { main: agent({ status: S.makeStatus('quota', NOW - MIN, { quota: hit() }), tokens: noCompact(1000, 128000), costUsd: null, cacheTtl: null }) });
     assert.strictEqual(info(build(own, { quota: { [p]: { lastHit: hit() } } })).length, 0, p);
   }
-  assert.strictEqual(info(build(providerSession('gemini'), { quota: { qwen: { lastHit: hit() } } })).length, 0, 'another tool\'s hit');
+  assert.strictEqual(info(build(providerSession('copilot'), { quota: { claude: { lastHit: hit() } } })).length, 0, 'another tool\'s hit');
   assert.strictEqual(info(build(session(), { quota: { claude: { lastHit: hit() } } })).length, 0, 'Claude without a reset time: as before, nothing');
   assert.strictEqual(info(build(session(), { quota: { claude: { lastHit: hit({ kind: 'weekly', resetsAtMs: NOW + 60 * MIN }) } } })).length, 1);
 });
 
 test('today\'s total says it covers Claude Code and Codex only', () => {
   const today = { dayStartMs: NOW - 3600e3, partial: false, progress: 1, claude: { costUsd: 1.5, unpricedTokens: 0, byModel: {} }, codex: { costUsd: 0, unpricedTokens: 0, byModel: {} } };
-  assert.ok(build(providerSession('gemini'), { today }).session.todayTip.includes(i18n.t('cost.today.scope')));
+  assert.ok(build(providerSession('copilot'), { today }).session.todayTip.includes(i18n.t('cost.today.scope')));
 });
 
-test('Gemini CLI: guessed statuses get the guess cue ("~", italic class, note); token breakdown and estimate marker in the row tooltip', () => {
-  const s = providerSession('gemini', {
-    live: true, liveStatus: 'busy',
-    main: agent({ model: 'gemini-2.5-pro', status: S.makeStatus('thinking', NOW - 3000, { certainty: 'guess' }),
-      tokens: noCompact(52000, 1048576, { input: 52000, cached: 30000, thoughts: 1200, tool: 300 }), costUsd: 0.0516, costEstimated: true, cacheTtl: null }),
-    agents: [sub('g1', NOW - MIN, { kind: 'geminiSubagent', name: 'investigator', agentType: 'codebase_investigator', model: 'gemini-2.5-flash', status: S.makeStatus('done', NOW - 30000),
-      tokens: noCompact(9000, 1048576, { input: 9000, cached: 0, thoughts: 0, tool: 0 }), costUsd: 0.01 })],
-  });
-  const vm = build(s);
-  const [main, g1] = vm.rows;
-  assert.strictEqual(main.statusText, '~Thinking');
-  assert.strictEqual(main.guess, true);
-  assert.strictEqual(g1.guess, false, 'certain sub-agent done');
-  assert.strictEqual(g1.name, 'investigator');
-  assert.strictEqual(g1.sub, 'gemini-2.5-flash · Subagent · codebase_investigator');
-  assert.ok(main.tip.includes('Input 52K (cached 30K) · thoughts 1.2K · tool use 300'), main.tip);
-  assert.ok(main.tip.includes('Guessed from when the session log was last written'), main.tip);
-  assert.strictEqual(main.costText, '$0.052');
-  assert.strictEqual(main.costTip, '$0.052 est.');
-  assert.strictEqual(vm.session.statusText, '~Thinking');
-  assert.strictEqual(vm.session.guess, true);
-  assert.ok(vm.session.metaTip.includes('probably open'), vm.session.metaTip);
-  assert.ok(vm.session.costTip.includes('2026-09-24'), 'Gemini price table date');
-  // Session list: churning statuses collapse to "Working" but keep the guess mark
-  const L = lamp.sessionLamps(s, { seenAtMs: 0 });
-  const row = AV.sessionRowVm(s, L, i18n, NOW);
-  assert.strictEqual(row.description, 'Gemini CLI · ~Working · 5% context');
-  assert.ok(row.a11y.includes('~Working'));
-  // A guessed done is DoneUnseen like any done, with the same cue
-  const done = providerSession('gemini', { doneAtMs: NOW - 60000,
-    main: agent({ status: S.makeStatus('done', NOW - 60000, { certainty: 'guess' }), tokens: noCompact(1000, 1048576), cacheTtl: null }) });
-  const dvm = build(done);
-  assert.strictEqual(dvm.session.lamp, 'doneUnseen');
-  assert.strictEqual(dvm.session.statusText, '~Turn finished');
-  assert.strictEqual(dvm.rows[0].guess, true);
-});
-
-test('Copilot / Gemini CLI / Qwen Code: no compaction UI (no auto-compact button or line, no compact button, no "auto-compact is off"); unpriced models keep their tokens', () => {
-  for (const p of ['copilot', 'gemini', 'qwen']) {
+test('Copilot: no compaction UI (no auto-compact button or line, no compact button, no "auto-compact is off")', () => {
+  for (const p of ['copilot']) {
     const s = providerSession(p);
     const vm = build(s, { describeCompact: () => ({ valueText: '400K', text: '400K (40%)' }) });
     const bar = vm.session;
@@ -1202,18 +1160,10 @@ test('Copilot / Gemini CLI / Qwen Code: no compaction UI (no auto-compact button
     const ctx = JSON.parse(list.items[0].context);
     assert.ok(ctx.handoff === false && ctx.autoCompact === false, p + ': no Handoff / Set Auto-Compact in the context menu');
   }
-  // Qwen OAuth 'coder-model': tokens stay, the cell says "—" and the tooltip "No public price"
-  const q = build(providerSession('qwen', { main: agent({ model: 'coder-model', tokens: noCompact(30000, 1000000), costUsd: null, unpricedModel: 'coder-model', cacheTtl: null }) }));
-  assert.strictEqual(q.rows[0].tokensText, '30K');
-  assert.strictEqual(q.rows[0].costText, '—');
-  assert.strictEqual(q.rows[0].costTip, 'No public price');
-  assert.strictEqual(q.session.costText, 'This session: No public price');
 });
 
-test('sessions scanned by the real Copilot / Gemini CLI / Qwen Code providers from synthetic files render fully in every language', () => {
+test('sessions scanned by the real Copilot provider from synthetic files render fully in every language', () => {
   const { CopilotProvider } = require('../lib/providers/copilot');
-  const { GeminiProvider } = require('../lib/providers/gemini');
-  const { QwenProvider, sanitizeCwd } = require('../lib/providers/qwen');
   const base = path.join(TMP, 'providers');
   const line = (o) => JSON.stringify(o) + '\n';
   const write = (file, text, mtimeMs) => {
@@ -1221,7 +1171,6 @@ test('sessions scanned by the real Copilot / Gemini CLI / Qwen Code providers fr
     fs.writeFileSync(file, text);
     fs.utimesSync(file, new Date(mtimeMs), new Date(mtimeMs));
   };
-  const iso = (ms) => new Date(ms).toISOString();
   // Copilot: a request waiting on a question carousel, credits recorded, one running sub-agent
   const user = path.join(base, 'Code', 'User');
   const md = (t) => ({ value: t });
@@ -1235,36 +1184,14 @@ test('sessions scanned by the real Copilot / Gemini CLI / Qwen Code providers fr
   write(path.join(cdir, 'cop-q.jsonl'), line({ kind: 0, v: croot('cop-q', [req(1, { state: 4, parts: [{ kind: 'questionCarousel', questions: [] }], extra: { copilotCredits: 1.5 } })]) }), NOW - 20000);
   write(path.join(cdir, 'cop-s.jsonl'), line({ kind: 0, v: croot('cop-s', [req(1, { state: 0, parts: [sub] })]) }), NOW - 20000);
   const copilot = new CopilotProvider({ userDir: user, activeWindowMinutes: 30, staleMinutes: 5 }).scan(NOW);
-  // Gemini CLI: one turn that went quiet (guessed done), token breakdown recorded
-  const ghome = path.join(base, 'gemini');
-  const gfile = path.join(ghome, 'tmp', 'proj', 'chats', 'session-2026-09-24T09-58-aaaa1111.jsonl');
-  write(gfile, [
-    { sessionId: 'aaaa1111-0000-4000-8000-000000000001', projectHash: 'ph', startTime: iso(NOW - 180000), lastUpdated: iso(NOW - 120000), kind: 'main' },
-    { id: 'u1', timestamp: iso(NOW - 180000), type: 'user', content: [{ text: 'Fix the flaky test' }] },
-    { id: 'g1', timestamp: iso(NOW - 120000), type: 'gemini', content: 'All tests pass now.', model: 'gemini-2.5-pro',
-      tokens: { input: 52000, output: 800, cached: 30000, thoughts: 1200, tool: 300, total: 54300 } },
-  ].map(line).join(''), NOW - 120000);
-  const gemini = new GeminiProvider({ geminiHome: ghome, activeWindowMinutes: 30, staleMinutes: 5 }).scan(NOW);
-  // Qwen Code: an OAuth 'coder-model' turn (unpriced)
-  const qhome = path.join(base, 'qwen');
-  const qsid = 'dddd4444-0000-4000-8000-000000000004';
-  const qrec = (ms, type, extra) => ({ uuid: 'u' + ms, parentUuid: null, sessionId: qsid, timestamp: iso(ms), type, cwd: '/work/qw', version: '0.9.0', ...extra });
-  write(path.join(qhome, 'projects', sanitizeCwd('/work/qw'), 'chats', qsid + '.jsonl'), [
-    qrec(NOW - 90000, 'user', { message: { role: 'user', parts: [{ text: 'Summarise the repo' }] } }),
-    { ...qrec(NOW - 80000, 'assistant', { message: { role: 'model', parts: [{ text: 'Here it is.' }] } }), model: 'coder-model', contextWindowSize: 1000000,
-      usageMetadata: { promptTokenCount: 30000, candidatesTokenCount: 400, cachedContentTokenCount: 0, thoughtsTokenCount: 0, totalTokenCount: 30400 } },
-  ].map(line).join(''), NOW - 80000);
-  const qwen = new QwenProvider({ qwenHome: qhome, activeWindowMinutes: 30, staleMinutes: 5 }).scan(NOW);
 
   const byId = (list, id) => list.find((x) => x.id === id || x.id.startsWith(id));
   const cq = byId(copilot, 'cop-q');
   const cs = byId(copilot, 'cop-s');
-  const gd = byId(gemini, 'aaaa1111');
-  const qd = byId(qwen, qsid);
-  assert.ok(cq && cs && gd && qd, 'every provider produced its session');
+  assert.ok(cq && cs, 'the provider produced its sessions');
   for (const locale of ['en', 'zh-cn', 'zh-tw', 'ko', 'ja']) {
     const i18nL = i18nLib.createI18n(locale, { timeZone: 'UTC' });
-    for (const s of [cq, cs, gd, qd]) {
+    for (const s of [cq, cs]) {
       const vm = AV.buildViewModel({ session: s, i18n: i18nL, now: NOW, expanded: ['main'], loaded: true, describeCompact: null });
       const json = JSON.stringify(vm);
       assert.ok(!/\{\w+\}/.test(json), `${locale} ${s.key}: unreplaced placeholder`);
@@ -1273,7 +1200,6 @@ test('sessions scanned by the real Copilot / Gemini CLI / Qwen Code providers fr
       AV.sessionTipText(s, null, i18nL, { now: NOW });
     }
   }
-  const en = i18n;
   const q = build(cq);
   assert.strictEqual(q.rows[0].statusText, 'Waiting for your answer');
   assert.ok(q.rows[0].stepText.startsWith('Question for you'), q.rows[0].stepText);
@@ -1282,14 +1208,13 @@ test('sessions scanned by the real Copilot / Gemini CLI / Qwen Code providers fr
   const subRow = sv.rows.find((r) => r.id !== 'main');
   assert.strictEqual(subRow.name, 'Survey the repo');
   assert.strictEqual(subRow.sub.split(' · ').slice(-2).join(' · '), 'Subagent · Explore');
-  const g = build(gd);
-  assert.strictEqual(g.session.lamp, 'doneUnseen');
-  assert.strictEqual(g.rows[0].statusText, '~Turn finished');
-  assert.strictEqual(g.rows[0].guess, true);
-  assert.ok(g.rows[0].tip.includes(en.t('count.breakdown', { input: '52K', cached: '30K', thoughts: '1.2K', tool: '300' })), g.rows[0].tip);
-  const qv = build(qd);
-  assert.strictEqual(qv.rows[0].costTip, 'No public price');
-  assert.strictEqual(qv.session.autoCompact, null);
+});
+
+test('approval guesses carry the guess cue in the table and the session bar; certain statuses do not', () => {
+  const vm = build(session({ main: agent({ status: S.makeStatus('maybeAwaitingApproval', NOW - 90000, { pendingTool: 'Edit' }) }) }));
+  assert.strictEqual(vm.rows[0].guess, true);
+  assert.strictEqual(vm.session.guess, true);
+  assert.strictEqual(build(session()).rows[0].guess, false);
 });
 
 test('media: guessed statuses are italic in the session bar and the table; the cost column header follows costHead', () => {

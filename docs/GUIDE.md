@@ -11,7 +11,7 @@
 ![The Agent Monitor tab in the bottom panel, with made-up sample data: the selected Claude Code chat's main agent, two subagents and a workflow's agents on the left, and the list of open and recent chats on the right](../images/split-view.png)
 
 - **Agent Monitor** opens as a tab in the bottom panel, next to Terminal, and looks like it: one panel with no extra view headers. The agents of the selected chat fill most of it, and a narrow list of chats sits on one side, like the terminal's tab list.
-- **The chat list.** Every open and recent chat, each with a status light. They are grouped into **Open** (Claude Code still has the chat open; Codex or GitHub Copilot Chat is in the middle of a turn; Qwen Code's process is still running; or, as a guess, Gemini CLI has written to it recently) and **Recent**. Rows are the same height as terminal tabs, and the selected chat is highlighted. To leave room for titles, a row shows only the status light and the title, plus a small mark when a large context is worth dealing with: **◔** consider compacting, **◕** handle soon. Hover over a row for its status, context and the rest.
+- **The chat list.** Every open and recent chat, each with a status light. They are grouped into **Open** (Claude Code still has the chat open, or Codex or GitHub Copilot Chat is in the middle of a turn) and **Recent**. Rows are the same height as terminal tabs, and the selected chat is highlighted. To leave room for titles, a row shows only the status light and the title, plus a small mark when a large context is worth dealing with: **◔** consider compacting, **◕** handle soon. Hover over a row for its status, context and the rest.
 - **The list sits where your terminal's tab list is** (right by default, following `terminal.integrated.tabs.location`); set `agentMonitor.sessionListPosition` to put it on the left or right yourself. Drag the divider to resize it, double-click the divider to reset it to 200 px, or drag it almost closed to shrink the list to a strip of status lights. When the panel is narrower than 500 px, the strip is used automatically. The width is remembered.
 - **Hover over a chat** for a **Compact…** button (20K context or more) and a **…** button with the same actions as the right-click menu. You can also use the keyboard: arrow keys, Home and End move through the list, Enter or Space selects, typing jumps to a chat by its first letters, and Shift+F10 opens the actions.
 - **The agents.** Click a chat to see what's running inside it: the main conversation on top, then subagents and background agents, with workflow agents grouped under their workflow.
@@ -34,7 +34,7 @@ The same six lights are used everywhere: in the chat list, the Agents table, the
 
 Lights also differ in shape (filled or outline), so they don't rely on colour alone. Light themes and high-contrast themes get their own shades, and you can change every colour in `workbench.colorCustomizations`.
 
-"Needs you" is exact for Claude Code versions that report their live state (see [What it reads](#what-it-reads)) and for GitHub Copilot Chat, though Copilot Chat can show it up to about a minute late. For older Claude Code versions, Codex, Gemini CLI and Qwen Code, the extension has to guess. When a quick tool (reading, writing or editing a file, search, a patch) has had no result for 60 seconds, the chat shows **May be waiting for your approval**. Long commands such as shell commands are never guessed. You can change or turn off the guess with `agentMonitor.approvalGuess`.
+"Needs you" is exact for Claude Code versions that report their live state (see [What it reads](#what-it-reads)) and for GitHub Copilot Chat, though Copilot Chat can show it up to about a minute late. For older Claude Code versions and Codex, the extension has to guess. When a quick tool (reading, writing or editing a file, search, a patch) has had no result for 60 seconds, the chat shows **May be waiting for your approval**. Long commands such as shell commands are never guessed. You can change or turn off the guess with `agentMonitor.approvalGuess`.
 
 ### Go to where a chat is running
 
@@ -45,16 +45,16 @@ Click **Go to** in the chat's header, or double-click a chat in the list or one 
 | Claude Code extension | The chat opens in Claude Code, in a tab or the side bar as your `claudeCode.preferredLocation` setting says. The setting isn't changed |
 | Codex extension | The conversation opens in an editor tab |
 | GitHub Copilot Chat | The chat opens in an editor tab, in the window whose workspace it belongs to |
-| Claude Code, Codex, Gemini CLI or Qwen Code in VS Code's integrated terminal | That terminal is shown |
+| Claude Code or Codex in VS Code's integrated terminal | That terminal is shown |
 | Another VS Code window | That window opens the chat or shows the terminal, and comes to the front. This needs `agentMonitor.shareScanAcrossWindows` on (the default). If the window can't come to the front, a message says which one to switch to |
 | Terminal.app or iTerm2 (macOS) | The app comes to the front with the chat's tab selected (see below) |
 | The Claude or Codex desktop app, or another terminal app (Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal and others) | Not supported yet; a message says so |
 
 - **Terminal.app and iTerm2:** the first time, Agent Monitor asks whether to switch to the chat's tab in that app. After you choose **Continue**, macOS asks whether VS Code (or the editor you use) may control that app: choose **Allow**. Agent Monitor asks only once per app. If you didn't allow it, the next try shows a message with **Open Automation Settings**; allow it in System Settings > Privacy & Security > Automation, then try again. You can also change it there later.
-- **Codex CLI and Gemini CLI:** Agent Monitor has no process ID for these chats, so it looks for a running `codex` or `gemini` process in the chat's folder (for Codex, the process that has the chat's record open, when that can be told). If several run in the same folder, the newest one is chosen, which may be a different chat. On Windows a process's folder can't be read, so the newest one is chosen.
+- **Codex CLI:** Agent Monitor has no process ID for these chats, so it looks for a running `codex` process in the chat's folder (the one that has the chat's record open, when that can be told). If several run in the same folder, the newest one is chosen, which may be a different chat. On Windows a process's folder can't be read, so the newest one is chosen.
 - **When it can't go there,** a message says why: for example, the chat isn't running any more, it runs in a terminal outside VS Code, it was started by another tool or agent rather than in a terminal or chat panel, or no open VS Code window has the Copilot chat's workspace.
-- **The Go to button** (and the Overview's inline button) appears only when going there is likely to work: for Claude Code and Qwen Code chats that are still open, and for Codex, Gemini CLI and Copilot Chat chats that are open or were active in the last 24 hours. Double-clicking and the menus always try.
-- **Only when you ask.** Agent Monitor lists the running processes only when you use Go to: one `ps` call on macOS and Linux, one PowerShell call on Windows, plus, for Codex CLI and Gemini CLI, their working folders and, for Codex, which process has the chat's record open (`lsof` on macOS, `/proc` on Linux). It doesn't read your chats for this, and nothing is sent anywhere. Other VS Code windows are reached through the shared folder described in [What it reads](#what-it-reads).
+- **The Go to button** (and the Overview's inline button) appears only when going there is likely to work: for Claude Code chats that are still open, and for Codex and Copilot Chat chats that are open or were active in the last 24 hours. Double-clicking and the menus always try.
+- **Only when you ask.** Agent Monitor lists the running processes only when you use Go to: one `ps` call on macOS and Linux, one PowerShell call on Windows, plus, for Codex CLI, the processes' working folders and which process has the chat's record open (`lsof` on macOS, `/proc` on Linux). It doesn't read your chats for this, and nothing is sent anywhere. Other VS Code windows are reached through the shared folder described in [What it reads](#what-it-reads).
 
 ### "Needs you" notifications
 
@@ -108,7 +108,7 @@ Optional, and **off by default**. Turn on `agentMonitor.sound.enabled`, and Agen
 - **a chat finishes and you haven't looked at it yet**, so its light turns bright green, **Done (new)** (`agentMonitor.sound.done`);
 - **a threshold alert** comes in (`agentMonitor.sound.alert`; see [Threshold alerts](#threshold-alerts)).
 
-Each of these settings takes `default`, `off`, or one of Glass, Ping, Pop, Tink, Submarine, Funk, Hero and Basso. `default` gives each event its own sound: Glass when an agent needs you, Basso for errors, Hero when a chat is done and Funk for threshold alerts. The names are macOS system sounds, played with `afplay`. On Linux, a similar sound from the system's sound theme is played with `canberra-gtk-play` or `paplay`, if one of them is installed; on Windows, a similar sound from the Windows `Media` folder. The "needs you" sound plays together with the ["needs you" notification](#needs-you-notifications), so it also needs `agentMonitor.notifyNeedsYou` on. Neither the "needs you" sound nor the "done" sound plays for the chat you are looking at, and there is no "done" sound when a finish is only a guess, as it usually is for Gemini CLI. Each sound plays in one VS Code window only, and when several things happen at once, you hear one sound: at most one every 3 seconds, across all windows. No sound plays in remote windows (SSH, WSL, containers) or during [quiet hours](#quiet-hours).
+Each of these settings takes `default`, `off`, or one of Glass, Ping, Pop, Tink, Submarine, Funk, Hero and Basso. `default` gives each event its own sound: Glass when an agent needs you, Basso for errors, Hero when a chat is done and Funk for threshold alerts. The names are macOS system sounds, played with `afplay`. On Linux, a similar sound from the system's sound theme is played with `canberra-gtk-play` or `paplay`, if one of them is installed; on Windows, a similar sound from the Windows `Media` folder. The "needs you" sound plays together with the ["needs you" notification](#needs-you-notifications), so it also needs `agentMonitor.notifyNeedsYou` on. Neither the "needs you" sound nor the "done" sound plays for the chat you are looking at, and there is no "done" sound when a finish is only a guess. Each sound plays in one VS Code window only, and when several things happen at once, you hear one sound: at most one every 3 seconds, across all windows. No sound plays in remote windows (SSH, WSL, containers) or during [quiet hours](#quiet-hours).
 
 ### Quiet hours
 
@@ -132,7 +132,7 @@ Agent Monitor can also tell you when a number passes a value you set. The alert 
 | --- | --- | --- |
 | `agentMonitor.alerts.usagePercent` | `90` | Codex's 5-hour or weekly usage reaches this percentage. Codex only: Claude Code's local logs record when a limit is hit, but not a percentage |
 | `agentMonitor.alerts.dailyCost` | `0` (off) | Today's estimated API-equivalent cost, Claude Code and Codex together, reaches this many US dollars |
-| `agentMonitor.alerts.contextPercent` | `0` (off) | A chat's main conversation reaches this percentage of its auto-compact point (Claude Code and Codex; the other tools have no auto-compact point) |
+| `agentMonitor.alerts.contextPercent` | `0` (off) | A chat's main conversation reaches this percentage of its auto-compact point (Claude Code and Codex; GitHub Copilot Chat has no auto-compact point) |
 
 - Each alert comes once: once per usage window until it resets, once a day for the cost, and once per chat until its next compaction. Set a value to 0 to turn that alert off.
 - What is already over a threshold when the window opens, or when you change the setting, is not reported.
@@ -217,7 +217,7 @@ Click an agent to see its recent steps, its final result (with a copy button), t
 
 ### Usage history
 
-**Agent Monitor: Show Usage History** (in the **…** menu of the panel title bar, or the Command Palette) opens a page with your Claude Code and Codex usage over the last 30 days (GitHub Copilot Chat, Gemini CLI and Qwen Code aren't included):
+**Agent Monitor: Show Usage History** (in the **…** menu of the panel title bar, or the Command Palette) opens a page with your Claude Code and Codex usage over the last 30 days (GitHub Copilot Chat isn't included):
 
 - the estimated cost or the tokens of each day, as a bar chart with Claude Code and Codex stacked (switch between **Cost** and **Tokens**, or **Show as a table**);
 - totals for the period, the daily average and how many days you used them;
@@ -286,20 +286,16 @@ Before you move anything:
 - **Claude Code** in the VS Code extension, the terminal or the desktop app, including subagents, background agents and workflows.
 - **Codex** in the VS Code extension, the CLI or the desktop app, including subagent and reviewer threads.
 - **GitHub Copilot Chat**: VS Code's built-in chat, including agent mode and its subagents.
-- **Gemini CLI** (preview), including subagents.
-- **Qwen Code** (preview), including subagents.
 - Tools that aren't installed are skipped, and each one can be turned off in the settings (see [Settings](#settings)).
-
-> **Gemini CLI and Qwen Code are a preview.** Support for them is built from their published record formats and hasn't been checked against real sessions yet. If a chat looks wrong, please report it in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
 
 Each tool records different things, so the extension can see different things:
 
-| | GitHub Copilot Chat | Gemini CLI (preview) | Qwen Code (preview) |
-| --- | --- | --- | --- |
-| **Open, working, done** | Read from the chat, but up to about a minute late: VS Code saves chats about once a minute | Guessed from when the chat was last written, so a chat that looks done can go back to working. A tool's name appears only after the tool finishes | Whether the chat is open is exact: it comes from the Qwen Code process ID |
-| **Needs you** | Exact, with the same delay | Guessed | Guessed |
-| **Tokens and cost** | Tokens for the whole chat (not per subagent), and Copilot credits instead of a dollar cost | Tokens and estimated cost | Tokens, and a cost estimated at Alibaba Cloud's international list prices. The free OAuth model shows tokens only |
-| **Context** | Window from the model details VS Code saves with the chat. No auto-compact point | The model's standard window. No auto-compact point | Window from Qwen Code's records. No auto-compact point |
+| | GitHub Copilot Chat |
+| --- | --- |
+| **Open, working, done** | Read from the chat, but up to about a minute late: VS Code saves chats about once a minute |
+| **Needs you** | Exact, with the same delay |
+| **Tokens and cost** | Tokens for the whole chat (not per subagent), and Copilot credits instead of a dollar cost |
+| **Context** | Window from the model details VS Code saves with the chat. No auto-compact point |
 
 Usage history, today's total cost (and its alert) and the [storage page](#where-your-chats-are-stored-and-moving-them) cover only Claude Code and Codex. **Compact…**, handoff notes, the auto-compact threshold and resume prompts are offered only for Claude Code and Codex chats, and background compaction is still Claude Code only.
 
@@ -317,7 +313,7 @@ node bin/agent-monitor.js --session 1a2b   # one chat in detail: steps, result, 
 node bin/agent-monitor.js --json           # the data as JSON
 ```
 
-Other options include `--provider all|claude|codex|copilot|gemini|qwen` (default `all`), `--window <minutes>`, `--here` (only chats in the current folder), `--today`, `--lang en|zh-cn|zh-tw|ko|ja` and `--no-color`. Run `--help` for the full list.
+Other options include `--provider all|claude|codex|copilot` (default `all`), `--window <minutes>`, `--here` (only chats in the current folder), `--today`, `--lang en|zh-cn|zh-tw|ko|ja` and `--no-color`. Run `--help` for the full list.
 
 ## Installation
 
@@ -349,14 +345,10 @@ Everything is read-only, with one exception that you start yourself: when you se
 | `<User>/workspaceStorage/<workspace>/chatSessions/<session>.jsonl` (or `.json`) | GitHub Copilot Chat chats in windows with a folder or workspace open. `<User>` is the User folder of the VS Code you are using, for example `~/Library/Application Support/Code/User` on macOS, `~/.config/Code/User` on Linux or `%APPDATA%\Code\User` on Windows |
 | `<User>/globalStorage/emptyWindowChatSessions/<session>.jsonl`, and the same under `<User>/profiles/<profile>/` | Copilot Chat chats in windows with no folder open, including other profiles |
 | `<User>/workspaceStorage/<workspace>/workspace.json` | Which folder a Copilot Chat chat belongs to |
-| `~/.gemini/tmp/<project>/chats/session-*.jsonl` (or `.json`) and `~/.gemini/tmp/<project>/chats/<session>/…` | Gemini CLI chats and their subagents. When Gemini CLI runs in the macOS sandbox, the same files under `~/.cache/.gemini`, which is read too unless `agentMonitor.gemini.home` is set |
-| `~/.gemini/tmp/<project>/.project_root`, `~/.gemini/projects.json` | Which folder a Gemini CLI chat belongs to |
-| `~/.qwen/projects/<project>/chats/<session>.jsonl` | Qwen Code chats, including subagents |
-| `~/.qwen/projects/<project>/chats/<session>.runtime.json` | The Qwen Code process ID, to tell whether the chat is still open. The extension only checks whether that process is still running |
 
-The paths above are the defaults. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected; `GEMINI_CLI_HOME` puts the Gemini CLI folders under `$GEMINI_CLI_HOME` instead of `~`; and for Qwen Code, `QWEN_RUNTIME_DIR`, else `QWEN_HOME`, is used instead of `~/.qwen`. You can also point the extension somewhere else with `agentMonitor.claude.projectsDir`, `agentMonitor.codex.home`, `agentMonitor.gemini.home` and `agentMonitor.qwen.home`.
+The paths above are the defaults. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected. You can also point the extension somewhere else with `agentMonitor.claude.projectsDir` and `agentMonitor.codex.home`.
 
-The extension only reads the GitHub Copilot Chat, Gemini CLI and Qwen Code files, and never writes to them or to those tools' folders. Nothing from them is sent anywhere, apart from the short messages described in [Push to your phone or team chat](#push-to-your-phone-or-team-chat) if you turn push on.
+The extension only reads the GitHub Copilot Chat files, and never writes to them or to that tool's folders. Nothing from them is sent anywhere, apart from the short messages described in [Push to your phone or team chat](#push-to-your-phone-or-team-chat) if you turn push on.
 
 The extension keeps a few small things in VS Code's own storage: which chats you have already looked at, which reminders you turned off, where each model was measured to auto-compact, and backups of any settings file it changed. It writes to the clipboard only when you click a copy or compact action.
 
@@ -431,10 +423,6 @@ All commands are in the **Agent Monitor** category, and the table shows where yo
 | `agentMonitor.codex.enabled` | `true` | Read Codex records |
 | `agentMonitor.codex.home` | `""` | Codex folder (empty: `$CODEX_HOME` or `~/.codex`) |
 | `agentMonitor.copilot.enabled` | `true` | Read GitHub Copilot Chat sessions (VS Code's built-in chat) |
-| `agentMonitor.gemini.enabled` | `true` | Read Gemini CLI records (preview) |
-| `agentMonitor.gemini.home` | `""` | Gemini CLI folder (empty: `$GEMINI_CLI_HOME/.gemini` or `~/.gemini`, plus the macOS sandbox folder `$GEMINI_CLI_HOME/.cache/.gemini` or `~/.cache/.gemini`) |
-| `agentMonitor.qwen.enabled` | `true` | Read Qwen Code records (preview) |
-| `agentMonitor.qwen.home` | `""` | Qwen Code folder (empty: `$QWEN_RUNTIME_DIR`, else `$QWEN_HOME`, else `~/.qwen`) |
 | `agentMonitor.compactConfirm` | `true` | Ask before compacting a closed chat in the background |
 | `agentMonitor.compactTemplate` | `""` | Text after `/compact` that says what to keep (empty: built-in template in your display language) |
 | `agentMonitor.contextHintStart` | `200000` | For models with a window of 500K tokens or more: from this many tokens on, suggest compacting at the next good stopping point |
@@ -482,13 +470,12 @@ These tips come from a review of published research and the official documentati
 
 ## Known limitations
 
-- **Record formats can change.** The record formats of all five tools are internal and can change with any update. Lines the extension can't read are skipped.
-- **Gemini CLI and Qwen Code support is a preview.** It is built from their published record formats and hasn't been checked against real sessions yet. If a chat looks wrong, please tell us in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
+- **Record formats can change.** The record formats of all three tools are internal and can change with any update. Lines the extension can't read are skipped.
 - **Steps can lag.** Records are written after each model call, so during a long stretch of thinking the step shown is the last one written.
-- **"Needs you" is exact only when the app reports its state.** That means Claude Code versions that report live state in `~/.claude/sessions`, and GitHub Copilot Chat. Older Claude Code versions, Codex, Gemini CLI and Qwen Code rely on the guess described above, and Codex writes very little about approvals and errors to disk. Gemini CLI keeps no list of running sessions either, so whether its chats are working or done is a guess too.
+- **"Needs you" is exact only when the app reports its state.** That means Claude Code versions that report live state in `~/.claude/sessions`, and GitHub Copilot Chat. Older Claude Code versions and Codex rely on the guess described above, and Codex writes very little about approvals and errors to disk.
 - **GitHub Copilot Chat can be up to about a minute behind.** VS Code saves chats to disk about once a minute, so a new step, a finished answer or a prompt waiting for you can show up to a minute late.
-- **Costs are estimates.** They use list prices as of the date shown in the tooltip, so prices can change. Some models, such as Codex's review model, have no public price. GitHub Copilot Chat shows Copilot credits, not a cost. Qwen Code costs use Alibaba Cloud's international list prices (other regions charge differently); cache hits are priced at the explicit-cache rate, because the records don't say which kind of cache was used; and the free OAuth model has no price, so only its tokens are shown.
-- **Some features cover only Claude Code and Codex.** Usage history, today's total cost (and the daily cost alert) and the storage page don't include GitHub Copilot Chat, Gemini CLI or Qwen Code, and none of these three has an auto-compact point. **Compact…**, handoff notes, the auto-compact threshold and resume prompts are only for Claude Code and Codex chats.
+- **Costs are estimates.** They use list prices as of the date shown in the tooltip, so prices can change. Some models, such as Codex's review model, have no public price. GitHub Copilot Chat shows Copilot credits, not a cost.
+- **Some features cover only Claude Code and Codex.** Usage history, today's total cost (and the daily cost alert) and the storage page don't include GitHub Copilot Chat, which also has no auto-compact point. **Compact…**, handoff notes, the auto-compact threshold and resume prompts are only for Claude Code and Codex chats.
 - **Claude Code usage percentages aren't shown.** Claude Code doesn't save them to local files, so for Claude the extension only shows limit hits and reset times, and the usage alert is Codex only.
 - **Tab following has gaps.** It uses the tab title for Claude Code and the conversation ID for Codex. Chats shown in a side bar view (rather than an editor tab) can't be detected.
 - **Background compaction with a chosen model is Claude Code only.** Codex compacts inside Codex. A chat can't be compacted in the background while it is open.
@@ -497,7 +484,7 @@ These tips come from a review of published research and the official documentati
 - **System notifications are basic.** On macOS they are shown with AppleScript, so they appear under **Script Editor**, and that is where you allow or silence them in System Settings > Notifications. Clicking one opens Script Editor, not VS Code: switch to VS Code yourself, where the waiting chat has a magenta light. On Windows and in remote windows there is no system notification for now; the message appears in the next VS Code window you switch to instead. On Linux, a VS Code message is shown when `notify-send` isn't installed.
 - **You can't approve or answer from a notification.** Agent Monitor only reads the records. Answering from a notification would need hooks into Claude Code or Codex, or remote control of them. Switch to the chat to answer it.
 - **Clicking a system notification can't take you to the chat.** The system shows the notification on its own and can't call back into the extension. Use **Go to** in the panel instead: in a VS Code message, **Show** selects the chat in the panel, and **Go to** takes you to it, in whichever window it runs.
-- **Go to doesn't reach every place yet.** Chats in the Claude and Codex desktop apps, and in terminal apps other than Terminal.app and iTerm2 (Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal and others), aren't supported yet. For Codex CLI and Gemini CLI, when several run in the same folder, the newest one is chosen. A chat in another VS Code window can be reached only while `agentMonitor.shareScanAcrossWindows` is on.
+- **Go to doesn't reach every place yet.** Chats in the Claude and Codex desktop apps, and in terminal apps other than Terminal.app and iTerm2 (Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal and others), aren't supported yet. For Codex CLI, when several run in the same folder, the newest one is chosen. A chat in another VS Code window can be reached only while `agentMonitor.shareScanAcrossWindows` is on.
 - **Sounds have only been tried on macOS.** On Linux they are played with `canberra-gtk-play` or `paplay`, and on Windows with PowerShell, from the Windows `Media` folder; neither has been tried yet.
 - **The Windows move commands haven't been tested on Windows yet.** The `robocopy` and `mklink /J` commands on the Storage Locations page were checked only as text. Read them before running them, and keep the `.bak` folder until everything works.
 - **The terminal version doesn't push.** Push notifications come only from the VS Code extension.

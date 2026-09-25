@@ -1,5 +1,5 @@
 {
-  "cli.help.intro": "顯示你的 Claude Code、Codex、Copilot、Gemini CLI 和 Qwen Code 工作階段及其中的智慧體，資料讀取自本機的工作階段記錄。",
+  "cli.help.intro": "顯示你的 Claude Code、Codex 和 Copilot 工作階段及其中的智慧體，資料讀取自本機的工作階段記錄。",
   "cli.help.usage": "用法",
   "cli.help.options": "選項",
   "cli.help.optionsArg": "選項",
@@ -11,7 +11,7 @@
   "cli.opt.interval": "--watch 時的重新整理間隔秒數（預設 {n}）",
   "cli.opt.window": "顯示最近 N 分鐘內活躍的工作階段（預設 {n}）",
   "cli.opt.stale": "多少分鐘沒有新記錄就算智慧體不活躍（預設 {n}）",
-  "cli.opt.provider": "讀取哪家的記錄：all、claude、codex、copilot、gemini 或 qwen（預設 all）",
+  "cli.opt.provider": "讀取哪家的記錄：all、claude、codex 或 copilot（預設 all）",
   "cli.opt.here": "只顯示資料夾是目前目錄或其子目錄的工作階段",
   "cli.opt.session": "詳細顯示一個工作階段：時間軸、結果、改過的檔案、錯誤和續跑方法（填 ID 或 ID 開頭部分）",
   "cli.opt.today": "同時統計今日等值 API 費用（會讀取今天全部記錄）",
@@ -26,7 +26,7 @@
   "cli.opt.help": "顯示本說明",
   "cli.opt.version": "顯示版本號",
 
-  "cli.empty": "最近 {n} 分鐘內沒有活躍的 Claude Code、Codex、Copilot、Gemini CLI 或 Qwen Code 工作階段。",
+  "cli.empty": "最近 {n} 分鐘內沒有活躍的 Claude Code、Codex 或 Copilot 工作階段。",
   "cli.empty.here": "最近 {n} 分鐘內沒有來自 {dir} 的活躍工作階段。",
   "cli.today": "今日（{label}）：{usd}",
   "cli.seeDetail": "詳情：--session {id}",
@@ -49,7 +49,7 @@
   "cli.error.noValue": "{flag} 不接受值。",
   "cli.error.needsValue": "{flag} 需要一個值。",
   "cli.error.badNumber": "{flag} 需要一個正數（收到的是「{value}」）。",
-  "cli.error.badProvider": "未知的 provider「{value}」，請用 all、claude、codex、copilot、gemini 或 qwen。",
+  "cli.error.badProvider": "未知的 provider「{value}」，請用 all、claude、codex 或 copilot。",
   "cli.error.seeHelp": "加 --help 查看所有選項。",
   "cli.error.source": "無法讀取 {source} 的記錄：{message}",
   "cli.error.noSession": "沒有工作階段符合「{id}」。它可能已超過 {n} 分鐘沒有活動，試試加大 --window。",

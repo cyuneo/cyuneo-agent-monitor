@@ -11,7 +11,7 @@
 ![底部面板里的智能体监视器标签页，数据是虚构的示例：左边是选中的 Claude Code 聊天窗口的主智能体、两个子智能体和一个工作流的智能体，右边是打开中和最近的聊天窗口列表](../images/split-view.png)
 
 - **智能体监视器**（英文界面为 Agent Monitor）作为一个标签页出现在底部面板，就在终端旁边，看起来也和终端一样：一个整体面板，没有额外的视图标题栏。选中聊天窗口的智能体占了面板的大部分，一列窄的聊天窗口列表放在一侧，就像终端的标签列表。
-- **聊天窗口列表。** 每一个打开中和最近的聊天窗口，各带一个状态灯。它们分成 **打开中**（Claude Code 还开着这个聊天；Codex 或 GitHub Copilot Chat 正在一轮对话中；Qwen Code 的进程还在运行；或者推测 Gemini CLI 最近还写过这个聊天）和 **最近**。行高和终端标签一样，选中的聊天窗口会高亮。为了给标题留出地方，每一行只有状态灯和标题；当上下文较大、值得处理时，标题后面会加一个小标记：**◔** 建议考虑压缩，**◕** 建议尽快处理。把鼠标停在行上可以看到状态、上下文等详情。
+- **聊天窗口列表。** 每一个打开中和最近的聊天窗口，各带一个状态灯。它们分成 **打开中**（Claude Code 还开着这个聊天，或者 Codex 或 GitHub Copilot Chat 正在一轮对话中）和 **最近**。行高和终端标签一样，选中的聊天窗口会高亮。为了给标题留出地方，每一行只有状态灯和标题；当上下文较大、值得处理时，标题后面会加一个小标记：**◔** 建议考虑压缩，**◕** 建议尽快处理。把鼠标停在行上可以看到状态、上下文等详情。
 - **列表在终端标签列表所在的那一侧**（默认右侧，跟随 `terminal.integrated.tabs.location`）；也可以自己设置 `agentMonitor.sessionListPosition` 放在左边或右边。拖动分隔线可以调整宽度，双击分隔线恢复到默认的 200px，或者把它拖到快关上，收成一条只显示状态灯的窄条。面板窄于 500px 时会自动用窄条。宽度会被记住。
 - **把鼠标停在聊天窗口上**会出现 **压缩…** 按钮（上下文达到 20K 或以上）和一个 **…** 按钮，里面是和右键菜单一样的操作。也可以用键盘：方向键、Home、End 在列表里移动，Enter 或空格选中，输入文字可以按首字母跳转到某个聊天窗口，Shift+F10 打开操作菜单。
 - **智能体。** 点击一个聊天窗口，就能看到它里面正在跑什么：最上面是主对话，然后是子智能体和后台智能体，工作流智能体则按工作流分组显示。
@@ -34,7 +34,7 @@
 
 灯的形状也不一样（实心或空心），所以不完全依赖颜色区分。浅色主题和高对比度主题会用各自的配色，你也可以在 `workbench.colorCustomizations` 里修改每一种颜色。
 
-对于能上报实时状态的 Claude Code 版本（见 [它读什么](#它读什么)）和 GitHub Copilot Chat，"需要你处理"是确定的，不过 Copilot Chat 最多会晚大约一分钟才显示。对于更早的 Claude Code 版本、Codex、Gemini CLI 和 Qwen Code，扩展只能推测。当一个快工具（读、写或编辑文件、搜索、打补丁）连续 60 秒没有结果时，聊天窗口会显示 **可能在等你批准**。Shell 命令等长命令永远不会被推测。你可以用 `agentMonitor.approvalGuess` 修改或关闭这个推测。
+对于能上报实时状态的 Claude Code 版本（见 [它读什么](#它读什么)）和 GitHub Copilot Chat，"需要你处理"是确定的，不过 Copilot Chat 最多会晚大约一分钟才显示。对于更早的 Claude Code 版本和 Codex，扩展只能推测。当一个快工具（读、写或编辑文件、搜索、打补丁）连续 60 秒没有结果时，聊天窗口会显示 **可能在等你批准**。Shell 命令等长命令永远不会被推测。你可以用 `agentMonitor.approvalGuess` 修改或关闭这个推测。
 
 ### 转到聊天窗口运行的地方
 
@@ -45,16 +45,16 @@
 | Claude Code 扩展 | 在 Claude Code 里打开这个聊天，按你的 `claudeCode.preferredLocation` 设置放在标签页或侧边栏。这个设置不会被改动 |
 | Codex 扩展 | 在编辑器标签页里打开这个对话 |
 | GitHub Copilot Chat | 在这个聊天所属工作区的窗口里，用编辑器标签页打开它 |
-| VS Code 集成终端里的 Claude Code、Codex、Gemini CLI 或 Qwen Code | 显示那个终端 |
+| VS Code 集成终端里的 Claude Code 或 Codex | 显示那个终端 |
 | 另一个 VS Code 窗口 | 由那个窗口打开这个聊天或显示那个终端，并切到最前面。这需要打开 `agentMonitor.shareScanAcrossWindows`（默认打开）。如果那个窗口没能切到最前面，会有消息告诉你该切到哪个窗口 |
 | macOS 上的 Terminal.app 或 iTerm2 | 这个应用切到最前面，并选中这个聊天所在的标签页（见下文） |
 | Claude 或 Codex 桌面应用，或其他终端应用（Warp、Ghostty、WezTerm、kitty、Alacritty、Windows Terminal 等） | 暂不支持，会有消息说明 |
 
 - **Terminal.app 和 iTerm2：** 第一次使用时，智能体监视器会先问你要不要切换到那个应用里这个聊天的标签页。选择 **继续** 之后，macOS 会询问是否允许 VS Code（或你用的编辑器）控制那个应用，请选择"允许"。每个应用只问一次。如果当时没有允许，下次再试时会弹出带 **打开自动化设置** 按钮的消息；在"系统设置 > 隐私与安全性 > 自动化"里允许后再试一次。以后也可以在那里更改。
-- **Codex CLI 和 Gemini CLI：** 这两个工具的聊天没有可用的进程 ID，所以智能体监视器会在这个聊天的文件夹里找正在运行的 `codex` 或 `gemini` 进程（对 Codex，如果能看出是哪个进程打开着这个聊天的记录文件，就用那个）。同一个文件夹里有好几个在运行时，会选最新启动的那个，它可能是另一个聊天。在 Windows 上读不到进程所在的文件夹，所以会直接选最新的那个。
+- **Codex CLI：** 这类聊天没有可用的进程 ID，所以智能体监视器会在这个聊天的文件夹里找正在运行的 `codex` 进程（如果能看出是哪个进程打开着这个聊天的记录文件，就用那个）。同一个文件夹里有好几个在运行时，会选最新启动的那个，它可能是另一个聊天。在 Windows 上读不到进程所在的文件夹，所以会直接选最新的那个。
 - **转不过去时**，会有消息说明原因：例如这个聊天已经不在运行了，它在 VS Code 之外的终端里运行，它是由其他工具或智能体启动的（不在终端或对话面板里），或者没有打开这个 Copilot 聊天所属工作区的 VS Code 窗口。
-- **转到按钮**（以及总览里的行内按钮）只在大概率能转过去时出现：还开着的 Claude Code 和 Qwen Code 聊天，以及打开中或 24 小时内有过活动的 Codex、Gemini CLI 和 Copilot Chat 聊天。双击和菜单总会尝试。
-- **只在你要求时才查看。** 只有在你使用转到时，智能体监视器才会列出正在运行的进程：macOS 和 Linux 上调用一次 `ps`，Windows 上调用一次 PowerShell；对 Codex CLI 和 Gemini CLI 还会查看这些进程的工作文件夹，对 Codex 还会查看是哪个进程打开着这个聊天的记录文件（macOS 用 `lsof`，Linux 用 `/proc`）。这些都不会读取你的聊天内容，也不会发送到任何地方。其他 VS Code 窗口通过[它读什么](#它读什么)里说的共用文件夹联系。
+- **转到按钮**（以及总览里的行内按钮）只在大概率能转过去时出现：还开着的 Claude Code 聊天，以及打开中或 24 小时内有过活动的 Codex 和 Copilot Chat 聊天。双击和菜单总会尝试。
+- **只在你要求时才查看。** 只有在你使用转到时，智能体监视器才会列出正在运行的进程：macOS 和 Linux 上调用一次 `ps`，Windows 上调用一次 PowerShell；对 Codex CLI 还会查看这些进程的工作文件夹，以及是哪个进程打开着这个聊天的记录文件（macOS 用 `lsof`，Linux 用 `/proc`）。这些都不会读取你的聊天内容，也不会发送到任何地方。其他 VS Code 窗口通过[它读什么](#它读什么)里说的共用文件夹联系。
 
 ### "需要你处理"通知
 
@@ -108,7 +108,7 @@
 - **聊天窗口已完成，而你还没看**，也就是灯变成亮绿色的 **已完成·未查看**（`agentMonitor.sound.done`）；
 - **收到阈值提醒**（`agentMonitor.sound.alert`，见[阈值提醒](#阈值提醒)）。
 
-每一项都可以设为 `default`、`off`，或 Glass、Ping、Pop、Tink、Submarine、Funk、Hero、Basso 中的一个。`default` 会给每种情况配不同的声音：需要你处理是 Glass，出错是 Basso，完成是 Hero，阈值提醒是 Funk。这些名字是 macOS 的系统提示音，用 `afplay` 播放。在 Linux 上改为播放系统声音主题里相近的声音，通过 `canberra-gtk-play` 或 `paplay`（需要装了其中一个）；在 Windows 上则播放 Windows `Media` 文件夹里相近的声音。"需要你处理"的声音和["需要你处理"通知](#需要你处理通知)一起响，所以还需要打开 `agentMonitor.notifyNeedsYou`。你正在看的那个聊天窗口不会响"需要你处理"和"完成"的声音；"完成"只是推测时（Gemini CLI 通常就是这样）也不会响"完成"的声音。每个声音只由一个 VS Code 窗口播放；好几件事同时发生时只响一声：所有窗口加起来最多每 3 秒一声。远程窗口（SSH、WSL、容器）里和[勿扰时段](#勿扰时段)内都不会有声音。
+每一项都可以设为 `default`、`off`，或 Glass、Ping、Pop、Tink、Submarine、Funk、Hero、Basso 中的一个。`default` 会给每种情况配不同的声音：需要你处理是 Glass，出错是 Basso，完成是 Hero，阈值提醒是 Funk。这些名字是 macOS 的系统提示音，用 `afplay` 播放。在 Linux 上改为播放系统声音主题里相近的声音，通过 `canberra-gtk-play` 或 `paplay`（需要装了其中一个）；在 Windows 上则播放 Windows `Media` 文件夹里相近的声音。"需要你处理"的声音和["需要你处理"通知](#需要你处理通知)一起响，所以还需要打开 `agentMonitor.notifyNeedsYou`。你正在看的那个聊天窗口不会响"需要你处理"和"完成"的声音；"完成"只是推测时也不会响"完成"的声音。每个声音只由一个 VS Code 窗口播放；好几件事同时发生时只响一声：所有窗口加起来最多每 3 秒一声。远程窗口（SSH、WSL、容器）里和[勿扰时段](#勿扰时段)内都不会有声音。
 
 ### 勿扰时段
 
@@ -132,7 +132,7 @@
 | --- | --- | --- |
 | `agentMonitor.alerts.usagePercent` | `90` | Codex 的 5 小时或每周用量达到这个百分比。只支持 Codex：Claude Code 的本地日志只记录撞上额度，不记录百分比 |
 | `agentMonitor.alerts.dailyCost` | `0`（关闭） | 今天的估算等价 API 费用（Claude Code 和 Codex 合计）达到这么多美元 |
-| `agentMonitor.alerts.contextPercent` | `0`（关闭） | 某个聊天窗口的主对话达到自动压缩点的这个百分比（Claude Code 和 Codex；其它工具没有自动压缩点） |
+| `agentMonitor.alerts.contextPercent` | `0`（关闭） | 某个聊天窗口的主对话达到自动压缩点的这个百分比（Claude Code 和 Codex；GitHub Copilot Chat 没有自动压缩点） |
 
 - 每种提醒只来一次：用量在每个额度周期里一次（重置前不再提醒），费用每天一次，上下文每个聊天窗口在下次压缩前一次。设成 0 就关闭对应的提醒。
 - 窗口打开时、或者你修改设置时已经超过阈值的，不会提醒。
@@ -217,7 +217,7 @@ Claude Code 会在上下文到达某个容量时自动压缩，这发生在你�
 
 ### 用量历史
 
-从面板标题栏的 **…** 菜单或命令面板运行 **智能体监视器：查看用量历史**，会打开一个页面，显示 Claude Code 和 Codex 最近 30 天的用量（不包括 GitHub Copilot Chat、Gemini CLI 和 Qwen Code）：
+从面板标题栏的 **…** 菜单或命令面板运行 **智能体监视器：查看用量历史**，会打开一个页面，显示 Claude Code 和 Codex 最近 30 天的用量（不包括 GitHub Copilot Chat）：
 
 - 每天的估算费用或 token 数，用柱状图显示，Claude Code 和 Codex 叠在一起（可以在 **费用** 和 **Token** 之间切换，也可以 **以表格显示**）；
 - 这段时间的合计、日均，以及用了几天；
@@ -286,20 +286,16 @@ Claude Code 会在上下文到达某个容量时自动压缩，这发生在你�
 - **Claude Code**：VS Code 扩展、终端或桌面应用里的，包括子智能体、后台智能体和工作流。
 - **Codex**：VS Code 扩展、CLI 或桌面应用里的，包括子智能体和审阅线程。
 - **GitHub Copilot Chat**：VS Code 内置的聊天，包括智能体模式和它的子智能体。
-- **Gemini CLI**（预览），包括子智能体。
-- **Qwen Code**（预览），包括子智能体。
 - 没安装的工具会直接跳过；每个工具都可以在设置里单独关闭（见[设置](#设置)）。
-
-> **Gemini CLI 和 Qwen Code 目前是预览。** 对它们的支持是按官方公开的记录格式做的，还没有拿真实会话验证过。如果某个聊天窗口看起来不对，欢迎到 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 反馈。
 
 各工具记录的内容不同，扩展能看到的也不同：
 
-| | GitHub Copilot Chat | Gemini CLI（预览） | Qwen Code（预览） |
-| --- | --- | --- | --- |
-| **打开中、运行中、已完成** | 从聊天记录里读出，但最多晚大约一分钟：VS Code 大约每分钟才保存一次聊天 | 根据聊天最后一次写入的时间推测，所以看起来已完成的聊天可能又变回运行中。工具要等运行完才显示名字 | 是否打开是确定的：来自 Qwen Code 的进程 ID |
-| **需要你处理** | 确定，同样有这个延迟 | 推测 | 推测 |
-| **Token 与费用** | 整个聊天的 token（不分子智能体），显示 Copilot credits 而不是美元费用 | token 和估算费用 | token，以及按阿里云国际站官网价估算的费用。免费的 OAuth 模型只显示 token |
-| **上下文** | 窗口来自 VS Code 随聊天保存的模型信息。没有自动压缩点 | 模型的标准窗口。没有自动压缩点 | 窗口来自 Qwen Code 自己的记录。没有自动压缩点 |
+| | GitHub Copilot Chat |
+| --- | --- |
+| **打开中、运行中、已完成** | 从聊天记录里读出，但最多晚大约一分钟：VS Code 大约每分钟才保存一次聊天 |
+| **需要你处理** | 确定，同样有这个延迟 |
+| **Token 与费用** | 整个聊天的 token（不分子智能体），显示 Copilot credits 而不是美元费用 |
+| **上下文** | 窗口来自 VS Code 随聊天保存的模型信息。没有自动压缩点 |
 
 用量历史、今日总费用（以及对应的提醒）和[存储页面](#聊天窗口存在哪里以及怎么搬走)只覆盖 Claude Code 和 Codex。**压缩…**、交接笔记、自动压缩阈值和续跑提示也只对 Claude Code 和 Codex 的聊天窗口提供；后台压缩仍然只支持 Claude Code。
 
@@ -317,7 +313,7 @@ node bin/agent-monitor.js --session 1a2b   # 详细显示一个聊天窗口：�
 node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 ```
 
-其它选项还有 `--provider all|claude|codex|copilot|gemini|qwen`（默认 `all`）、`--window <minutes>`、`--here`（只显示当前文件夹里的聊天窗口）、`--today`、`--lang en|zh-cn|zh-tw|ko|ja` 和 `--no-color`。运行 `--help` 查看完整列表。
+其它选项还有 `--provider all|claude|codex|copilot`（默认 `all`）、`--window <minutes>`、`--here`（只显示当前文件夹里的聊天窗口）、`--today`、`--lang en|zh-cn|zh-tw|ko|ja` 和 `--no-color`。运行 `--help` 查看完整列表。
 
 ## 安装
 
@@ -349,14 +345,10 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 | `<User>/workspaceStorage/<workspace>/chatSessions/<session>.jsonl`（或 `.json`） | 打开了文件夹或工作区的窗口里的 GitHub Copilot Chat 聊天。`<User>` 是你正在用的 VS Code 的 User 文件夹，例如 macOS 上的 `~/Library/Application Support/Code/User`、Linux 上的 `~/.config/Code/User`、Windows 上的 `%APPDATA%\Code\User` |
 | `<User>/globalStorage/emptyWindowChatSessions/<session>.jsonl`，以及 `<User>/profiles/<profile>/` 下的同一位置 | 没打开文件夹的窗口里的 Copilot Chat 聊天，包括其他配置文件（profile）里的 |
 | `<User>/workspaceStorage/<workspace>/workspace.json` | Copilot Chat 聊天属于哪个文件夹 |
-| `~/.gemini/tmp/<project>/chats/session-*.jsonl`（或 `.json`）和 `~/.gemini/tmp/<project>/chats/<session>/…` | Gemini CLI 聊天及其子智能体。Gemini CLI 在 macOS 沙箱里运行时，读 `~/.cache/.gemini` 下的同样文件；没有设置 `agentMonitor.gemini.home` 时这里也会读 |
-| `~/.gemini/tmp/<project>/.project_root`、`~/.gemini/projects.json` | Gemini CLI 聊天属于哪个文件夹 |
-| `~/.qwen/projects/<project>/chats/<session>.jsonl` | Qwen Code 聊天，包括子智能体 |
-| `~/.qwen/projects/<project>/chats/<session>.runtime.json` | Qwen Code 的进程 ID，用来判断这个聊天是否还开着。扩展只检查这个进程是否还在运行 |
 
-上面列的是默认路径。`CLAUDE_CONFIG_DIR` 和 `CODEX_HOME` 都会被遵守；设置了 `GEMINI_CLI_HOME` 时，Gemini CLI 的文件夹改到 `$GEMINI_CLI_HOME` 下而不是 `~` 下；Qwen Code 则优先用 `QWEN_RUNTIME_DIR`，其次 `QWEN_HOME`，代替 `~/.qwen`。你也可以用 `agentMonitor.claude.projectsDir`、`agentMonitor.codex.home`、`agentMonitor.gemini.home` 和 `agentMonitor.qwen.home` 指向别的位置。
+上面列的是默认路径。`CLAUDE_CONFIG_DIR` 和 `CODEX_HOME` 都会被遵守。你也可以用 `agentMonitor.claude.projectsDir` 和 `agentMonitor.codex.home` 指向别的位置。
 
-对 GitHub Copilot Chat、Gemini CLI 和 Qwen Code 的文件，扩展只读，从不写入它们，也不往这些工具的文件夹里写任何东西。它们的内容不会发到任何地方；只有打开推送后，才会发出[推送到手机或团队聊天](#推送到手机或团队聊天)里说的那种简短消息。
+对 GitHub Copilot Chat 的文件，扩展只读，从不写入它们，也不往这个工具的文件夹里写任何东西。它们的内容不会发到任何地方；只有打开推送后，才会发出[推送到手机或团队聊天](#推送到手机或团队聊天)里说的那种简短消息。
 
 扩展在 VS Code 自己的存储里保留一些很小的东西：哪些聊天窗口你已经看过、哪些提醒你关掉了、每个模型实测的自动压缩点，以及它改过的设置文件的备份。只有在你点击复制或压缩相关操作时，它才会写入剪贴板。
 
@@ -431,10 +423,6 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 | `agentMonitor.codex.enabled` | `true` | 读取 Codex 的记录 |
 | `agentMonitor.codex.home` | `""` | Codex 文件夹（留空则用 `$CODEX_HOME` 或 `~/.codex`） |
 | `agentMonitor.copilot.enabled` | `true` | 读取 GitHub Copilot Chat 的会话（VS Code 内置聊天） |
-| `agentMonitor.gemini.enabled` | `true` | 读取 Gemini CLI 的记录（预览） |
-| `agentMonitor.gemini.home` | `""` | Gemini CLI 文件夹（留空则用 `$GEMINI_CLI_HOME/.gemini` 或 `~/.gemini`，另外还读 macOS 沙箱文件夹 `$GEMINI_CLI_HOME/.cache/.gemini` 或 `~/.cache/.gemini`） |
-| `agentMonitor.qwen.enabled` | `true` | 读取 Qwen Code 的记录（预览） |
-| `agentMonitor.qwen.home` | `""` | Qwen Code 文件夹（留空则依次用 `$QWEN_RUNTIME_DIR`、`$QWEN_HOME`、`~/.qwen`） |
 | `agentMonitor.compactConfirm` | `true` | 后台压缩一个已关闭的聊天窗口前先询问 |
 | `agentMonitor.compactTemplate` | `""` | `/compact` 后面说明要保留什么的文字（留空则用你显示语言对应的内置模板） |
 | `agentMonitor.contextHintStart` | `200000` | 对于窗口达到 500K token 及以上的模型：超过这么多 token 后，建议在下一个合适的节点压缩 |
@@ -482,13 +470,12 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 
 ## 已知局限
 
-- **记录格式可能会变。** 这五个工具的记录格式都是内部格式，任何更新都可能改变它。扩展读不懂的行会被跳过。
-- **对 Gemini CLI 和 Qwen Code 的支持还是预览。** 它是按官方公开的记录格式做的，还没有拿真实会话验证过。如果某个聊天窗口看起来不对，请在 [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues) 告诉我们。
+- **记录格式可能会变。** 这三个工具的记录格式都是内部格式，任何更新都可能改变它。扩展读不懂的行会被跳过。
 - **步骤可能会滞后。** 记录是在每次模型调用后写入的，所以在一段长时间的思考中，显示的步骤是最后写入的那一个。
-- **"需要你处理"只有在应用上报状态时才是确定的。** 也就是说，能在 `~/.claude/sessions` 里上报实时状态的 Claude Code 版本，以及 GitHub Copilot Chat。更早的 Claude Code 版本、Codex、Gemini CLI 和 Qwen Code 依赖上面说的推测，而且 Codex 几乎不会把等待批准和报错写到磁盘上。Gemini CLI 也没有运行中会话的列表，所以它的聊天是否在运行、是否已完成同样是推测的。
+- **"需要你处理"只有在应用上报状态时才是确定的。** 也就是说，能在 `~/.claude/sessions` 里上报实时状态的 Claude Code 版本，以及 GitHub Copilot Chat。更早的 Claude Code 版本和 Codex 依赖上面说的推测，而且 Codex 几乎不会把等待批准和报错写到磁盘上。
 - **GitHub Copilot Chat 最多会晚大约一分钟。** VS Code 大约每分钟才把聊天保存到磁盘一次，所以新的步骤、答完的回复或等你处理的提示，最多会晚一分钟才显示。
-- **费用是估算值。** 它们按提示中显示日期的官网价目表计算，价格会变。有些模型，比如 Codex 的审阅模型，没有公开价格。GitHub Copilot Chat 显示的是 Copilot credits，不是费用。Qwen Code 的费用按阿里云国际站的官网价计算（其他地域价格不同）；记录里看不出用的是哪种缓存，所以缓存命中按显式缓存的价格计；免费的 OAuth 模型没有价格，只显示 token。
-- **有些功能只覆盖 Claude Code 和 Codex。** 用量历史、今日总费用（以及每日费用提醒）和存储页面都不包括 GitHub Copilot Chat、Gemini CLI 和 Qwen Code；这三个工具也都没有自动压缩点。**压缩…**、交接笔记、自动压缩阈值和续跑提示也只对 Claude Code 和 Codex 的聊天窗口提供。
+- **费用是估算值。** 它们按提示中显示日期的官网价目表计算，价格会变。有些模型，比如 Codex 的审阅模型，没有公开价格。GitHub Copilot Chat 显示的是 Copilot credits，不是费用。
+- **有些功能只覆盖 Claude Code 和 Codex。** 用量历史、今日总费用（以及每日费用提醒）和存储页面都不包括 GitHub Copilot Chat；它也没有自动压缩点。**压缩…**、交接笔记、自动压缩阈值和续跑提示也只对 Claude Code 和 Codex 的聊天窗口提供。
 - **不显示 Claude Code 的用量百分比。** Claude Code 不会把它保存到本地文件，所以对于 Claude，扩展只能显示额度触发和重置时间，用量阈值提醒也只支持 Codex。
 - **标签页跟随有盲区。** 它靠标签标题匹配 Claude Code，靠对话 ID 匹配 Codex。侧边栏视图（而不是编辑器标签页）里显示的聊天窗口无法被检测到。
 - **可选模型的后台压缩只支持 Claude Code。** Codex 在自己内部压缩。一个聊天窗口打开时不能在后台压缩。
@@ -497,7 +484,7 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 - **系统通知比较简单。** 在 macOS 上通知通过 AppleScript 显示，所以会显示在 **脚本编辑器**（Script Editor）名下，允许或静音它们也要到"系统设置 > 通知"里找脚本编辑器。点击通知会打开脚本编辑器，而不是 VS Code：请自己切回 VS Code，在等你的聊天窗口亮着品红色的灯。在 Windows 和远程窗口中暂时没有系统通知，消息会改在你接下来切换到的 VS Code 窗口里显示。在 Linux 上如果没有安装 `notify-send`，会改为显示 VS Code 消息。
 - **不能在通知里直接批准或回答。** 智能体监视器只读取记录；要在通知里回复，就得接入 Claude Code 或 Codex 的 hooks，或者远程控制它们。请切到那个聊天窗口里回答。
 - **点击系统通知不能直接转到那个聊天。** 系统通知由系统自己显示，没法回调扩展。请改用面板里的 **转到**：在 VS Code 消息里，**查看** 会在面板里选中这个聊天窗口，**转到** 则会带你去它运行的地方，不管它在哪个窗口。
-- **转到还不能去所有地方。** Claude 和 Codex 桌面应用里的聊天，以及 Terminal.app 和 iTerm2 以外的终端应用（Warp、Ghostty、WezTerm、kitty、Alacritty、Windows Terminal 等）里的聊天，暂不支持。对于 Codex CLI 和 Gemini CLI，同一个文件夹里有好几个在运行时，会选最新启动的那个。只有打开 `agentMonitor.shareScanAcrossWindows` 时，才能转到另一个 VS Code 窗口里的聊天。
+- **转到还不能去所有地方。** Claude 和 Codex 桌面应用里的聊天，以及 Terminal.app 和 iTerm2 以外的终端应用（Warp、Ghostty、WezTerm、kitty、Alacritty、Windows Terminal 等）里的聊天，暂不支持。对于 Codex CLI，同一个文件夹里有好几个在运行时，会选最新启动的那个。只有打开 `agentMonitor.shareScanAcrossWindows` 时，才能转到另一个 VS Code 窗口里的聊天。
 - **提示音只在 macOS 上实测过。** 在 Linux 上，它通过 `canberra-gtk-play` 或 `paplay` 播放；在 Windows 上，通过 PowerShell 播放 Windows `Media` 文件夹里的声音。这两个平台都还没有实测过。
 - **Windows 的迁移命令还没有在 Windows 上实测过。** 存储位置页面生成的 `robocopy` 和 `mklink /J` 命令只核对过文字。运行前请先看一遍，确认一切正常之前不要删掉 `.bak` 备份文件夹。
 - **终端版不推送。** 推送通知只由 VS Code 扩展发送。

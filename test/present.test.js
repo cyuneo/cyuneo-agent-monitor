@@ -78,9 +78,8 @@ function session(o = {}) {
 }
 const st = (code, sinceMs, extra) => S.makeStatus(code, sinceMs, extra);
 
-// Sessions shaped like the Copilot / Gemini CLI / Qwen Code providers produce them (lib/providers/{copilot,gemini,qwen}.js):
-// no auto-compact point, no prompt cache, no resume hints; Copilot bills in credits (costUsd always null),
-// Gemini CLI guesses running / done from write timing (certainty 'guess', liveCertainty 'guess'), Qwen's OAuth model is unpriced.
+// Sessions shaped like the Copilot provider produces them (lib/providers/copilot.js):
+// no auto-compact point, no prompt cache, no resume hints; Copilot bills in credits (costUsd always null).
 const noCompact = (used, window, o = {}) => ({ display: used, contextUsed: used, contextWindow: window, compactAt: null, toCompact: null,
   contextPct: window ? Math.round((used / window) * 100) : null, output: 900, processed: 50000, apiCalls: 4, ...o });
 function copilotSession(o = {}) {
@@ -98,33 +97,6 @@ function copilotSession(o = {}) {
     ...o.extra,
   });
 }
-function geminiSession(o = {}) {
-  return session({
-    provider: 'gemini', id: o.id || 'gem-1', entry: 'cli', entryRaw: null, entrypoint: null, model: 'gemini-2.5-pro',
-    live: false, liveStatus: null, liveCertainty: 'guess', contextWindow: 1048576, contextWindowSource: 'model-rule',
-    compactAt: null, compactAtSource: null, cacheExpiresMs: null, costUsd: 0.051625, unpricedModel: null, ccCostUsd: null,
-    doneAtMs: NOW - 120000,
-    main: agent({ model: 'gemini-2.5-pro', status: st('done', NOW - 120000, { certainty: 'guess' }), step: null,
-      tokens: noCompact(52000, 1048576, { input: 52000, cached: 30000, thoughts: 1200, tool: 300 }),
-      costUsd: 0.051625, costEstimated: true, cacheTtl: null }),
-    agents: [agent({ id: 'g-sub', kind: 'geminiSubagent', name: 'investigator', agentType: 'codebase_investigator', status: st('done', NOW - 130000),
-      tokens: noCompact(9000, 1048576, { input: 9000, cached: 0, thoughts: 0, tool: 0 }), costUsd: 0.01, cacheTtl: null })],
-    ...o.extra,
-  });
-}
-function qwenSession(o = {}) {
-  return session({
-    provider: 'qwen', id: o.id || 'qw-1', entry: 'cli', entryRaw: null, entrypoint: null, model: 'coder-model',
-    live: false, liveStatus: null, contextWindow: 1000000, contextWindowSource: 'qwen-record', compactAt: null, compactAtSource: null,
-    cacheExpiresMs: null, costUsd: null, unpricedModel: 'coder-model', ccCostUsd: null, doneAtMs: NOW - 80000,
-    main: agent({ model: 'coder-model', status: st('done', NOW - 80000), tokens: noCompact(30000, 1000000), costUsd: null,
-      unpricedModel: 'coder-model', cacheTtl: null }),
-    agents: [agent({ id: 'q-sub', kind: 'qwenSubagent', name: null, agentType: 'reviewer', status: st('maybeAwaitingApproval', NOW - 70000, { pendingTool: 'run_shell_command' }),
-      tokens: noCompact(2000, 1000000), costUsd: 0.001, costEstimated: true, cacheTtl: null })],
-    ...o.extra,
-  });
-}
-
 // ---------- Lamps ----------
 
 function lampTests() {
@@ -255,30 +227,16 @@ function lampTests() {
     assert.strictEqual(lamp.sessionLamps(s).lead.rowId, 'main');
   });
 
-  test('Copilot / Gemini CLI / Qwen Code feed the same lamps; a guessed done is exactly as loud as a certain one, never louder', () => {
-    const guessDone = st('done', NOW - 1000, { certainty: 'guess' });
-    assert.strictEqual(lamp.agentLamp({ status: guessDone }), lamp.agentLamp({ status: st('done', NOW - 1000) }));
-    assert.strictEqual(lamp.agentLamp({ status: guessDone }, { seenAtMs: NOW }), 'doneSeen', 'seen after it finished → DoneSeen, like any done');
-    assert.strictEqual(lamp.agentLamp({ status: st('thinking', NOW, { certainty: 'guess' }) }), 'working');
-    // Same data, once as a Gemini guess and once as a certain Codex done: identical lamps and attention counts
-    const gem = geminiSession({ id: 'g' });
-    const cx = session({ provider: 'codex', id: 'c', doneAtMs: gem.doneAtMs, main: agent({ status: st('done', gem.main.status.sinceMs) }), agents: [] });
-    const both = lamp.computeLamps([gem, session({ ...gem, key: 'gemini:h', id: 'h', agents: [] }), cx]);
-    assert.deepStrictEqual([...both.bySession.values()].map((l) => l.lamp), ['doneUnseen', 'doneUnseen', 'doneUnseen']);
-    assert.strictEqual(both.counts.doneUnseen, 3);
-    assert.strictEqual(both.attention, 3);
+  test('Copilot feeds the same lamps; guesses are recognised', () => {
     // Providers without a registry: liveStatus is derived from the status itself and never overrides it
     const cop = copilotSession();
     const L = lamp.sessionLamps(cop, { seenAtMs: 0 });
     assert.strictEqual(L.registry, null);
     assert.strictEqual(L.lamp, 'needsYou');
     assert.strictEqual(L.main.status, cop.main.status);
-    const qw = lamp.sessionLamps(qwenSession({ extra: { live: true, liveStatus: 'busy' } }), { seenAtMs: 0 });
-    assert.strictEqual(qw.registry, null);
-    assert.strictEqual(qw.lamp, 'needsYou', 'a sub-agent approval guess still counts: no registry to overrule it');
     // isGuessStatus: guessed approval waits and anything tagged certainty 'guess'
     assert.ok(lamp.isGuessStatus(st('maybeAwaitingApproval', NOW)));
-    assert.ok(lamp.isGuessStatus(guessDone));
+    assert.ok(lamp.isGuessStatus(st('done', NOW - 1000, { certainty: 'guess' })));
     assert.ok(!lamp.isGuessStatus(st('done', NOW)));
     assert.ok(!lamp.isGuessStatus(null));
   });
@@ -771,7 +729,7 @@ function syntheticSnapshot(now) {
       ccCostUsd: provider === 'claude' && i % 3 === 1 ? 1.5 + i : undefined,
     });
   });
-  // Copilot / Gemini CLI / Qwen Code sessions, including Copilot waiting parts, guessed statuses and a Copilot session without credits
+  // Copilot sessions, including Copilot waiting parts and a Copilot session without credits
   sessions.push(
     copilotSession({ id: 'cop-q' }),
     copilotSession({ id: 'cop-plan', credits: null, extra: {
@@ -782,11 +740,6 @@ function syntheticSnapshot(now) {
       main: agent({ status: st('awaitingApproval', now - 9000), step: { kind: 'tool', tool: 'confirmation', detail: null, parallel: 0, sinceMs: now - 9000 },
         tokens: noCompact(1000, 128000), costUsd: null, copilotCredits: 0.33 }),
     } }),
-    geminiSession({ id: 'gem-done' }),
-    geminiSession({ id: 'gem-run', extra: { live: true, liveStatus: 'busy', doneAtMs: null,
-      main: agent({ model: 'gemini-9-ultra-exp', status: st('thinking', now - 3000, { certainty: 'guess' }), tokens: noCompact(20000, null, { input: 20000, cached: 0, thoughts: 10, tool: 0 }),
-        costUsd: null, unpricedModel: 'gemini-9-ultra-exp' }) } }),
-    qwenSession({ id: 'qw-done' }),
   );
   const estimate = (o) => ({ contextTokens: 412345, ttl: '1h', cacheLikelyExpired: true, usdIfMiss: 3.2, usdIfHit: 0.08, ...o });
   const hints = [
@@ -871,7 +824,6 @@ function renderAll(i18n, now, snap) {
       add(`agent.costLabel ${a.id}`, c.label);
       add(`agent.costCell ${a.id}`, c.cell);
       add(`agent.costFull ${a.id}`, c.full);
-      add(`agent.breakdown ${a.id}`, fmt.formatTokenBreakdown(a.tokens, i18n), true);
       for (const n of fmt.formatContext(fmt.agentContextTokens(a, s.provider), i18n).notes) add(`ctx.agentNote ${a.id}`, n);
     }
   }
@@ -985,7 +937,7 @@ function formatTests() {
         assert.strictEqual(b.a11y, a.a11y);
         assert.strictEqual(JSON.stringify(fmt.formatSessionTooltip(s, en, { now: NOW + dt })), tipA, `${s.key} tooltip +${dt}ms`);
       }
-      assert.ok(/^(Claude|Codex|Copilot|Gemini CLI|Qwen Code) · /.test(a.description), a.description);
+      assert.ok(/^(Claude|Codex|Copilot) · /.test(a.description), a.description);
     }
     const s = session({
       live: true, liveStatus: 'waiting', waitingFor: 'permission prompt',
@@ -1123,26 +1075,22 @@ function formatTests() {
     assert.strictEqual(fmt.formatBytes(-1, en), '—');
   });
 
-  test('Copilot / Gemini CLI / Qwen Code: product names, sub-agent kinds, Copilot waiting parts by name', () => {
+  test('Copilot: product name, sub-agent kinds, waiting parts by name', () => {
     const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
     for (const locale of LOCALES) {
       const i18n = i18nLib.createI18n(locale, { timeZone: 'UTC' });
-      assert.deepStrictEqual(['copilot', 'gemini', 'qwen'].map((p) => fmt.providerLabel(p, i18n)), ['Copilot', 'Gemini CLI', 'Qwen Code'], locale);
+      assert.deepStrictEqual(['copilot'].map((p) => fmt.providerLabel(p, i18n)), ['Copilot'], locale);
     }
     assert.strictEqual(fmt.providerLabel('someday', en), 'someday', 'unknown providers fall back to the raw id');
     const cop = copilotSession();
     assert.ok(fmt.formatSessionRow(cop, en, { now: NOW }).description.startsWith('Copilot · Waiting for your answer'));
-    assert.ok(fmt.formatSessionRow(geminiSession(), en, { now: NOW }).description.startsWith('Gemini CLI · '));
-    assert.ok(fmt.formatSessionRow(qwenSession(), en, { now: NOW }).description.startsWith('Qwen Code · '));
     const tip = Object.fromEntries(fmt.formatSessionTooltip(cop, en, { now: NOW }));
     assert.strictEqual(tip[en.t('tip.entry')], 'Copilot · VS Code · open now');
     // Sub-agents render like Claude's: the Copilot task description is the name, the agent's own name goes into the type
     const [sa] = cop.agents;
     assert.strictEqual(fmt.formatAgentName(sa, en), 'Survey the repo for auth call sites');
     assert.strictEqual(fmt.formatAgentKind(sa, en), 'Subagent · Explorer');
-    assert.strictEqual(fmt.formatAgentKind(geminiSession().agents[0], en), 'Subagent · codebase_investigator');
-    assert.strictEqual(fmt.formatAgentName(qwenSession().agents[0], en), 'reviewer');
-    assert.strictEqual(fmt.formatAgentKind({ kind: 'qwenSubagent' }, en), 'Subagent');
+    assert.strictEqual(fmt.formatAgentKind({ kind: 'copilotSubagent' }, en), 'Subagent');
     // Copilot parts that wait on you: step.tool carries the raw part kind
     const label = (tool) => fmt.formatStep({ kind: 'tool', tool, detail: null, parallel: 0, sinceMs: NOW }, st('awaitingInput', NOW), en, NOW);
     assert.deepStrictEqual(['questionCarousel', 'elicitationSerialized', 'planReview', 'confirmation'].map(label),
@@ -1153,24 +1101,12 @@ function formatTests() {
     assert.strictEqual(fmt.formatStatus(st('awaitingInput', NOW, { question: 'planApproval' }), null, en, NOW), 'Waiting for you to approve the plan');
   });
 
-  test('guessed statuses (Gemini CLI timing guesses, liveCertainty guess): "~" mark and a note; approval guesses keep their own wording', () => {
+  test('guessed statuses: approval guesses keep their own wording and note; live text', () => {
     const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
-    const g = st('thinking', NOW - 3000, { certainty: 'guess' });
-    assert.strictEqual(fmt.formatStatus(g, null, en, NOW), '~Thinking');
-    assert.strictEqual(fmt.formatStatus(st('done', NOW, { certainty: 'guess' }), { kind: 'main' }, en, NOW, { stable: true }), '~Turn finished');
-    assert.strictEqual(fmt.formatStatus(st('stale', NOW - 7 * MIN, { certainty: 'guess' }), null, en, NOW, { stable: true }), '~No recent activity');
     assert.strictEqual(fmt.formatStatus(st('maybeAwaitingApproval', NOW), null, en, NOW, { stable: true }), 'May be waiting for your approval', 'no double hedge');
     assert.strictEqual(fmt.formatStatus(st('thinking', NOW), null, en, NOW), 'Thinking', 'certain statuses are unchanged');
-    assert.ok(fmt.formatStatusNote(g, en).startsWith('Guessed from when the session log was last written'));
     assert.ok(fmt.formatStatusNote(st('maybeAwaitingApproval', NOW), en).startsWith('Guessed: a quick tool'));
     assert.strictEqual(fmt.formatStatusNote(st('done', NOW), en), '');
-    const gem = geminiSession();
-    const row = fmt.formatSessionRow(gem, en, { now: NOW });
-    assert.strictEqual(row.description, 'Gemini CLI · ~Turn finished · 5% context');
-    const tip = Object.fromEntries(fmt.formatSessionTooltip(gem, en, { now: NOW }));
-    assert.ok(tip[en.t('tip.note')].startsWith('Guessed from when'));
-    assert.strictEqual(tip[en.t('tip.entry')], 'Gemini CLI · Terminal · probably not open');
-    assert.strictEqual(fmt.formatLive({ live: true, liveCertainty: 'guess' }, en), 'probably open');
     assert.strictEqual(fmt.formatLive({ live: true }, en), 'open now');
     // Copilot: status can lag behind VS Code by about a minute
     const cop = Object.fromEntries(fmt.formatSessionTooltip(copilotSession(), en, { now: NOW }));
@@ -1178,7 +1114,7 @@ function formatTests() {
     assert.strictEqual(fmt.formatProviderNote('claude', en), '');
   });
 
-  test('costs: Copilot shows credits (never "$0" or "No public price"); unpriced Qwen / Gemini models; estimate marker; per-provider price dates', () => {
+  test('costs: Copilot shows credits (never "$0" or "No public price"); price date', () => {
     const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
     const cop = copilotSession({ credits: 12.345 });
     assert.deepStrictEqual(fmt.formatSessionCost(cop, en), { text: '12.35 credits', fromClaudeCode: false, estimateText: '', credits: true, label: 'Copilot credits' });
@@ -1192,24 +1128,12 @@ function formatTests() {
       { label: 'Copilot credits', cell: '—', full: "Counted in the session's Copilot credits (main agent row)." });
     assert.strictEqual(fmt.formatAgentCost({ kind: 'main', copilotCredits: null }, en, { provider: 'copilot' }).full, en.t('cost.credits.none'));
     assert.ok(fmt.formatCostNote(en, 'copilot').startsWith('Copilot bills in credits'));
-    // Qwen OAuth 'coder-model' and unknown Gemini ids: tokens still shown, cost says "No public price"
-    const qw = qwenSession();
-    assert.strictEqual(fmt.formatSessionCost(qw, en).text, 'No public price');
-    assert.deepStrictEqual(fmt.formatAgentCost(qw.main, en, { provider: 'qwen' }), { label: 'API-equivalent cost', cell: '—', full: 'No public price' });
-    assert.strictEqual(fmt.formatAgentCost(qw.agents[0], en, { provider: 'qwen' }).full, '$0.001 est.');
-    const gem = geminiSession();
-    assert.deepStrictEqual(fmt.formatAgentCost(gem.main, en, { provider: 'gemini' }), { label: 'API-equivalent cost', cell: '$0.052', full: '$0.052 est.' });
-    assert.ok(fmt.formatCostNote(en, 'gemini').includes('2026-09-24'), 'Gemini prices have their own date');
-    assert.ok(fmt.formatCostNote(en, 'qwen').includes('2026-09-24'));
     assert.ok(fmt.formatCostNote(en, 'claude').includes('2026-09-23'));
-    // Gemini token breakdown; nothing for providers without one
-    assert.strictEqual(fmt.formatTokenBreakdown(gem.main.tokens, en), 'Input 52K (cached 30K) · thoughts 1.2K · tool use 300');
-    assert.strictEqual(fmt.formatTokenBreakdown(tokens(1000), en), '');
   });
 
-  test('no auto-compact point for Copilot / Gemini CLI / Qwen Code: never "auto-compact is off", no compaction row, no compact menu; window source named', () => {
+  test('no auto-compact point for Copilot: never "auto-compact is off", no compaction row, no compact menu; window source named', () => {
     const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
-    for (const s of [copilotSession(), geminiSession(), qwenSession()]) {
+    for (const s of [copilotSession()]) {
       const tk = fmt.sessionContextTokens(s);
       assert.strictEqual(tk.compactUnknown, true, s.provider);
       const c = fmt.formatContext(tk, en);
@@ -1230,8 +1154,6 @@ function formatTests() {
     }
     assert.strictEqual(fmt.formatContextSources(fmt.sessionContextTokens(copilotSession()), 'copilot', en).windowText,
       'Context window: 128K (from the model info VS Code keeps with this chat)');
-    assert.strictEqual(fmt.formatContextSources(fmt.sessionContextTokens(qwenSession()), 'qwen', en).windowText,
-      'Context window: 1M (from the Qwen Code session log)');
     // Claude / Codex keep "auto-compact is off" for compactAt null
     assert.strictEqual(fmt.formatContext(fmt.agentContextTokens(agent({ tokens: tokens(84000, { compactAt: null, toCompact: null }) }), 'claude'), en).remainText, 'Auto-compact is off');
     assert.strictEqual(fmt.sessionContextTokens(session()).compactUnknown, false);
@@ -1245,7 +1167,7 @@ function formatTests() {
     assert.strictEqual(fmt.tokensUnknown(s.agents[0], 'copilot'), true, 'Copilot never records sub-agent tokens');
     assert.strictEqual(fmt.tokensUnknown(copilotSession().main, 'copilot'), false, 'a Copilot chat with usage');
     assert.strictEqual(fmt.tokensUnknown(agent({ tokens: tokens(0, { output: 0, processed: 0 }) }), 'claude'), false, 'other providers: 0 is a real reading');
-    assert.strictEqual(fmt.tokensUnknown(agent({ tokens: { ...zero, unknown: true } }), 'gemini'), true, 'explicit flag');
+    assert.strictEqual(fmt.tokensUnknown(agent({ tokens: { ...zero, unknown: true } }), 'codex'), true, 'explicit flag');
     const c = fmt.formatContext(fmt.sessionContextTokens(s), en);
     assert.strictEqual(c.unknown, true);
     assert.strictEqual(c.usageText, '— / 128K');
@@ -1273,19 +1195,19 @@ function formatTests() {
     }
   });
 
-  test('last usage-limit hits: Claude, Copilot, Gemini CLI and Qwen Code each get a line; the panel keeps a hit without a reset time for an hour', () => {
+  test('last usage-limit hits: Claude and Copilot each get a line; the panel keeps a hit without a reset time for an hour', () => {
     const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
     const hit = (o) => ({ kind: 'unknown', model: null, resetsAtMs: null, resetsText: null, source: 'text', autoContinue: null, ms: NOW - 5 * MIN, sessionKey: 'x:1', ...o });
     assert.strictEqual(fmt.formatLastHit('copilot', hit({ source: 'turnError', model: 'gpt-5' }), en, NOW), 'Last Copilot limit hit: Usage limit reached (5m ago)');
-    assert.strictEqual(fmt.formatLastHit('qwen', hit({ ms: undefined }), en, NOW), 'Last Qwen Code limit hit: Usage limit reached');
-    assert.strictEqual(fmt.formatLastHit('gemini', null, en, NOW), '');
+    assert.strictEqual(fmt.formatLastHit('copilot', hit({ ms: undefined }), en, NOW), 'Last Copilot limit hit: Usage limit reached');
+    assert.strictEqual(fmt.formatLastHit('copilot', null, en, NOW), '');
     const claude = hit({ kind: 'weekly', resetsAtMs: NOW + HOUR });
     assert.strictEqual(fmt.formatLastHit('claude', claude, en, NOW), fmt.formatClaudeLastHit(claude, en, NOW));
     assert.ok(fmt.formatClaudeLastHit(claude, en, NOW).startsWith('Last Claude limit hit: Weekly limit reached'));
     const lines = fmt.formatLastHits({
-      claude: { lastHit: claude }, codex: { windows: [] }, copilot: { lastHit: null }, gemini: { lastHit: hit({ ms: NOW - 2 * HOUR }) }, qwen: { lastHit: hit() },
+      claude: { lastHit: claude }, codex: { windows: [] }, copilot: { lastHit: hit({ ms: NOW - 2 * HOUR }) },
     }, en, NOW);
-    assert.deepStrictEqual(lines.map((l) => l.split(':')[0]), ['Last Claude limit hit', 'Last Gemini CLI limit hit', 'Last Qwen Code limit hit']);
+    assert.deepStrictEqual(lines.map((l) => l.split(':')[0]), ['Last Claude limit hit', 'Last Copilot limit hit']);
     assert.deepStrictEqual(fmt.formatLastHits(null, en, NOW), []);
     assert.deepStrictEqual(fmt.formatLastHits({ claude: { lastHit: null } }, en, NOW), []);
     assert.strictEqual(fmt.isRecentHit(hit(), NOW), true);
@@ -1295,11 +1217,11 @@ function formatTests() {
     assert.strictEqual(fmt.isRecentHit(null, NOW), false);
     for (const loc of LOCALES) {
       const i18n = i18nLib.createI18n(loc, { timeZone: 'UTC' });
-      for (const p of ['copilot', 'gemini', 'qwen']) {
+      for (const p of ['copilot']) {
         const t = fmt.formatLastHit(p, hit(), i18n, NOW);
         assert.ok(t.includes(fmt.providerLabel(p, i18n)) && !PLACEHOLDER.test(t), `${loc} ${p}: ${t}`);
       }
-      assert.ok(!PLACEHOLDER.test(fmt.formatLastHit('gemini', hit({ ms: null }), i18n, NOW)), loc);
+      assert.ok(!PLACEHOLDER.test(fmt.formatLastHit('copilot', hit({ ms: null }), i18n, NOW)), loc);
     }
   });
 

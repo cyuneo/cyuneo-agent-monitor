@@ -1,7 +1,7 @@
 {
   "displayName": "CYUNEO Agent Monitor",
-  "description": "See all your Claude Code, Codex, Copilot, Gemini CLI and Qwen Code chats next to the terminal: which agents are working, which need you, and how full each context is. Compact with a cheaper model, get a reminder before the cache expires, and resume after a usage limit. Reads only the local session logs; the extension makes no network requests unless you allow network access (off by default); today only optional push notifications use it. Unofficial; not affiliated with Anthropic, OpenAI, GitHub, Google or Alibaba Cloud. Free for personal and noncommercial use; commercial use needs a license.",
-  "capabilities.untrusted": "In Restricted Mode, the settings that point to other folders or programs (Claude Code CLI path, Claude projects folder, Codex, Gemini CLI and Qwen Code folders) are only read from your user settings. Push notification settings and network access are always read only from your user settings.",
+  "description": "See all your Claude Code, Codex and Copilot chats next to the terminal: which agents are working, which need you, and how full each context is. Compact with a cheaper model, get a reminder before the cache expires, and resume after a usage limit. Reads only the local session logs; the extension makes no network requests unless you allow network access (off by default); today only optional push notifications use it. Unofficial; not affiliated with Anthropic, OpenAI or GitHub. Free for personal and noncommercial use; commercial use needs a license.",
+  "capabilities.untrusted": "In Restricted Mode, the settings that point to other folders or programs (Claude Code CLI path, Claude projects folder, Codex home) are only read from your user settings. Push notification settings and network access are always read only from your user settings.",
 
   "container.title": "Agent Monitor",
   "view.overview": "Overview",
@@ -9,7 +9,7 @@
   "category": "Agent Monitor",
 
   "welcome.loading": "Reading local agent session logs…",
-  "welcome.empty.all": "No Claude Code, Codex, Copilot, Gemini CLI or Qwen Code sessions were active recently.",
+  "welcome.empty.all": "No Claude Code, Codex or Copilot sessions were active recently.",
   "welcome.empty.workspace": "No sessions from this workspace were active recently.",
   "welcome.noFolder": "No folder is open, so no session can match this workspace.",
   "welcome.openSettings": "Open Settings",
@@ -79,10 +79,6 @@
   "config.codex.enabled": "Read Codex session logs.",
   "config.codex.home": "Codex home folder. Leave empty to use `$CODEX_HOME` or `~/.codex`.",
   "config.copilot.enabled": "Read the GitHub Copilot Chat session logs that VS Code keeps (chat and agent mode).",
-  "config.gemini.enabled": "Read Gemini CLI session logs.",
-  "config.gemini.home": "Gemini CLI folder. Leave empty to use `$GEMINI_CLI_HOME/.gemini` or `~/.gemini`.",
-  "config.qwen.enabled": "Read Qwen Code session logs.",
-  "config.qwen.home": "Qwen Code folder. Leave empty to use `$QWEN_RUNTIME_DIR`, `$QWEN_HOME` or `~/.qwen`.",
   "config.compactConfirm": "Ask for confirmation before compacting a closed session in the background.",
   "config.compactTemplate": "Text pre-filled after `/compact` when you compact a session (what the summary must keep). Leave empty to use the built-in template in your display language.",
   "config.contextHintStart": "For models with a window of 500K tokens or more: from this many context tokens on, suggest compacting or starting a new session at the next good stopping point.",
@@ -98,7 +94,7 @@
   "config.push.events": "Which events send a push while push is on.",
   "config.push.events.needsYou": "An agent is waiting for your reply or approval (pushed only if it still waits after the delay).",
   "config.push.events.error": "An agent stopped with an API error.",
-  "config.push.events.limitHit": "A usage limit of Claude Code, Codex, Copilot, Gemini CLI or Qwen Code is reached.",
+  "config.push.events.limitHit": "A usage limit of Claude Code, Codex or Copilot is reached.",
   "config.push.events.limitReset": "That usage limit has reset.",
   "config.push.events.usageHigh": "A usage window reaches the usage alert percentage.",
   "config.push.events.costDaily": "Today's estimated cost passes your daily budget (the amount isn't sent).",

@@ -57,5 +57,5 @@
   "history.note.local": "日期依這台電腦的本地時間劃分。",
   "history.note.retention": "只計算仍保存在這台電腦上的對話記錄。Claude Code 會在清理期（預設 30 天）後刪除舊記錄，因此較早的日期可能少於實際用量。",
   "history.note.columns": "「輸入」不含快取讀取。Codex 把推理計入輸出；Claude Code 不分開記錄推理。",
-  "history.note.scope": "這裡只統計 Claude Code 和 Codex，不含 Copilot、Gemini CLI 和 Qwen Code。"
+  "history.note.scope": "這裡只統計 Claude Code 和 Codex，不含 Copilot。"
 }
