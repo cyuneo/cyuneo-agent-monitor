@@ -629,6 +629,14 @@ test('view model: totals, stacked bars with round axis ticks, table rows by mode
   assert.deepStrictEqual(HV._internal.niceTicks(0.37), { top: 0.4, ticks: [0, 0.1, 0.2, 0.3, 0.4] });
   assert.deepStrictEqual(HV._internal.niceTicks(930).ticks, [0, 250, 500, 750, 1000]);
   assert.strictEqual(HV._internal.fmtDate('2026-09-24', en, { month: 'short', day: 'numeric' }), 'Sep 24');
+  // Neighbouring cost ticks never print the same label (0.005 steps used to show "$0.01" twice)
+  for (const max of [0.012, 0.0004, 0.37, 2.4, 13, 930, 18000]) {
+    const { ticks } = HV._internal.niceTicks(max);
+    const step = ticks[1] - ticks[0];
+    const labels = ticks.map((v) => HV._internal.fmtAxisUsd(v, en, step));
+    assert.strictEqual(new Set(labels).size, labels.length, `distinct labels for max ${max}: ${labels.join(' ')}`);
+  }
+  assert.deepStrictEqual(HV._internal.niceTicks(0.012).ticks.map((v) => HV._internal.fmtAxisUsd(v, en, 0.005)), ['$0', '$0.005', '$0.01', '$0.015']);
 });
 
 test('view model: loading, still scanning, empty and error states', () => {

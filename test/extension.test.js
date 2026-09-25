@@ -3882,7 +3882,7 @@ async function manifestTests() {
   });
 
   await test('bottom panel title bar: scope switch, hide completed, mark all seen and refresh are buttons; storage, usage history, push notifications, network access and settings are in the … overflow menu', () => {
-    const items = c.menus['view/title'].filter((m) => /view == agentMonitor\.agents\b/.test(m.when));
+    const items = c.menus['view/title'].filter((m) => /view == agentMonitor\.agents\b|\(agents\|/.test(m.when));
     const nav = items.filter((m) => m.group.startsWith('navigation')).map((m) => `${m.group} ${m.command || m.submenu}`);
     assert.deepStrictEqual(nav, [
       'navigation@1 agentMonitor.scopeMenu.all', 'navigation@1 agentMonitor.scopeMenu.workspace',
@@ -3895,6 +3895,17 @@ async function manifestTests() {
     // the two scope submenus are mutually exclusive; the icon reflects the current scope
     const scope = items.filter((m) => m.submenu);
     assert.ok(scope[0].when.includes("config.agentMonitor.scope != 'workspace'") && scope[1].when.includes("config.agentMonitor.scope == 'workspace'"));
+  });
+
+  await test('each submenu is contributed at most once per menu (VS Code drops repeats with a warning, which hid the scope switch on the trees)', () => {
+    for (const [menu, list] of Object.entries(c.menus)) {
+      const subs = list.filter((m) => m.submenu).map((m) => m.submenu);
+      assert.strictEqual(new Set(subs).size, subs.length, `${menu}: ${subs.join(', ')}`);
+    }
+    // the one scope entry per submenu covers the panel and both trees
+    for (const m of c.menus['view/title'].filter((x) => x.submenu)) {
+      for (const v of ['agents', 'tree', 'panelOverview']) assert.ok(new RegExp(m.when.match(/\/(.*)\//)[1]).test('agentMonitor.' + v), `${m.submenu} shows on ${v}`);
+    }
   });
 
   await test('webview context menu: when = webviewId + webviewSection + compactable / resumable / handoff / autoCompact; evaluated against the data-vscode-context of the row', () => {
@@ -3943,7 +3954,8 @@ async function manifestTests() {
         for (const m of when.matchAll(/\bview == ([\w.]+)/g)) assert.ok(views.has(m[1]), `unknown view ${m[1]}`);
         for (const m of when.matchAll(/\bview =~ \/(.+?)\/(?:\s|$)/g)) {
           const re = new RegExp(m[1]);
-          assert.ok([...views.keys()].some((v) => re.test(v)) && !re.test('agentMonitor.agents'), `view regex matches no tree view: ${m[1]}`);
+          // Only the scope submenus span the panel too (one entry per submenu, see the submenu test)
+          assert.ok([...views.keys()].some((v) => re.test(v)) && (it.submenu || !re.test('agentMonitor.agents')), `view regex matches no tree view: ${m[1]}`);
         }
         for (const m of when.matchAll(/\bwebviewId == '([\w.]+)'/g)) assert.ok(views.has(m[1]) && views.get(m[1]).type === 'webview', `unknown webview ${m[1]}`);
         for (const m of when.matchAll(/\bconfig\.([\w.]+)/g)) assert.ok(settings.has(m[1]), `unknown setting ${m[1]}`);

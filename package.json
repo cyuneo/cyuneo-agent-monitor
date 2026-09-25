@@ -355,12 +355,12 @@
       "view/title": [
         {
           "submenu": "agentMonitor.scopeMenu.all",
-          "when": "view == agentMonitor.agents && config.agentMonitor.scope != 'workspace'",
+          "when": "view =~ /^agentMonitor\\.(agents|tree|panelOverview)$/ && config.agentMonitor.scope != 'workspace'",
           "group": "navigation@1"
         },
         {
           "submenu": "agentMonitor.scopeMenu.workspace",
-          "when": "view == agentMonitor.agents && config.agentMonitor.scope == 'workspace'",
+          "when": "view =~ /^agentMonitor\\.(agents|tree|panelOverview)$/ && config.agentMonitor.scope == 'workspace'",
           "group": "navigation@1"
         },
         {
@@ -416,21 +416,11 @@
         {
           "command": "agentMonitor.hideCompleted",
           "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && !config.agentMonitor.hideCompleted",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
           "command": "agentMonitor.showCompleted",
           "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.hideCompleted",
-          "group": "navigation@1"
-        },
-        {
-          "submenu": "agentMonitor.scopeMenu.all",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.scope != 'workspace'",
-          "group": "navigation@2"
-        },
-        {
-          "submenu": "agentMonitor.scopeMenu.workspace",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.scope == 'workspace'",
           "group": "navigation@2"
         },
         {
