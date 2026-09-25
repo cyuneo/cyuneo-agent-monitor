@@ -8,7 +8,7 @@ See all your AI coding chats in one place, next to your terminal: which agents a
 
 > **Preview (0.5.0).** Please report anything that looks wrong in [GitHub Issues](https://github.com/cyuneo/cyuneo-agent-monitor/issues).
 
-![Animated demo of Agent Monitor in the VS Code panel, with made-up sample data: in a Claude Code chat, the main agent and two subagents step through reading files, searching, editing and running tests while tokens, cost and context percent climb. One subagent's light turns magenta while it waits for approval to run the tests, and the chat's light in the list and the panel badge change with it. It then carries on and every agent finishes with a green light. Last, a Codex chat is picked from the list and its steps show instead](images/demo.gif)
+![Animated demo of Agent Monitor in the VS Code panel, with made-up sample data: in a Claude Code chat running in a terminal, the main agent and two subagents step through reading files, searching, editing and running tests while tokens, cost and context percent climb. When a subagent wants to run the tests, its light and the main agent's turn magenta while they wait for approval, and the chat's light in the list, the panel badge and the status bar change with them. A double-click on the chat jumps to the terminal it runs in, where the command is approved. Back in the panel, every agent finishes with a green light. Last, Usage History is opened from the panel's … menu](images/demo.gif)
 
 ## Why I built it
 

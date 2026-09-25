@@ -8,6 +8,8 @@
 
 ### A panel that works like the Terminal
 
+![The Agent Monitor tab in the bottom panel, with made-up sample data: the selected Claude Code chat's main agent, two subagents and a workflow's agents on the left, and the list of open and recent chats on the right](../images/split-view.png)
+
 - **Agent Monitor** opens as a tab in the bottom panel, next to Terminal, and looks like it: one panel with no extra view headers. The agents of the selected chat fill most of it, and a narrow list of chats sits on one side, like the terminal's tab list.
 - **The chat list.** Every open and recent chat, each with a status light. They are grouped into **Open** (Claude Code still has the chat open; Codex or GitHub Copilot Chat is in the middle of a turn; Qwen Code's process is still running; or, as a guess, Gemini CLI has written to it recently) and **Recent**. Rows are the same height as terminal tabs, and the selected chat is highlighted. To leave room for titles, a row shows only the status light and the title, plus a small mark when a large context is worth dealing with: **◔** consider compacting, **◕** handle soon. Hover over a row for its status, context and the rest.
 - **The list sits where your terminal's tab list is** (right by default, following `terminal.integrated.tabs.location`); set `agentMonitor.sessionListPosition` to put it on the left or right yourself. Drag the divider to resize it, double-click the divider to reset it to 200 px, or drag it almost closed to shrink the list to a strip of status lights. When the panel is narrower than 500 px, the strip is used automatically. The width is remembered.
@@ -220,6 +222,8 @@ Click an agent to see its recent steps, its final result (with a copy button), t
 - the estimated cost or the tokens of each day, as a bar chart with Claude Code and Codex stacked (switch between **Cost** and **Tokens**, or **Show as a table**);
 - totals for the period, the daily average and how many days you used them;
 - a breakdown **By model**: input, output, cache read, cache write, reasoning, all tokens and estimated cost.
+
+![The Usage History page, with made-up sample data: estimated cost per day over 30 days with Claude Code and Codex stacked, the totals and the breakdown by model](../images/history.png)
 
 How it works:
 
