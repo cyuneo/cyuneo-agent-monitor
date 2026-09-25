@@ -29,6 +29,7 @@
   "cmd.revealTranscript": "トランスクリプトファイルを表示",
   "cmd.copyTranscriptPath": "トランスクリプトのパスをコピー",
   "cmd.copyResume": "再開プロンプトをコピー…",
+  "cmd.goToChat": "チャットへ移動",
   "cmd.compact": "圧縮…",
   "cmd.handoff": "引き継ぎメモを書いて新しく始める…",
   "cmd.setAutoCompact": "自動圧縮のしきい値を設定…",

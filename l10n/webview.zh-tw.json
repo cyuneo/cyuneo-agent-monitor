@@ -38,6 +38,8 @@
   "webview.cache.tip": "主對話的提示快取。在過期前壓縮比過期後壓縮便宜得多。",
   "webview.compact": "壓縮…",
   "webview.compact.tip": "壓縮這個工作階段的上下文。執行前由你選擇壓縮方式（對已關閉的 Claude 工作階段，還可以選模型）。",
+  "webview.goTo": "前往",
+  "webview.goTo.tip": "前往這個工作階段執行的地方：它的對話面板或終端機。按兩下工作階段或智慧體列也可以。",
   "webview.autoCompact": "自動壓縮：{value}",
   "webview.autoCompact.tip": "選擇 Claude Code 何時自動壓縮這個工作階段。會先看到各檔位及其取捨，選定之前什麼都不會改變。",
   "webview.sessionCost": "這個工作階段：{usd}",

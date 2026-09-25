@@ -260,6 +260,12 @@
         "icon": "$(copy)"
       },
       {
+        "command": "agentMonitor.goToChat",
+        "title": "%cmd.goToChat%",
+        "category": "%category%",
+        "icon": "$(link-external)"
+      },
+      {
         "command": "agentMonitor.compact",
         "title": "%cmd.compact%",
         "category": "%category%",
@@ -440,6 +446,11 @@
       ],
       "view/item/context": [
         {
+          "command": "agentMonitor.goToChat",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
+          "group": "0_goto@1"
+        },
+        {
           "command": "agentMonitor.compact",
           "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bcompactable\\b/",
           "group": "1_session@1"
@@ -483,9 +494,19 @@
           "command": "agentMonitor.openTranscript",
           "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bagent\\b/",
           "group": "inline@1"
+        },
+        {
+          "command": "agentMonitor.goToChat",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bgoTo\\b/",
+          "group": "inline@1"
         }
       ],
       "webview/context": [
+        {
+          "command": "agentMonitor.goToChat",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
+          "group": "0_goto@1"
+        },
         {
           "command": "agentMonitor.compact",
           "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session' && compactable",

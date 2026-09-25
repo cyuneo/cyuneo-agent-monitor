@@ -489,6 +489,15 @@ async function overviewTests() {
     assert.ok(wfIt.description.startsWith(i18n.t('workflow.running')));
   });
 
+  await test('Go to Chat: session contextValue gets "goTo" (the inline action) when the jump is worth trying: a running Claude chat or a Codex extension thread, not a Claude chat that is not running', () => {
+    const cv = (id) => p.getTreeItem(p.nodes.get(id)).contextValue.split(' ');
+    assert.ok(cv('claude:alpha').includes('goTo'), 'running Claude');
+    assert.ok(cv('codex:gamma').includes('goTo'), 'Codex extension, recently active');
+    assert.ok(!cv('claude:beta').includes('goTo'), 'Claude, not running');
+    assert.ok(!cv('claude:delta').includes('goTo'), 'Claude, not running');
+    assert.strictEqual(p.getTreeItem(p.nodes.get('claude:alpha/main')).contextValue, 'mainAgent', 'agent nodes keep their contextValue (the menu uses the session)');
+  });
+
   await test('Collapsing: running / needs-you sessions and running workflows are expanded, the rest collapsed; the main agent has no arrow', () => {
     const state = (id) => p.getTreeItem(p.nodes.get(id)).collapsibleState;
     assert.strictEqual(state('claude:alpha'), Expanded);

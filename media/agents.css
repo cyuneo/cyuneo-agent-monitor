@@ -589,7 +589,7 @@ footer { padding: 8px 10px 0 calc(var(--in0) + 20px); }
   .s-sum .sum-cache, .s-sum .sum-cost { display: none; }
   .s-line.s-sum > #s-status { min-width: 6em; }
   .s-line.s-sum > .sum-ctx { flex: 0 2 auto; min-width: 5em; }
-  #s-resumebtn > span { display: none; }
+  #s-resumebtn > span, #s-goto > span { display: none; }
   .detail .d-inner, .lv1 + .detail .d-inner, .lv2 + .detail .d-inner { padding-left: calc(var(--in0) + 40px); }
   .d-cols { grid-template-columns: minmax(0, 1fr); }
   .meter { width: 80px; }

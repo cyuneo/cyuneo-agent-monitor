@@ -663,7 +663,7 @@ test('flow: session open + all projects → prefill /autocompact 400k (claude-vs
     assert.ok(scopeQp.title.includes('400K (40%)'));
     assert.strictEqual(scopeQp.find((it) => it.action && it.action.scope === 'all').detail,
       t('autocompact.scope.all.live', { command: '/autocompact 400k' }));
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/autocompact 400k']);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/autocompact 400k', undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
     assert.deepStrictEqual(log.clipboard, ['/autocompact 400k']);
     const m = log.messages.pop();
     assert.strictEqual(m.msg, `${t('compact.deliver.opened')} ${t('autocompact.prefill.after')}`);

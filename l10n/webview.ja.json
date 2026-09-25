@@ -38,6 +38,8 @@
   "webview.cache.tip": "メイン会話のプロンプトキャッシュです。期限切れ前に圧縮する方が、切れた後よりずっと安く済みます。",
   "webview.compact": "圧縮…",
   "webview.compact.tip": "このセッションのコンテキストを圧縮します。実行前に方法（閉じたClaudeセッションの場合はモデルも）を選べます。",
+  "webview.goTo": "移動",
+  "webview.goTo.tip": "このセッションが実行されている場所（チャットパネルまたはターミナル）へ移動します。セッションやエージェントの行をダブルクリックしても同じです。",
   "webview.autoCompact": "自動圧縮: {value}",
   "webview.autoCompact.tip": "Claude Codeがこのセッションをいつ自動圧縮するかを選びます。各プリセットとそのトレードオフが先に表示され、選ぶまでは何も変わりません。",
   "webview.sessionCost": "このセッション: {usd}",

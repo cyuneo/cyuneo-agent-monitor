@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Go to agent.** Click **Go to** in a chat's header, double-click a chat or one of its agents, or choose **Go to Chat** (in the chat's right-click and **…** menus, the Overview's right-click menu and inline button, or the Command Palette), and Agent Monitor brings up the place where that chat is running. A single click still only selects the chat or shows an agent's details.
+  - **Claude Code extension:** the chat opens in Claude Code, where your `claudeCode.preferredLocation` setting puts it; the setting isn't changed. **Codex extension** and **GitHub Copilot Chat:** the conversation opens in an editor tab.
+  - **Claude Code, Codex, Gemini CLI and Qwen Code in VS Code's integrated terminal:** that terminal is shown.
+  - **Another VS Code window:** that window opens the chat or shows the terminal and comes to the front. This needs `agentMonitor.shareScanAcrossWindows` on (the default).
+  - **Terminal.app and iTerm2 on macOS:** the app comes to the front with the chat's tab selected. The first time, Agent Monitor asks you, and then macOS asks for Automation permission; you can change that later in System Settings > Privacy & Security > Automation.
+  - **Not supported yet:** the Claude and Codex desktop apps, and other terminal apps (Warp, Ghostty, WezTerm, kitty, Alacritty, Windows Terminal and others). For Codex CLI and Gemini CLI, if several run in the same folder, the newest one is chosen.
+  - The running processes are listed only when you use it, and your chats aren't read for it. Details: [Go to where a chat is running](docs/GUIDE.md#go-to-where-a-chat-is-running) in the full guide.
 - **Three more tools: GitHub Copilot Chat, and Gemini CLI and Qwen Code as a preview.** Besides Claude Code and Codex, the panel now shows chats from **GitHub Copilot Chat** (VS Code's built-in chat, agent mode included), **Gemini CLI** and **Qwen Code**, with their status lights, agents, steps and tokens. Tools that aren't installed are skipped. Everything is read-only: for Copilot Chat, the chat session files VS Code keeps in its User folder (`workspaceStorage/*/chatSessions`, chats from windows with no folder open, and other profiles); for Gemini CLI, `~/.gemini/tmp/<project>/chats` (and the same under `~/.cache/.gemini` when it runs in the macOS sandbox); for Qwen Code, its chats folder and the `runtime.json` next to each chat. The extension never writes to them, and their contents are never sent anywhere. What each tool shows differs:
   - **GitHub Copilot Chat:** "needs you" is exact, but a chat's state can be up to about a minute late, because VS Code saves chats about once a minute. It shows Copilot credits instead of a dollar cost.
   - **Gemini CLI (preview):** tokens and estimated cost. Whether a chat is working, needs you or is done is a guess, and a tool's name appears only after the tool finishes.
@@ -26,7 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **The README says where the extension has been tested:** the automated tests run on macOS, Windows and Linux (Node.js 22, and also Node.js 20 on Linux), and hands-on testing inside VS Code has only been done on macOS so far.
-- **The guide lists more known limitations:** you can't approve or answer a prompt from a notification, clicking a notification can't bring a particular VS Code window to the front, and sounds haven't been tried on Linux or Windows yet.
+- **The guide lists more known limitations:** you can't approve or answer a prompt from a notification, clicking a system notification can't take you to the chat (use **Go to** in the panel instead), and sounds haven't been tried on Linux or Windows yet.
+
+### Fixed
+
+- **Putting text into a chat in the Claude Code extension no longer changes where Claude Code opens.** When the extension put `/compact …`, a handoff request or `/autocompact …` into an open chat's input box, it could switch Claude Code's `claudeCode.preferredLocation` setting to "panel". It now keeps your setting. This happened in 0.4.0 and earlier.
 
 ## [0.4.0] - 2026-09-24
 

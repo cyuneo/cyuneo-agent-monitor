@@ -64,7 +64,7 @@
     app: $('app'), content: $('content'), sash: $('sash'), slist: $('slist'), box: $('sl-box'),
     empty: $('empty'), emptyActLine: $('empty-act-line'), emptyAct: $('empty-act'),
     sbar: $('sbar'), grid: $('grid'), rows: $('rows'), note: $('note'),
-    lamp: $('s-lamp'), title: $('s-title'), meta: $('s-meta'), headCtx: $('s-headctx'), compact: $('s-compact'),
+    lamp: $('s-lamp'), title: $('s-title'), meta: $('s-meta'), headCtx: $('s-headctx'), compact: $('s-compact'), goto: $('s-goto'),
     badge: $('s-badge'), status: $('s-status'),
     urgent: $('s-urgent'), details: $('s-details'), more: $('s-more'), resumeBtn: $('s-resumebtn'),
     ctxline: $('s-ctxline'), meter: $('s-meter'), fill: $('s-fill'), ctx: $('s-ctx'), pct: $('s-pct'), remain: $('s-remain'), zone: $('s-zone'),
@@ -91,6 +91,7 @@
     txt(E.meta, s.meta);
     at(E.meta, 'title', s.metaTip);
     show(E.compact, !!s.compactable);
+    show(E.goto, !!s.goTo);
 
     if (s.badge) cn(E.badge, `badge codicon codicon-${s.badge} lamp-${s.lamp}`);
     show(E.badge, !!s.badge);
@@ -674,6 +675,13 @@
   });
   // Row-end buttons don't take focus (the list keeps its "focused" selection color)
   E.box.addEventListener('mousedown', (e) => { if (e.target.closest('.sl-act')) e.preventDefault(); });
+  // Double-click a row: go to where that session runs (the first click has already selected it); not on the row-end buttons
+  E.box.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.sl-row');
+    if (!row || !row._data || e.target.closest('.sl-act')) return;
+    clearSelection();
+    vscode.postMessage({ type: 'goTo', sessionKey: row._data.key });
+  });
   // Right-click: focus follows to this row (selection unchanged; VS Code shows the menu from data-vscode-context, so the default is not prevented here)
   E.box.addEventListener('contextmenu', (e) => {
     const row = e.target.closest('.sl-row');
@@ -745,6 +753,7 @@
     if (act === 'toggleDetails') { setDetails(!(shownKey && state.details[shownKey])); return; }
     if (act === 'showResume') { setDetails(true); E.resume.scrollIntoView({ block: 'nearest' }); return; }
     if (act === 'compact' || btn === E.compact) { if (key) vscode.postMessage({ type: 'compact', sessionKey: key }); return; }
+    if (act === 'goTo') { if (key) vscode.postMessage({ type: 'goTo', sessionKey: key }); return; }
     if (act === 'setAutoCompact' || act === 'revealTranscript' || act === 'copyTranscriptPath') {
       if (key) vscode.postMessage({ type: act, sessionKey: key });
       return;
@@ -762,11 +771,26 @@
       return;
     }
     if (btn) return;
-    // Clicking elsewhere on the row also expands / collapses (like a native tree); drag-selecting text or clicking inside the detail panel doesn't count
+    // Clicking elsewhere on the row also expands / collapses (like a native tree); drag-selecting text, clicking inside the detail
+    // panel and the second click of a double-click (which goes to the session instead) don't count
     const row = e.target.closest('.row');
-    if (!row || row.classList.contains('head') || String(window.getSelection() || '')) return;
+    if (!row || row.classList.contains('head') || e.detail > 1 || String(window.getSelection() || '')) return;
     toggle(unitOf(row));
   });
+
+  // Double-click an agent row (not its buttons, not the detail panel): go to where the session runs (the first click has
+  // toggled the row, the second one is ignored)
+  E.rows.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.row');
+    if (!row || row.classList.contains('head') || e.target.closest('button') || !shownKey) return;
+    clearSelection();
+    vscode.postMessage({ type: 'goTo', sessionKey: shownKey });
+  });
+  // A double-click selects a word; drop it, since the double-click was meant as a command
+  function clearSelection() {
+    const sel = window.getSelection && window.getSelection();
+    if (sel && typeof sel.removeAllRanges === 'function') sel.removeAllRanges();
+  }
 
   // ←/→ on the toggle button collapses / expands (Enter and Space are handled by the button itself)
   document.addEventListener('keydown', (e) => {

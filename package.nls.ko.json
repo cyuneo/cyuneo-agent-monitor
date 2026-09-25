@@ -29,6 +29,7 @@
   "cmd.revealTranscript": "트랜스크립트 파일 표시",
   "cmd.copyTranscriptPath": "트랜스크립트 경로 복사",
   "cmd.copyResume": "재개 프롬프트 복사…",
+  "cmd.goToChat": "대화로 이동",
   "cmd.compact": "압축…",
   "cmd.handoff": "인수인계 메모 작성 후 새로 시작…",
   "cmd.setAutoCompact": "자동 압축 임계값 설정…",

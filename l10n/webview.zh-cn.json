@@ -38,6 +38,8 @@
   "webview.cache.tip": "主对话的提示缓存。在过期前压缩比过期后压缩便宜得多。",
   "webview.compact": "压缩…",
   "webview.compact.tip": "压缩这个会话的上下文。执行前由你选择压缩方式（对已关闭的 Claude 会话，还可以选模型）。",
+  "webview.goTo": "转到",
+  "webview.goTo.tip": "转到这个会话运行的地方：它的对话面板或终端。双击会话或智能体行也可以。",
   "webview.autoCompact": "自动压缩：{value}",
   "webview.autoCompact.tip": "选择 Claude Code 何时自动压缩这个会话。会先看到各档位及其取舍，选定之前什么都不会改变。",
   "webview.sessionCost": "本会话：{usd}",

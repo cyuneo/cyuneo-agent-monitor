@@ -582,7 +582,7 @@ test('flow: registry shows the session open (snapshot not updated yet) → compa
     const qp = log.quickPicks[0];
     assert.strictEqual(qp.activeItems[0].action.type, 'inSession');
     const text = '/compact ' + EN['compact.template'];
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, text]);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, text, undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
     assert.deepStrictEqual(log.clipboard, [text]);
     assert.strictEqual(log.messages.pop().msg, t('compact.deliver.opened'));
     assert.strictEqual(spawned.length, 0);
@@ -627,7 +627,7 @@ test('flow: picking an info item only shows it and keeps the QuickPick open; the
   try {
     await sc.handle.compact(sc.session.key);
     assert.strictEqual(log.messages[0].msg, t('compact.info.rules'));
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact keep the file paths']);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact keep the file paths', undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
   } finally { sc.handle.dispose(); }
 });
 
@@ -668,7 +668,7 @@ test('flow: write handoff note → prefill the prompt; the notification can copy
   ui.onMessage = (rec) => (rec.items.includes(t('compact.handoff.copyContinue')) ? t('compact.handoff.copyContinue') : undefined);
   try {
     await sc.handle.compact(sc.session.key);
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, t('compact.handoff.prompt')]);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, t('compact.handoff.prompt'), undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
     const m = log.messages.pop();
     assert.ok(m.msg.includes(t('compact.handoff.next')));
     assert.deepStrictEqual(log.clipboard, [t('compact.handoff.prompt'), t('compact.handoff.continue')]);
@@ -683,7 +683,7 @@ test('handoff command: runHandoff(sessionKey) shares its code path with "write h
   try {
     await sc.handle.runHandoff(sc.session.key);
     assert.strictEqual(log.quickPicks.length, 0, 'no picker when an argument is given');
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, t('compact.handoff.prompt')]);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, t('compact.handoff.prompt'), undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
     assert.ok(log.messages.pop().msg.includes(t('compact.handoff.next')));
     // Module-level entry point (extension.js can require and call it directly); the argument can also be a session tree node
     log.executed = [];
@@ -805,7 +805,7 @@ test('flow: registry is rechecked before running; session was just opened → ab
     assert.strictEqual(spawned.length, before);
     assert.strictEqual(readFakeLog(sc), null);
     assert.ok(log.messages.some((m) => m.msg === t('compact.nowOpen', { title: sc.session.title })));
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact ' + EN['compact.template']]);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact ' + EN['compact.template'], undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
   } finally { sc.handle.dispose(); }
 });
 
@@ -1003,7 +1003,7 @@ test('reminder: cache about to expire → shown once per cache window; the "comp
     assert.strictEqual(reminders.length, 1);
     assert.deepStrictEqual(reminders[0].items, [t('compact.remind.cache.compact'), t('compact.remind.handoff'), t('compact.remind.mute')]);
     assert.ok(reminders[0].msg.includes(usd(0.4)) && reminders[0].msg.includes(usd(3.52)), reminders[0].msg);
-    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact ' + EN['compact.template']]);
+    assert.deepStrictEqual(log.executed.find((e) => e[0] === 'claude-vscode.editor.open'), ['claude-vscode.editor.open', SID, '/compact ' + EN['compact.template'], undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
     // No reminder for sessions outside this window's workspace
     resetUi();
     const other = claudeSession({ id: SID2, live: true, lastApiMs: now - 55 * MIN, extra: { notInWs: true } });

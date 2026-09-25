@@ -36,6 +36,10 @@
 //   and gets its replies through onHistory. A follower window asks its own (paused) worker, which answers history anyway.
 // - Observed compaction points: whenever a snapshot shows a new auto-compaction, record it in globalState under
 //   "model|window" and pass it to the worker with the next config.
+// - Go to Chat (agentMonitor.goToChat, lib/jump.js): brings up the chat panel, editor tab or terminal a session runs in.
+//   This window's extension-host pid, terminal shell pids, folders and workspace storage go into its shared-scan record; a
+//   session owned by another window becomes a jump request that window performs, raising itself and replying
+//   (onJumpRequest). Selecting a tab of Terminal.app / iTerm2 asks once per app first (confirmAutomation).
 // All UI text goes through lib/i18n.js + lib/format.js; no sentences in any language are built here.
 
 const vscode = require('vscode');
@@ -54,6 +58,7 @@ const { AgentTreeProvider, esc } = require('./lib/tree');
 const notifyLib = require('./lib/notify');
 const alertsLib = require('./lib/alerts');
 const sharedScanLib = require('./lib/shared-scan');
+const jumpLib = require('./lib/jump');
 const network = require('./lib/network');
 
 const PKG = require('./package.json');
@@ -75,6 +80,9 @@ const STORAGE_CMD = 'agentMonitor.storage';
 const HISTORY_CMD = 'agentMonitor.history';
 const HISTORY_FILE = 'usage-history.jsonl'; // under globalStorageUri: the worker's usage-history cache
 const PUSH_CMD = 'agentMonitor.push.setup';
+const GOTO_CMD = 'agentMonitor.goToChat';
+const AUTOMATION_KEY = 'agentMonitor.jump.automation'; // globalState: { [terminal app id]: true } once the user agreed to AppleScript
+const HOST_PID_WAIT_MS = 10000; // presence: how long to wait for a new terminal's shell pid
 // Push settings (application scope, read with inspect().globalValue so a workspace can neither turn push on nor redirect it)
 const PUSH_KEYS = ['push.enabled', 'push.events', 'push.delaySeconds', 'push.includeTitle', 'push.channels'];
 // The network switch (application scope, read the same way): off, lib/network.js refuses every request
@@ -179,6 +187,10 @@ class Controller {
     this.historyReq = null;      // last history request of an open page ({ type: 'history', days?, force? }); resent to a new worker
     this.historyListeners = new Set(); // onHistory listeners (the history page)
     this.push = null;            // lib/push-runtime.js (null when it failed to load)
+    this.jumper = null;          // lib/jump.js createJumper (Go to Chat)
+    this.jumping = new Set();    // session keys whose jump is being worked out
+    this.hostInfo = null;        // presence fields in this window's shared-scan record (hostFields)
+    this.hostSeq = 0;
     this.stopped = false;
   }
 
@@ -239,6 +251,7 @@ class Controller {
     this.follower = scopeLib.createChatFollower({ types: this.tabTypes });
 
     this.registerCommands();
+    this.setupJump();
     this.setupCompact();
     this.setupAutoCompact();
     this.setupStorage();
@@ -427,13 +440,105 @@ class Controller {
     cmd('agentMonitor.network.allow', () => this.setNetwork(true));
     cmd('agentMonitor.network.block', () => this.setNetwork(false));
     cmd('agentMonitor.network.toggle', () => this.setNetwork(!this.networkAllowed()));
+    cmd(GOTO_CMD, (arg) => this.goToChat(arg).catch((err) => this.log(this.t('ext.log.failed', { what: 'goToChat', error: errText(err) }))));
+  }
+
+  // "Go to agent" (lib/jump.js): finds the chat panel, editor tab or terminal a session runs in, here or in another window;
+  // this window's presence fields go into its shared-scan record for the other windows
+  setupJump() {
+    this.jumper = jumpLib.createJumper({
+      vscode,
+      platform: process.platform,
+      claudeHome: () => this.workerConfig().claude.configDir,
+      localInfo: () => this.hostFields([]),
+      windows: () => (this.shared ? this.shared.windows() : []),
+      requestJump: (id, action) => (this.shared ? this.shared.requestJump(id, action, { ttlMs: jumpLib.REQUEST_TTL_MS }) : null),
+      cancelJump: (id, reqId) => (this.shared ? this.shared.cancelJump(id, reqId) : false),
+      confirmAutomation: (app) => this.confirmAutomation(app),
+      log: (line) => this.log(line),
+    });
+    this.hostInfo = this.hostFields([]);
+    const w = vscode.window;
+    const sub = (...d) => this.context.subscriptions.push(...d);
+    if (typeof w.onDidOpenTerminal === 'function') sub(w.onDidOpenTerminal(() => this.updateHost()));
+    if (typeof w.onDidCloseTerminal === 'function') sub(w.onDidCloseTerminal(() => this.updateHost()));
+    this.updateHost();
+  }
+
+  // Presence fields for the other windows; terminal pids resolve asynchronously, and only the latest call writes
+  updateHost() {
+    const seq = ++this.hostSeq;
+    Promise.resolve(jumpLib.terminalsByPid(vscode, HOST_PID_WAIT_MS)).then((terms) => {
+      if (this.stopped || seq !== this.hostSeq) return;
+      this.hostInfo = this.hostFields([...terms.keys()]);
+      if (this.shared) this.guard('sharedScan', () => this.shared.setHost(this.hostInfo));
+    }).catch(noop);
+  }
+
+  // Presence fields: extension-host pid, terminal shell pids, folders, and what tells which Copilot chats this window can load
+  hostFields(terminals) {
+    const ws = this.ws();
+    return {
+      hostPid: process.pid, terminals, folders: ws.paths,
+      storageDir: ws.storageDir || null, workspaceFile: ws.workspaceFile || null, empty: ws.empty === true,
+    };
+  }
+
+  /**
+   * Before the first AppleScript call to a terminal app: macOS will ask whether this editor may control that app, so say
+   * that first (once per app; a modal, so it is never answered by accident).
+   */
+  async confirmAutomation(app) {
+    const gs = this.context.globalState;
+    const agreed = (gs && gs.get(AUTOMATION_KEY)) || {};
+    if (agreed && agreed[app.id] === true) return true;
+    const go = this.t('ext.jump.automation.continue');
+    const pick = await vscode.window.showInformationMessage(
+      this.t('ext.jump.automation.confirm', { app: app.name }),
+      { modal: true, detail: this.t('ext.jump.automation.detail', { app: app.name, editor: vscode.env.appName || 'VS Code' }) },
+      go,
+    );
+    if (pick !== go) return false;
+    if (gs) await Promise.resolve(gs.update(AUTOMATION_KEY, { ...(agreed && typeof agreed === 'object' ? agreed : {}), [app.id]: true })).catch(noop);
+    return true;
+  }
+
+  // Another window found that a session runs here and asks this window to bring it up (or answers one of our requests)
+  onJumpRequest(req) {
+    if (this.stopped || !this.jumper) return;
+    Promise.resolve(this.jumper.handleRequest(req)).catch((err) => this.log(this.t('ext.log.failed', { what: 'goToChat', error: errText(err) })));
+  }
+
+  /**
+   * Go to Chat: the panel's Go to button and double-click, the context menus and the tree's inline action pass the
+   * session; from the Command Palette a session is picked first. Says why when the jump is not possible.
+   */
+  async goToChat(arg) {
+    const key = this.keyOf(arg) || (arg == null ? await this.pickSessionKey() : null);
+    const s = key ? this.byKey.get(key) : null;
+    if (!s || !this.jumper) return;
+    if (this.jumping.has(key)) return; // a double-click while the processes are still being listed
+    this.jumping.add(key);
+    let out;
+    try {
+      out = await this.jumper.goTo(s);
+    } finally {
+      this.jumping.delete(key);
+    }
+    if (out && !out.ok && out.reason === jumpLib.REASON.FAILED) this.log(this.t('ext.log.failed', { what: 'goToChat', error: String(out.error || '') }));
+    const msg = jumpLib.messageOf(out, this.i18n, s, { appName: vscode.env.appName });
+    if (!msg) return;
+    const show = msg.level === 'warn' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+    const buttons = msg.button ? [msg.button.label] : [];
+    const pick = await show.call(vscode.window, msg.text, ...buttons);
+    if (msg.button && pick === msg.button.label) await vscode.env.openExternal(vscode.Uri.parse(msg.button.url));
   }
 
   listen() {
     const sub = (...d) => this.context.subscriptions.push(...d);
     sub(
       vscode.workspace.onDidChangeConfiguration((e) => this.onConfig(e)),
-      vscode.workspace.onDidChangeWorkspaceFolders(() => this.render()),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => { this.render(); this.updateHost(); }),
       vscode.window.onDidChangeWindowState(() => {
         this.onTabs();
         this.updateViewDwell();
@@ -744,11 +849,13 @@ class Controller {
       dir: path.join(this.context.globalStorageUri.fsPath, SHARED_DIR),
       cfgKey: this.cfgKey(),
       idleHeartbeatMs: this.backgroundMs(), // while no window has focus, the windows check on each other less often too
+      host: this.hostInfo, // presence fields for "Go to agent"
       onRole: (role) => this.guard('sharedScan', () => this.onRole(role)),
       onSnapshot: (snap) => this.guard('snapshot', () => this.onSharedSnapshot(snap)),
       onFocusUnion: (keys) => { if (this.worker) this.worker.postMessage({ type: 'focus', keys }); },
       onRefreshRequest: () => this.guard('sharedScan', () => this.refreshWorker()),
       onPresence: () => this.guard('sharedScan', () => this.updateInterval()),
+      onJump: (req) => this.guard('goToChat', () => this.onJumpRequest(req)),
       onError: (err) => this.logSharedError(err),
     });
     shared.setWindowFocused(this.windowFocused()); // before anyone asks anyWindowFocused()

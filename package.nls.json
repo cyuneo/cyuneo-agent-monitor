@@ -29,6 +29,7 @@
   "cmd.revealTranscript": "Reveal Transcript File",
   "cmd.copyTranscriptPath": "Copy Transcript Path",
   "cmd.copyResume": "Copy Resume Prompt…",
+  "cmd.goToChat": "Go to Chat",
   "cmd.compact": "Compact…",
   "cmd.handoff": "Write Handoff Note and Start Fresh…",
   "cmd.setAutoCompact": "Set Auto-Compact Threshold…",

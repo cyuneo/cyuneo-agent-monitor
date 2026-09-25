@@ -126,7 +126,7 @@ test('election: the first window claims after settling, the rest follow; the lea
   assert.ok(clock.t - L.beat < HB, 'beat refreshed every heartbeat');
   assert.deepStrictEqual([a.log.roles, b.log.roles, c.log.roles], [['leader'], ['follower'], ['follower']]);
   const W = readJ(dir, 'win-b.json');
-  assert.deepStrictEqual({ ...W, beat: 0 }, { id: 'b', cfgKey: 'k1', focus: [], focused: false, beat: 0, hb: HB });
+  assert.deepStrictEqual({ ...W, beat: 0 }, { id: 'b', cfgKey: 'k1', focus: [], focused: false, beat: 0, hb: HB, hostPid: null, terminals: [], folders: [], storageDir: null, workspaceFile: null, empty: false });
   assert.ok(clock.t - W.beat < HB);
   // Another window's claim lands after the leader's beat: the leader reads another fresh id and steps down
   fs.writeFileSync(path.join(dir, 'leader.json'), JSON.stringify({ id: 'x', cfgKey: 'k1', beat: clock.t }));
@@ -650,6 +650,172 @@ test('publish { force }: written even when nothing except now changed', () => {
   assert.deepStrictEqual(b.log.snaps.map((x) => x.now), [1, 3]);
   a.stop();
   b.stop();
+});
+
+test('presence for "Go to agent": setHost goes into the window file (cleaned) and into windows() of every window, this one first', () => {
+  const clock = fakeClock();
+  const dir = newDir();
+  const a = coord(clock, dir, 'a', { host: { hostPid: 101, terminals: [7, 5, 5, -1, 'x'], folders: ['/w/a', '', 3] } });
+  const b = coord(clock, dir, 'b');
+  startAll(clock, a, b);
+  assert.deepStrictEqual(readJ(dir, 'win-a.json').terminals, [5, 7], 'unique, sorted, only pids');
+  assert.deepStrictEqual(readJ(dir, 'win-a.json').folders, ['/w/a']);
+  b.setHost({ hostPid: 202, terminals: [9], folders: ['/w/b'], storageDir: '/u/workspaceStorage/h1', workspaceFile: 7, empty: 'yes' });
+  assert.strictEqual(readJ(dir, 'win-b.json').hostPid, 202, 'written at once, not at the next heartbeat');
+  const ws = a.windows();
+  assert.deepStrictEqual(ws.map((w) => [w.id, w.self, w.hostPid, w.terminals, w.folders]),
+    [['a', true, 101, [5, 7], ['/w/a']], ['b', false, 202, [9], ['/w/b']]]);
+  assert.deepStrictEqual([ws[1].storageDir, ws[1].workspaceFile, ws[1].empty], ['/u/workspaceStorage/h1', null, false], 'Copilot storage fields, cleaned');
+  // a window that stopped beating is not listed; an unchanged setHost writes nothing
+  b.owner.frozen = true;
+  clock.advance(STALE + HB * 2);
+  assert.deepStrictEqual(a.windows().map((w) => w.id), ['a']);
+  const before = fs.statSync(path.join(dir, 'win-a.json')).mtimeMs;
+  a.setHost({ hostPid: 101, terminals: [5, 7], folders: ['/w/a'] });
+  assert.strictEqual(fs.statSync(path.join(dir, 'win-a.json')).mtimeMs, before);
+  a.stop();
+  b.stop();
+});
+
+test('jump requests: only the window they are for takes them, once (the file is deleted first); expired ones are dropped; the leader sweeps the ones nobody took', () => {
+  const clock = fakeClock();
+  const dir = newDir();
+  const got = { a: [], b: [], c: [] };
+  const a = coord(clock, dir, 'a', { onJump: (r) => got.a.push(r) });
+  const b = coord(clock, dir, 'b', { onJump: (r) => got.b.push(r) });
+  const c = coord(clock, dir, 'c', { onJump: (r) => got.c.push(r) });
+  startAll(clock, a, b, c);
+  const action = { kind: 'terminal', pid: 42 };
+  const id = c.requestJump('b', action);
+  assert.ok(/^[a-z0-9]+$/.test(id), 'request id: ' + id);
+  assert.ok(exists(dir, `jump.${id}.b.json`));
+  clock.advance(HB);
+  assert.deepStrictEqual(got.b.map((r) => [r.id, r.from, r.action]), [[id, 'c', action]]);
+  assert.deepStrictEqual([got.a.length, got.c.length], [0, 0]);
+  assert.ok(!exists(dir, `jump.${id}.b.json`), 'taken');
+  clock.advance(HB * 3);
+  assert.strictEqual(got.b.length, 1, 'runs once');
+  // to myself, or when stopped: nothing is written
+  assert.strictEqual(c.requestJump('c', action), null);
+  // expired before its window polled: dropped (and deleted)
+  const late = a.requestJump('b', action, { ttlMs: 10 });
+  b.owner.frozen = true;
+  clock.advance(HB);
+  b.owner.frozen = false;
+  clock.advance(HB);
+  assert.strictEqual(got.b.length, 1, 'an expired request is not performed');
+  assert.ok(!exists(dir, `jump.${late}.b.json`));
+  // for a window that never takes it: the leader (a) sweeps it a minute after it expired
+  const orphan = c.requestJump('gone', action, { ttlMs: 1000 });
+  clock.advance(HB * 5);
+  assert.ok(exists(dir, `jump.${orphan}.gone.json`), 'kept while it may still be taken');
+  clock.advance(65e3);
+  assert.ok(!exists(dir, `jump.${orphan}.gone.json`), 'swept by the leader');
+  for (const s of [a, b, c]) s.stop();
+  assert.strictEqual(a.requestJump('b', action), null, 'not running');
+});
+
+test('jump requests are data from any local process: only small, regular, well-formed files addressed to me under their file name, within a lifetime of at most a minute, are handed on; at most 8 per poll; the rest are deleted unread', () => {
+  const clock = fakeClock();
+  const dir = newDir();
+  const got = [];
+  const a = coord(clock, dir, 'a');
+  const b = coord(clock, dir, 'b', { onJump: (r) => got.push(r) });
+  startAll(clock, a, b);
+  const t = clock.t;
+  const action = { kind: 'terminal', pid: 42 };
+  const put = (reqId, fields, extra = '') => fs.writeFileSync(path.join(dir, `jump.${reqId}.b.json`),
+    JSON.stringify({ id: reqId, from: 'a', to: 'b', at: t, expires: t + 5000, action, ...fields }) + extra);
+  put('ok1', {});
+  put('idmismatch', { id: 'other' });
+  put('tomismatch', { to: 'c' });
+  put('badfrom', { from: 'a/../x' });
+  put('fromself', { from: 'b' });
+  put('longttl', { expires: t + 10 * 60e3 });
+  put('future', { at: t + 60e3, expires: t + 61e3 });
+  put('nodates', { at: 'now', expires: null });
+  put('big', {}, ' '.repeat(20 * 1024));
+  fs.mkdirSync(path.join(dir, 'jump.adir.b.json')); // not a regular file
+  clock.advance(HB);
+  assert.deepStrictEqual(got, [{ id: 'ok1', from: 'a', at: t, action }]);
+  const left = fs.readdirSync(dir).filter((n) => n.startsWith('jump.'));
+  assert.deepStrictEqual(left, ['jump.adir.b.json'], 'every file was deleted, the directory is only skipped');
+  // a flood: 8 handed on in this poll, the rest deleted unread
+  got.length = 0;
+  for (let i = 10; i < 22; i++) put(`n${i}`, {});
+  clock.advance(HB);
+  assert.deepStrictEqual(got.map((r) => r.id), ['n10', 'n11', 'n12', 'n13', 'n14', 'n15', 'n16', 'n17']);
+  assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.startsWith('jump.') && n !== 'jump.adir.b.json'), []);
+  // the leader sweeps requests for others that could never be valid (a lifetime far in the future) at once
+  fs.writeFileSync(path.join(dir, 'jump.zz9.gone.json'), JSON.stringify({ id: 'zz9', from: 'a', to: 'gone', at: t, expires: t + 365 * 86400e3, action }));
+  clock.advance(HB);
+  assert.ok(!exists(dir, 'jump.zz9.gone.json'));
+  a.stop();
+  b.stop();
+});
+
+test('cancelJump: a request its window has not taken yet is withdrawn (true); once taken, or for a malformed id, nothing happens (false)', () => {
+  const clock = fakeClock();
+  const dir = newDir();
+  const got = [];
+  const a = coord(clock, dir, 'a');
+  const b = coord(clock, dir, 'b', { onJump: (r) => got.push(r) });
+  startAll(clock, a, b);
+  b.owner.frozen = true; // b does not poll
+  const id = a.requestJump('b', { kind: 'terminal', pid: 1 });
+  assert.ok(exists(dir, `jump.${id}.b.json`));
+  assert.strictEqual(a.cancelJump('b', id), true);
+  assert.ok(!exists(dir, `jump.${id}.b.json`));
+  assert.strictEqual(a.cancelJump('b', id), false);
+  assert.strictEqual(a.cancelJump('b', '../leader'), false);
+  assert.ok(exists(dir, 'leader.json'));
+  b.owner.frozen = false;
+  clock.advance(HB * 2);
+  assert.deepStrictEqual(got, [], 'never performed');
+  a.stop();
+  b.stop();
+});
+
+test('shared dir privacy (POSIX): made 0700 on start, files written 0600; a symlinked dir turns requests between windows off (neither written nor taken), said once', () => {
+  if (process.platform === 'win32') return;
+  const clock = fakeClock();
+  const dir = newDir();
+  fs.chmodSync(dir, 0o755);
+  const a = coord(clock, dir, 'a');
+  startAll(clock, a);
+  assert.strictEqual(fs.statSync(dir).mode & 0o777, 0o700);
+  assert.strictEqual(fs.statSync(path.join(dir, 'win-a.json')).mode & 0o777, 0o600);
+  assert.strictEqual(fs.statSync(path.join(dir, 'leader.json')).mode & 0o777, 0o600);
+  a.stop();
+
+  const real = newDir();
+  const link = path.join(TMP, `link-${dirNo}`);
+  fs.symlinkSync(real, link);
+  const got = [];
+  const b = coord(clock, link, 'b', { onJump: (r) => got.push(r) });
+  const c = coord(clock, link, 'c');
+  startAll(clock, b, c);
+  assert.strictEqual(c.requestJump('b', { kind: 'terminal', pid: 1 }), null, 'not written');
+  const t = clock.t;
+  fs.writeFileSync(path.join(real, 'jump.x1.b.json'), JSON.stringify({ id: 'x1', from: 'c', to: 'b', at: t, expires: t + 5000, action: {} }));
+  clock.advance(HB * 2);
+  assert.deepStrictEqual(got, []);
+  assert.ok(exists(real, 'jump.x1.b.json'), 'not taken');
+  assert.strictEqual(b.log.errors.filter((e) => /requests between windows are off/.test(e.message)).length, 1);
+  b.stop();
+  c.stop();
+});
+
+test('reads skip what is not a regular file (a FIFO would block) and window files over 1 MB', () => {
+  const clock = fakeClock();
+  const dir = newDir();
+  const a = coord(clock, dir, 'a');
+  startAll(clock, a);
+  fs.writeFileSync(path.join(dir, 'win-huge.json'), JSON.stringify({ id: 'huge', cfgKey: 'k1', beat: clock.t, hb: HB, hostPid: 5, pad: 'x'.repeat(1100 * 1024) }));
+  if (process.platform !== 'win32') require('child_process').execFileSync('mkfifo', [path.join(dir, 'win-fifo.json')]);
+  clock.advance(HB); // would hang on the FIFO without the check
+  assert.deepStrictEqual(a.windows().map((w) => w.id), ['a']);
+  a.stop();
 });
 
 test('fs.watch: with a 60 s heartbeat, a follower still gets snapshots and takes over at once (real timers)', async () => {

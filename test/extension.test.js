@@ -8,6 +8,9 @@
 //   and globalThis.fetch is a fake that only records requests, so nothing ever goes out on the network.
 // - Sounds, quiet hours and threshold alerts: lib/alerts.js is the real module, but playSound runs a fake execFile that only
 //   records the command, so no sound is ever played. The usage-history page (lib/history-view.js) only records how it is opened.
+// - Go to Chat: lib/jump.js is the real module, but its process list, open-file holders, Claude live registry, Qwen pid,
+//   window raising and osascript calls come from fakes (jumpFake), so no process is ever listed or run; terminals are fake
+//   objects in window.terminals.
 // - All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
 
 const assert = require('assert');
@@ -31,10 +34,10 @@ const log = {
   contexts: {}, executed: [], opened: [], updates: [], output: [], workers: [], progress: [],
   info: [], warn: [], error: [], clipboard: [], quickPicks: [], agentInputs: [], compactSnapshots: [],
   compactDeps: null, reveals: [], treeViews: {}, webviews: {}, statusItem: null,
-  handoffs: [], autoDeps: null, storageOpens: [], inputs: [], historyOpens: [],
+  handoffs: [], autoDeps: null, storageOpens: [], inputs: [], historyOpens: [], external: [],
 };
 const config = {}; // setting name -> { globalValue, workspaceValue }
-const listeners = { config: [], folders: [], tabs: [], tabGroups: [], windowState: [] };
+const listeners = { config: [], folders: [], tabs: [], tabGroups: [], windowState: [], terminals: [] };
 let quickPickAnswer = null; // (items) => item
 let infoAnswer = null;      // (message, items) => item: the button picked on an information message
 let warnAnswer = null;      // (message, items) => item: the button picked on a warning message
@@ -64,6 +67,7 @@ const Uri = {
   file: (p) => mkUri('file', p),
   joinPath: (u, ...ps) => mkUri(u.scheme, path.join(u.fsPath, ...ps)),
   parse: (s) => { const m = /^([\w+.-]+):\/\/[^/]*(\/.*)?$/.exec(s); return mkUri(m ? m[1] : 'file', m ? m[2] || '/' : s); },
+  from: (c) => ({ scheme: c.scheme, authority: c.authority || '', path: c.path || '', fsPath: c.path || '', toString: () => `${c.scheme}://${c.authority || ''}${c.path || ''}` }),
 };
 const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 
@@ -136,9 +140,10 @@ const vscode = {
   env: {
     language: 'en', uriScheme: 'vscode', appName: 'Visual Studio Code',
     clipboard: { writeText: async (t) => { log.clipboard.push(t); }, readText: async () => log.clipboard[log.clipboard.length - 1] || '' },
-    openExternal: async () => true,
+    openExternal: async (u) => { log.external.push(String(u)); return true; },
   },
-  extensions: { getExtension: () => undefined },
+  // extensions other than this one are missing, except the ids tests put in extraExtensions
+  extensions: { getExtension: (id) => (extraExtensions.has(id) ? { id, isActive: true } : undefined) },
   workspace: {
     workspaceFolders: undefined,
     getConfiguration: (section) => ({
@@ -159,6 +164,9 @@ const vscode = {
       onDidChangeTabGroups: on(listeners.tabGroups),
     },
     onDidChangeWindowState: on(listeners.windowState),
+    terminals: [], // fake integrated terminals: { name, processId: Promise<pid>, show() }
+    onDidOpenTerminal: on(listeners.terminals),
+    onDidCloseTerminal: on(listeners.terminals),
     createOutputChannel: () => ({ appendLine: (l) => log.output.push(l), append() {}, show() {}, dispose() {} }),
     createStatusBarItem: (id, align, prio) => {
       const s = { id, align, prio, shown: false, text: '', show() { s.shown = true; }, hide() { s.shown = false; }, dispose() {} };
@@ -197,8 +205,12 @@ const vscode = {
       log.executed.push([id, ...args]);
       if (id === 'setContext') log.contexts[args[0]] = args[1];
     },
+    // registered commands plus the ones other extensions would contribute (extraCommands)
+    getCommands: async () => [...registered.keys(), ...extraCommands],
   },
 };
+const extraCommands = new Set();
+const extraExtensions = new Set();
 
 // fake worker: tests send snapshots by hand and simulate crashes; after terminate it exits with 1, like the real one
 class FakeWorker extends NodeEmitter {
@@ -343,6 +355,45 @@ function peerWindow(dir, cfgKey, extra = {}) {
   return rec;
 }
 
+// Go to Chat: the real lib/jump.js with a fake process list, Claude live registry and Qwen pid (tests fill jumpFake)
+const realJump = require(path.join(ROOT, 'lib', 'jump'));
+// platform is darwin everywhere, so the Terminal.app / iTerm2 path runs the same on every OS (osascript is jumpFake.osa)
+const jumpFake = { procs: [], live: new Map(), holders: null, lists: 0, raised: 0, raise: true, osa: [], osaOut: 'ok', replyWaitMs: 40 };
+const jumpWrap = {
+  ...realJump,
+  createJumper: (deps) => realJump.createJumper({
+    ...deps,
+    platform: 'darwin',
+    listProcesses: async () => { jumpFake.lists++; return jumpFake.procs; },
+    processCwds: async () => new Map(),
+    fileHolders: async (file, pids) => (jumpFake.holders ? new Set(pids.filter((p) => jumpFake.holders.has(p))) : null),
+    claudeLive: (id) => jumpFake.live.get(id) || null,
+    qwenPid: () => null,
+    raiseWindow: async () => { jumpFake.raised++; return jumpFake.raise; },
+    execFile: (cmd, args, opts, cb) => {
+      jumpFake.osa.push([cmd, ...args]);
+      const out = jumpFake.osaOut;
+      setImmediate(() => (out instanceof Error ? cb(out, '', out.message) : cb(null, out + '\n', '')));
+    },
+    replyWaitMs: jumpFake.replyWaitMs,
+  }),
+};
+// A fake integrated terminal whose shell has this pid
+function fakeTerminal(name, pid) {
+  const t = { name, processId: Promise.resolve(pid), shown: 0, show() { t.shown++; }, dispose() {} };
+  return t;
+}
+function openTerminal(t) {
+  vscode.window.terminals.push(t);
+  for (const fn of [...listeners.terminals]) fn(t);
+}
+// VS Code removes a closed terminal from window.terminals before it fires onDidCloseTerminal
+function closeTerminal(t) {
+  const i = vscode.window.terminals.indexOf(t);
+  if (i >= 0) vscode.window.terminals.splice(i, 1);
+  for (const fn of [...listeners.terminals]) fn(t);
+}
+
 // Remote push: the real runtime with short delays (needsYou waits 60 ms, the rescan 40 ms before that, the batch 10 ms) and a
 // clock tests can move ahead (a usage limit's reset time is rounded up to the minute)
 const realPushRt = require(path.join(ROOT, 'lib', 'push-runtime'));
@@ -389,6 +440,7 @@ Module._load = function (request, parent) {
   if (fromExt && request === './lib/notify') return notifyWrap;
   if (fromExt && request === './lib/shared-scan') return sharedWrap;
   if (fromExt && request === './lib/push-runtime') return pushRtWrap;
+  if (fromExt && request === './lib/jump') return jumpWrap;
   return origLoad.apply(this, arguments);
 };
 
@@ -980,8 +1032,8 @@ async function extensionTests() {
     await tick();
     const cmds = items.filter((x) => x.command).map((x) => x.command.replace('agentMonitor.', ''));
     // Alpha: 84K context (compactable), no resume hint
-    assert.deepStrictEqual(cmds, ['compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-    assert.strictEqual(items.filter((x) => x.kind === vscode.QuickPickItemKind.Separator).length, 1, 'one separator between the two groups');
+    assert.deepStrictEqual(cmds, ['goToChat', 'compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    assert.strictEqual(items.filter((x) => x.kind === vscode.QuickPickItemKind.Separator).length, 2, 'separators between the three groups');
     const compact = items.find((x) => x.command === 'agentMonitor.compact');
     assert.strictEqual(compact.label, '$(screen-normal) ' + titleOf('agentMonitor.compact'));
     assert.strictEqual(last(log.quickPicks).o.placeHolder, 'Alpha chat');
@@ -1810,6 +1862,274 @@ async function sharedScanTests() {
       assert.deepStrictEqual(w.messages.slice(n), [{ type: 'refresh' }]);
     } finally {
       C.close();
+    }
+  });
+}
+
+async function jumpTests() {
+  const en = createI18n('en');
+  const [alpha, beta, gamma] = fixtures();
+  const go = (win, arg) => win.ctl.goToChat(arg);
+  const resetJump = () => {
+    vscode.window.terminals.length = 0;
+    jumpFake.procs = [];
+    jumpFake.live.clear();
+    jumpFake.holders = null;
+    jumpFake.raised = 0;
+    jumpFake.raise = true;
+    jumpFake.osa.length = 0;
+    jumpFake.osaOut = 'ok';
+    extraCommands.clear();
+    extraExtensions.clear();
+  };
+  const readWin = (win) => JSON.parse(fs.readFileSync(path.join(win.sharedDir, `win-${win.shared.inst.id}.json`), 'utf8'));
+  const CODE = '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin) --type=utility';
+  const PTY = '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper --type=utility ptyHost';
+  const proc = (pid, ppid, cmd) => ({ pid, ppid, startMs: NOW - HOUR, cmd });
+
+  await test('Go to Chat: this window\'s presence record carries its extension-host pid, its terminals\' shell pids and its folders, and follows terminals opening', async () => {
+    resetJump();
+    const win = activateWindow('win-jump-presence');
+    try {
+      await sleep(5);
+      let W = readWin(win);
+      assert.strictEqual(W.hostPid, process.pid);
+      assert.deepStrictEqual(W.terminals, []);
+      assert.deepStrictEqual(W.folders, (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath));
+      const zsh = fakeTerminal('zsh', 4242);
+      openTerminal(zsh);
+      openTerminal(fakeTerminal('bash', 4141));
+      await sleep(5);
+      W = readWin(win);
+      assert.deepStrictEqual(W.terminals, [4141, 4242]);
+      // closed terminals leave the record, so it never grows with terminals opened and closed over a day
+      closeTerminal(zsh);
+      for (let i = 0; i < 20; i++) { const t = fakeTerminal('tmp', 5000 + i); openTerminal(t); closeTerminal(t); }
+      await sleep(5);
+      assert.deepStrictEqual(readWin(win).terminals, [4141]);
+      assert.strictEqual(jumpFake.lists, 0, 'processes are never listed except on a click');
+    } finally {
+      win.close();
+      resetJump();
+    }
+  });
+
+  await test('Go to Chat: a Claude VS Code chat under this window\'s extension host opens with claude-vscode.editor.open honoring the preferred location (only if that command exists); a Codex extension thread opens as its editor tab; not running → a short message', async () => {
+    resetJump();
+    const win = activateWindow('win-jump-local');
+    try {
+      win.send(fixtures());
+      await tick();
+      jumpFake.procs = [proc(1, 0, '/sbin/launchd'), proc(process.pid, 1, CODE), proc(5001, process.pid, '/x/native-binary/claude --output-format stream-json')];
+      jumpFake.live.set(alpha.id, { pid: 5001, sessionId: alpha.id, entrypoint: 'claude-vscode' });
+      await go(win, ALPHA);
+      assert.strictEqual(last(log.info), en.t('ext.jump.noCommand', { tool: en.t('ext.jump.tool.claudeVscode') }), 'no Claude Code extension in this window');
+      extraCommands.add('claude-vscode.editor.open');
+      const n = log.info.length;
+      await go(win, { webviewSection: 'session', sessionKey: ALPHA });
+      // the 6th argument keeps the user's preferred Claude location (without it the command switches it to "panel")
+      assert.deepStrictEqual(last(log.executed), ['claude-vscode.editor.open', alpha.id, undefined, undefined, undefined, undefined, { programmatic: 'honor-preferred-location' }]);
+      assert.strictEqual(log.info.length, n, 'nothing to say when it worked');
+      assert.strictEqual(jumpFake.raised, 0, 'this window is not raised for a jump inside it');
+      // Beta: a Claude CLI that is not running
+      await go(win, BETA);
+      assert.strictEqual(last(log.info), en.t('ext.jump.notRunning'));
+      // Gamma: a thread of the Codex extension, whose app-server runs under this window's extension host
+      assert.ok(gamma.entry === 'vscode');
+      jumpFake.procs.push(proc(5100, process.pid, '/Users/x/.vscode/extensions/openai.chatgpt-1.0.0/bin/codex app-server --analytics-default-enabled'));
+      await go(win, GAMMA);
+      assert.strictEqual(last(log.info), en.t('ext.jump.noCommand', { tool: en.t('ext.jump.tool.codexVscode') }), 'the Codex extension is not installed here');
+      extraExtensions.add('openai.chatgpt');
+      await go(win, GAMMA);
+      const [cmd, uri, viewType] = last(log.executed);
+      assert.deepStrictEqual([cmd, uri.scheme, uri.authority, uri.path, viewType], ['vscode.openWith', 'openai-codex', 'route', `/local/${gamma.id}`, 'chatgpt.conversationEditor']);
+    } finally {
+      win.close();
+      resetJump();
+    }
+  });
+
+  await test('Go to Chat: a Claude CLI in an integrated terminal of this window shows that terminal (from the panel, a tree agent node or a key)', async () => {
+    resetJump();
+    const win = activateWindow('win-jump-term');
+    try {
+      win.send(fixtures());
+      await tick();
+      const other = fakeTerminal('other', 7101);
+      const t = fakeTerminal('zsh', 7001);
+      openTerminal(other);
+      openTerminal(t);
+      jumpFake.procs = [proc(1, 0, '/sbin/launchd'), proc(7000, 1, PTY), proc(7001, 7000, '/bin/zsh -il'), proc(7101, 7000, '/bin/zsh -il'),
+        proc(7002, 7001, '/Users/x/.local/bin/claude')];
+      jumpFake.live.set(beta.id, { pid: 7002, sessionId: beta.id, entrypoint: 'cli' });
+      await go(win, BETA);
+      assert.deepStrictEqual([t.shown, other.shown], [1, 0]);
+      await go(win, { kind: 'agent', extra: { session: { key: BETA } } }); // a tree agent node
+      assert.strictEqual(t.shown, 2);
+      // the panel's Go to button / double-click run the command with the key
+      const page = openPanel();
+      page.msg({ type: 'goTo', sessionKey: BETA });
+      await tick();
+      assert.deepStrictEqual(last(log.executed), ['agentMonitor.goToChat', BETA]);
+    } finally {
+      win.close();
+      resetJump();
+    }
+  });
+
+  await test('Go to Chat: a CLI in iTerm2 / Terminal.app selects its tab by tty with osascript, only after a one-time confirmation (remembered per app); a refusal by macOS offers the Automation settings; other terminal apps are named', async () => {
+    resetJump();
+    const win = activateWindow('win-jump-external');
+    const answers = [];
+    try {
+      win.send(fixtures());
+      await tick();
+      const iterm = (tty) => [proc(1, 0, '/sbin/launchd'), proc(8000, 1, '/Applications/iTerm.app/Contents/MacOS/iTerm2'),
+        { ...proc(8001, 8000, '/bin/zsh -l'), tty }, { ...proc(8002, 8001, '/Users/x/.local/bin/claude'), tty }];
+      jumpFake.procs = iterm('/dev/ttys004');
+      jumpFake.live.set(beta.id, { pid: 8002, sessionId: beta.id, entrypoint: 'cli' });
+      const confirm = en.t('ext.jump.automation.confirm', { app: 'iTerm2' });
+      // declined: nothing runs, nothing more is said
+      infoAnswer = (m, items) => { answers.push(m); return undefined; };
+      const n = log.info.length;
+      await go(win, BETA);
+      assert.deepStrictEqual(log.info.slice(n), [confirm]);
+      assert.deepStrictEqual(jumpFake.osa, []);
+      // agreed: osascript gets the script lines and the tty
+      infoAnswer = (m, items) => { answers.push(m); return m === confirm ? items.find((x) => typeof x === 'string') : undefined; };
+      await go(win, BETA);
+      const call = last(jumpFake.osa);
+      assert.strictEqual(call[0], '/usr/bin/osascript');
+      assert.strictEqual(last(call), '/dev/ttys004');
+      assert.ok(call.includes('  if application id "com.googlecode.iterm2" is not running then return "not-running"'));
+      assert.strictEqual(answers.filter((m) => m === confirm).length, 2);
+      // remembered: no confirmation the next time
+      await go(win, BETA);
+      assert.strictEqual(answers.filter((m) => m === confirm).length, 2);
+      assert.strictEqual(jumpFake.osa.length, 2);
+      // the tab is gone / macOS refused (-1743) → the Automation settings button opens System Settings
+      jumpFake.osaOut = 'not-found';
+      await go(win, BETA);
+      assert.strictEqual(last(log.info), en.t('ext.jump.tabNotFound', { app: 'iTerm2' }));
+      jumpFake.osaOut = Object.assign(new Error('Command failed: osascript\nexecution error: Not authorized to send Apple events to iTerm2. (-1743)'), { code: 1 });
+      warnAnswer = (m, items) => items[0];
+      await go(win, BETA);
+      assert.strictEqual(last(log.warn), en.t('ext.jump.automationDenied', { editor: 'Visual Studio Code', app: 'iTerm2' }));
+      assert.match(last(log.external), /x-apple\.systempreferences:com\.apple\.preference\.security\?Privacy_Automation$/);
+      // Warp is only named
+      jumpFake.procs = [proc(1, 0, '/sbin/launchd'), proc(8100, 1, '/Applications/Warp.app/Contents/MacOS/stable'), { ...proc(8101, 8100, '/bin/zsh'), tty: '/dev/ttys009' },
+        { ...proc(8102, 8101, '/Users/x/.local/bin/claude'), tty: '/dev/ttys009' }];
+      jumpFake.live.set(beta.id, { pid: 8102, sessionId: beta.id, entrypoint: 'cli' });
+      await go(win, BETA);
+      assert.strictEqual(last(log.info), en.t('ext.jump.externalApp', { app: 'Warp' }));
+      assert.strictEqual(jumpFake.osa.length, 4);
+    } finally {
+      infoAnswer = null;
+      warnAnswer = null;
+      win.close();
+      resetJump();
+    }
+  });
+
+  await test('Go to Chat across windows: a chat owned by another window becomes a jump request; that window performs it, raises itself and replies, so the requester says nothing (or where to look when it was not raised / did not answer); requests to this window are performed here, invalid ones ignored', async () => {
+    resetJump();
+    jumpFake.replyWaitMs = 3000; // replies arrive within the test; the no-reply case uses the short wait of another jumper below
+    const A = activateWindow('win-jump-a');
+    jumpFake.replyWaitMs = 40;
+    const peerJumps = [];
+    let reply = null; // how the peer answers: (request) => result fields | null
+    const peer = peerWindow(A.sharedDir, A.shared.o.cfgKey, {
+      host: { hostPid: 9100, terminals: [9200], folders: ['/work/peer-folder'] },
+      onJump: (r) => {
+        peerJumps.push(r);
+        const out = reply && r.action.kind !== 'result' ? reply(r) : null;
+        if (out) peer.inst.requestJump(r.from, { kind: 'result', reqId: r.id, ...out });
+      },
+    });
+    // until the requester's reply wait ends: let the peer take its requests and this window take the replies
+    const pump = (p) => {
+      let done = false;
+      p.then(() => { done = true; }, () => { done = true; });
+      return (async () => {
+        for (let i = 0; i < 200 && !done; i++) {
+          await sleep(5);
+          peer.beat();
+          A.shared.beat();
+        }
+        return p;
+      })();
+    };
+    try {
+      peer.inst.start();
+      A.send(fixtures());
+      await tick();
+      extraCommands.add('claude-vscode.editor.open');
+      jumpFake.procs = [proc(1, 0, '/sbin/launchd'), proc(process.pid, 1, CODE), proc(9100, 1, CODE), proc(9101, 9100, '/x/claude'),
+        proc(9000, 1, PTY), proc(9200, 9000, '/bin/zsh'), proc(9201, 9200, '/x/claude')];
+      jumpFake.live.set(alpha.id, { pid: 9101, sessionId: alpha.id, entrypoint: 'claude-vscode' });
+      jumpFake.live.set(beta.id, { pid: 9201, sessionId: beta.id, entrypoint: 'cli' });
+      const executed = log.executed.length;
+      // raised there: nothing to say here
+      reply = () => ({ ok: true, raised: true });
+      let n = log.info.length;
+      await pump(go(A, ALPHA));
+      assert.deepStrictEqual(log.info.slice(n), []);
+      assert.ok(!log.executed.slice(executed).some((x) => x[0] === 'claude-vscode.editor.open'), 'not opened in this window (it would open a duplicate)');
+      assert.deepStrictEqual(peerJumps.map((r) => r.action), [{ kind: 'claudeVscode', sessionId: alpha.id }]);
+      // performed there but not raised: say where; failed there: say why
+      reply = () => ({ ok: true, raised: false });
+      await pump(go(A, BETA));
+      assert.strictEqual(last(log.info), en.t('ext.jump.sentToWindow', { folder: 'peer-folder' }));
+      assert.deepStrictEqual(last(peerJumps).action, { kind: 'terminal', pid: 9200 });
+      reply = () => ({ ok: false, reason: 'noCommand', tool: 'claudeVscode' });
+      await pump(go(A, ALPHA));
+      assert.strictEqual(last(log.info), en.t('ext.jump.noCommandThere', { folder: 'peer-folder', tool: en.t('ext.jump.tool.claudeVscode') }), 'it is the other window that lacks it');
+      // the other way round: the peer asks this window to show one of its terminals; this window shows it, raises itself
+      // and replies
+      const t = fakeTerminal('zsh', 6100);
+      openTerminal(t);
+      await sleep(5);
+      const req = peer.inst.requestJump(A.shared.inst.id, { kind: 'terminal', pid: 6100 });
+      peer.inst.requestJump(A.shared.inst.id, { kind: 'terminal', pid: 'x' });
+      peer.inst.requestJump(A.shared.inst.id, { kind: 'run', command: 'workbench.action.quit' });
+      peer.inst.requestJump(A.shared.inst.id, { kind: 'externalTerminal', app: 'iterm2', tty: '/dev/ttys001' });
+      const before = log.executed.length;
+      A.shared.beat();
+      await sleep(10);
+      assert.strictEqual(t.shown, 1);
+      assert.strictEqual(jumpFake.raised, 1, 'the owning window raised itself');
+      assert.strictEqual(log.executed.length, before, 'invalid requests run nothing');
+      assert.deepStrictEqual(jumpFake.osa, [], 'another window cannot make this one run AppleScript');
+      peer.beat();
+      assert.deepStrictEqual(last(peerJumps).action, { kind: 'result', reqId: req, ok: true, raised: true });
+      // sharing off: a chat under another VS Code window can only be named
+      A.close();
+      const B = activateWindow('win-jump-solo', { shareScanAcrossWindows: false });
+      try {
+        B.send(fixtures());
+        await tick();
+        await go(B, ALPHA);
+        assert.strictEqual(last(log.info), en.t('ext.jump.otherWindow'));
+      } finally {
+        B.close();
+      }
+      // no reply within the wait: say where to look
+      const C = activateWindow('win-jump-c');
+      const quiet = peerWindow(C.sharedDir, C.shared.o.cfgKey, { host: { hostPid: 9100, terminals: [9200], folders: ['/work/peer-folder'] } });
+      try {
+        quiet.inst.start();
+        C.send(fixtures());
+        await tick();
+        await go(C, ALPHA);
+        assert.strictEqual(last(log.info), en.t('ext.jump.noReply', { folder: 'peer-folder' }));
+        assert.deepStrictEqual(fs.readdirSync(C.sharedDir).filter((n) => /^jump\..*\.peer\.json$/.test(n)), [], 'the unanswered request is withdrawn, so the peer never performs it late');
+      } finally {
+        quiet.inst.stop();
+        C.close();
+      }
+    } finally {
+      peer.inst.stop();
+      resetJump();
     }
   });
 }
@@ -3525,6 +3845,7 @@ async function manifestTests() {
       revealTranscript: '$(folder-opened)', copyTranscriptPath: '$(copy)', copyResume: '$(copy)',
       compact: '$(screen-normal)', handoff: '$(export)', setAutoCompact: '$(settings)', storage: '$(database)', history: '$(graph)',
       'push.setup': '$(bell)', 'network.allow': '$(globe)', 'network.block': '$(circle-slash)', 'network.toggle': undefined,
+      goToChat: '$(link-external)',
     };
     assert.deepStrictEqual([...commands].sort(), Object.keys(want).map((x) => 'agentMonitor.' + x).sort());
     for (const [id, icon] of Object.entries(want)) assert.strictEqual(c.commands.find((x) => x.command === 'agentMonitor.' + id).icon, icon, id);
@@ -3548,6 +3869,7 @@ async function manifestTests() {
     }
     // context menu group order: session actions (compact, handoff, auto-compact, resume, seen) → open (transcript, reveal, copy path)
     const order = ctxMenu.filter((m) => !m.group.startsWith('inline')).map((m) => m.group + ' ' + m.command.replace('agentMonitor.', ''));
+    assert.deepStrictEqual(order[0], '0_goto@1 goToChat', 'Go to Chat comes first');
     assert.deepStrictEqual(order.filter((x) => x.startsWith('1_session')), [
       '1_session@1 compact', '1_session@2 handoff', '1_session@3 setAutoCompact', '1_session@4 copyResume', '1_session@5 markSeen']);
     assert.deepStrictEqual(order.filter((x) => x.startsWith('2_open')), ['2_open@1 openTranscript', '2_open@2 revealTranscript', '2_open@3 copyTranscriptPath']);
@@ -3577,7 +3899,7 @@ async function manifestTests() {
 
   await test('webview context menu: when = webviewId + webviewSection + compactable / resumable / handoff / autoCompact; evaluated against the data-vscode-context of the row', () => {
     const menu = c.menus['webview/context'];
-    assert.ok(Array.isArray(menu) && menu.length === 8);
+    assert.ok(Array.isArray(menu) && menu.length === 9);
     // minimal when evaluator: only supports key == 'v' / key / !key joined by && (all that is used here)
     const evalWhen = (when, ctx) => when.split('&&').map((x) => x.trim()).every((cl) => {
       let m = /^(\w+) == '([^']*)'$/.exec(cl);
@@ -3595,23 +3917,23 @@ async function manifestTests() {
     const row = (flags) => JSON.parse(JSON.stringify({ webviewSection: 'session', sessionKey: 'claude:x', preventDefaultContextMenuItems: true, ...flags }));
     const cc = { handoff: true, autoCompact: true };
     assert.deepStrictEqual(shown(row({ compactable: true, resumable: false, ...cc })),
-      ['compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+      ['goToChat', 'compact', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
     assert.deepStrictEqual(shown(row({ compactable: false, resumable: true, ...cc })),
-      ['handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-    // Copilot / Gemini CLI / Qwen Code rows: no handoff note and no auto-compact setting
+      ['goToChat', 'handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    // Copilot / Gemini CLI / Qwen Code rows: no handoff note and no auto-compact setting (Go to Chat is always there and says why when it can't)
     assert.deepStrictEqual(shown(row({ compactable: false, resumable: false, handoff: false, autoCompact: false })),
-      ['markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+      ['goToChat', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
     assert.deepStrictEqual(shown({}), [], 'no session menu in the content area (no webviewSection)');
     assert.deepStrictEqual(menu.filter((m) => evalWhen(m.when, { webviewId: 'other.view', webviewSection: 'session', compactable: true })), [], 'not shown in other webviews');
     // group order: session actions → open
-    assert.deepStrictEqual(menu.map((m) => m.group), ['1_session@1', '1_session@2', '1_session@3', '1_session@4', '1_session@5', '2_open@1', '2_open@2', '2_open@3']);
+    assert.deepStrictEqual(menu.map((m) => m.group), ['0_goto@1', '1_session@1', '1_session@2', '1_session@3', '1_session@4', '1_session@5', '2_open@1', '2_open@2', '2_open@3']);
   });
 
   await test('menus: compact is in the overview tree context menu (viewItem =~ /\\bcompactable\\b/) and the webview context menu (compactable); only declared commands, views and settings are referenced', () => {
     const tree = c.menus['view/item/context'].filter((m) => m.command === 'agentMonitor.compact');
     assert.ok(tree.some((m) => !m.group.startsWith('inline') && m.when.includes(TREE_VIEWS) && m.when.includes('viewItem =~ /\\bcompactable\\b/')));
     assert.ok(c.menus['webview/context'].some((m) => m.command === 'agentMonitor.compact' && / && compactable$/.test(m.when)));
-    const contextValues = ['session', 'provider-claude', 'lamp-doneUnseen', 'resumable', 'compactable', 'agent', 'mainAgent', 'workflow'];
+    const contextValues = ['session', 'provider-claude', 'lamp-doneUnseen', 'resumable', 'compactable', 'goTo', 'agent', 'mainAgent', 'workflow'];
     for (const [menu, items] of Object.entries(c.menus)) {
       if (menu !== 'commandPalette' && !menu.startsWith('view/') && !menu.startsWith('webview/')) assert.ok(submenus.has(menu), `undeclared submenu ${menu}`);
       for (const it of items) {
@@ -3651,7 +3973,7 @@ async function manifestTests() {
     const hidden = c.menus.commandPalette.filter((x) => x.when === 'false' && x.command !== 'agentMonitor.network.toggle').map((x) => x.command);
     assert.deepStrictEqual(hidden.sort(), ['openTranscript', 'revealTranscript', 'copyTranscriptPath', 'markSeen', 'copyResume'].map((x) => 'agentMonitor.' + x).sort());
     assert.strictEqual(nls['cmd.history'], 'Show Usage History');
-    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'history', 'push.setup']) {
+    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'history', 'push.setup', 'goToChat']) {
       assert.ok(!c.menus.commandPalette.some((x) => x.command === 'agentMonitor.' + id), id + ' should be visible in the Command Palette');
     }
   });
@@ -3927,7 +4249,7 @@ async function providerTests() {
     results.push(false);
     console.log('  FAIL  (extension tests aborted)', err && err.stack);
   }
-  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Network access', networkTests], ['Copilot, Gemini CLI, Qwen Code', providerTests]]) {
+  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Network access', networkTests], ['Copilot, Gemini CLI, Qwen Code', providerTests]]) {
     console.log(`\n${title}`);
     try {
       await fn();

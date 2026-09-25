@@ -38,6 +38,8 @@
   "webview.cache.tip": "Prompt cache for the main conversation. Compacting before it expires costs much less than after.",
   "webview.compact": "Compact…",
   "webview.compact.tip": "Compact this session's context. You choose how (and, for a closed Claude session, which model) before anything runs.",
+  "webview.goTo": "Go to",
+  "webview.goTo.tip": "Go to where this session is running: its chat panel or terminal. Double-clicking the session or an agent row does the same.",
   "webview.autoCompact": "Auto-compact: {value}",
   "webview.autoCompact.tip": "Choose when Claude Code compacts this session on its own. You'll see presets with their trade-offs; nothing changes until you pick one.",
   "webview.sessionCost": "This session: {usd}",

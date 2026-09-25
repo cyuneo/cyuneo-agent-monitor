@@ -29,6 +29,7 @@
   "cmd.revealTranscript": "顯示記錄檔案",
   "cmd.copyTranscriptPath": "複製記錄檔案路徑",
   "cmd.copyResume": "複製續跑提示…",
+  "cmd.goToChat": "前往對話",
   "cmd.compact": "壓縮…",
   "cmd.handoff": "寫交接筆記並開新工作階段…",
   "cmd.setAutoCompact": "設定自動壓縮閾值…",

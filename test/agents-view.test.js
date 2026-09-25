@@ -560,6 +560,57 @@ test('provider: setAutoCompact / revealTranscript / copyTranscriptPath are forwa
     ['agentMonitor.setAutoCompact', 'agentMonitor.revealTranscript', 'agentMonitor.copyTranscriptPath']);
 });
 
+test('provider: goTo (session bar button, double-click on a list or agent row) runs Go to Chat for a listed or shown session only', async () => {
+  const st = makeStub();
+  const p = new AV.AgentsViewProvider(st.context, { vscode: st.vscode, i18n });
+  p.resolveWebviewView(st.view);
+  const { b, input } = listFixture();
+  const shown = session({ id: '11111111-0000-4000-8000-000000000002' }); // shown although not in the list
+  p.updateList(input);
+  p.update({ session: shown, now: NOW, loaded: true });
+  st.listeners.msg({ type: 'ready' });
+  st.listeners.msg({ type: 'goTo', sessionKey: 'claude:not-listed' });
+  st.listeners.msg({ type: 'goTo', sessionKey: 42 });
+  st.listeners.msg({ type: 'goTo', sessionKey: shown.key });
+  st.listeners.msg({ type: 'goTo', sessionKey: b.key });
+  await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual(st.log.commands, [[AV.GOTO_COMMAND, shown.key], [AV.GOTO_COMMAND, b.key]]);
+  assert.strictEqual(AV.GOTO_COMMAND, 'agentMonitor.goToChat');
+});
+
+test('Go to button: shown for a live Claude / Qwen session and a recent Codex / Gemini / Copilot session; hidden when not running, old or not supported yet', () => {
+  const goTo = (o) => build(session(o)).session.goTo;
+  assert.strictEqual(goTo({ live: true }), true, 'Claude VS Code chat, live');
+  assert.strictEqual(goTo({ live: false }), false, 'Claude, not running');
+  assert.strictEqual(goTo({ entry: 'cli', entrypoint: 'cli', live: true }), true, 'Claude CLI, live');
+  assert.strictEqual(goTo({ entry: 'desktop', entrypoint: 'claude-desktop', live: true }), false, 'Claude desktop app: not supported yet');
+  assert.strictEqual(goTo({ provider: 'codex', id: 'c1', entry: 'cli', entrypoint: null, live: false }), true, 'Codex CLI written 5 s ago (no registry)');
+  assert.strictEqual(goTo({ provider: 'codex', id: 'c2', entry: 'cli', entrypoint: null, live: false, updatedMs: NOW - 3 * 86400e3 }), false, 'Codex CLI, days old');
+  assert.strictEqual(goTo({ provider: 'codex', id: 'c3', entry: 'vscode', entrypoint: null, live: true }), true, 'Codex extension thread');
+  assert.strictEqual(goTo({ provider: 'codex', id: 'c4', entry: 'desktop', entrypoint: null, live: true }), false, 'Codex app: not supported yet');
+  assert.strictEqual(goTo({ provider: 'gemini', id: 'g1', entry: 'cli', entrypoint: null }), true);
+  assert.strictEqual(goTo({ provider: 'qwen', id: 'q1', entry: 'cli', entrypoint: null, live: true }), true);
+  assert.strictEqual(goTo({ provider: 'qwen', id: 'q2', entry: 'cli', entrypoint: null, live: false }), false);
+  assert.strictEqual(goTo({ provider: 'copilot', id: 'p1', entry: 'vscode', entrypoint: null, live: true }), true, 'Copilot Chat');
+  assert.strictEqual(goTo({ provider: 'copilot', id: 'p2', entry: 'vscode', entrypoint: null, live: false, updatedMs: NOW - 3 * 86400e3 }), false, 'Copilot Chat, days old');
+});
+
+test('webview: the Go to button sits in the title line (hidden until the session allows it, still named when narrowed to its icon); double-click on list and agent rows sends goTo', () => {
+  const html = webviewHtml({ cspSource: 'c:', asset: (p) => 'a/' + p, nonce: 'N', version: '0.3.0', i18n });
+  const head = html.slice(html.indexOf('class="s-line s-head"'), html.indexOf('class="s-line s-sum"'));
+  assert.ok(/id="s-goto"[^>]*data-act="goTo"[^>]*hidden[^>]*aria-label="Go to"/.test(head), 'Go to button in the title line');
+  assert.ok(head.indexOf('id="s-goto"') < head.indexOf('id="s-compact"'), 'left of Compact…');
+  for (const k of ['webview.goTo', 'webview.goTo.tip']) assert.notStrictEqual(i18n.t(k), k, 'string ' + k);
+  const js = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
+  assert.ok(/show\(E\.goto, !!s\.goTo\)/.test(js), 'shown from the view model');
+  assert.ok(/E\.box\.addEventListener\('dblclick'[\s\S]{0,300}type: 'goTo', sessionKey: row\._data\.key/.test(js), 'list row double-click');
+  assert.ok(/E\.rows\.addEventListener\('dblclick'[\s\S]{0,300}type: 'goTo', sessionKey: shownKey/.test(js), 'agent row double-click');
+  assert.ok(/act === 'goTo'\) \{ if \(key\) vscode\.postMessage\(\{ type: 'goTo', sessionKey: key \}\)/.test(js), 'button sends only the session key');
+  assert.ok(/e\.detail > 1/.test(js), 'the second click of a double-click does not toggle the row back');
+  const css = fs.readFileSync(path.join(ROOT, 'media', 'agents.css'), 'utf8');
+  assert.ok(/#s-goto > span \{ display: none; \}|#s-goto > span[,{]/.test(css), 'icon only in a narrow panel');
+});
+
 test('provider: copyResume regenerates the text in the extension; an out-of-range index or wrong form copies nothing', async () => {
   const st = makeStub();
   const p = new AV.AgentsViewProvider(st.context, { vscode: st.vscode, i18n });
@@ -824,10 +875,11 @@ test('session menu: SESSION_MENU matches webview/context in package.json one to 
     assert.ok(m.group.startsWith(d.group + '@'), m.group);
   });
   assert.deepStrictEqual(AV.SESSION_MENU.map((m) => m.command.replace('agentMonitor.', '')),
-    ['compact', 'handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    ['goToChat', 'compact', 'handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   const names = (f) => AV.sessionMenuItems(f).map((m) => m.command.replace('agentMonitor.', ''));
-  assert.deepStrictEqual(names({}), ['markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
-  assert.deepStrictEqual(names({ handoff: true, autoCompact: true }), ['handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+  // Go to Chat is on every session (when the jump is not possible, the command says why)
+  assert.deepStrictEqual(names({}), ['goToChat', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+  assert.deepStrictEqual(names({ handoff: true, autoCompact: true }), ['goToChat', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   assert.ok(names({ compactable: true }).includes('compact') && !names({ compactable: true }).includes('copyResume'));
   assert.ok(names({ resumable: true }).includes('copyResume'));
   assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-idle resumable compactable'), { compactable: true, resumable: true, handoff: true, autoCompact: true });
