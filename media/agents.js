@@ -75,6 +75,29 @@
     costHead: document.querySelector('.row.head .c-cost'),
   };
 
+  // Auto-resume block in "Details", right after the resume hints (Claude Code chats only; hidden while vm.session.autoResume is null).
+  // Built here because the static HTML comes from lib/webview-html.js; every text in it comes preformatted from the view model.
+  // The heading is the group's accessible name only: the project line already reads "Auto-resume is on for <project>".
+  const AR = {};
+  {
+    const btn = (act, icon) => h('button', { type: 'button', class: 'btn secondary', 'data-act': act }, [
+      h('i', { class: 'codicon codicon-' + icon, 'aria-hidden': 'true' }), h('span'),
+    ]);
+    AR.project = h('span', { class: 'ar-project' });
+    AR.toggle = h('button', { type: 'button', class: 'link ar-toggle', 'data-act': 'autoResumeProject' }, [h('span')]);
+    AR.icon = h('i', { class: 'codicon', 'aria-hidden': 'true' });
+    AR.plan = h('span', { class: 'ar-plan' });
+    AR.now = btn('autoResumeNow', 'debug-continue');
+    AR.cancel = btn('autoResumeCancel', 'close');
+    AR.planLine = h('div', { class: 'ar-line ar-planline' }, [AR.icon, AR.plan, h('span', { class: 'ar-btns' }, [AR.now, AR.cancel])]);
+    AR.note = h('p', { class: 'ar-note muted' });
+    AR.el = h('div', { id: 's-ar', class: 'ar', role: 'group', hidden: '' }, [
+      h('div', { class: 'ar-line ar-head' }, [h('i', { class: 'codicon codicon-sync', 'aria-hidden': 'true' }), AR.project, AR.toggle]),
+      AR.planLine, AR.note,
+    ]);
+    E.resume.parentNode.insertBefore(AR.el, E.resume.nextSibling);
+  }
+
   let vm = null;           // latest view model
   let skew = 0;            // extension clock - page clock (countdowns follow the now given by the extension)
   let shownKey = null;     // session currently shown
@@ -204,6 +227,12 @@
       show(node.children[3], !!r.infoText);
     });
 
+    const ar = s.autoResume || null;
+    renderAutoResume(ar);
+    // [Resume] in the summary line also leads to an auto-resume plan or "Continue in background"; the plan line is in its tooltip
+    const arAction = !!(ar && (ar.planText || ar.canNow || ar.canCancel));
+    at(E.resumeBtn, 'title', [t('webview.resumeShort'), ar ? ar.planText : ''].filter(Boolean).join('\n'));
+
     // Urgent banner: error / warning banners and compaction loops, one line only; full text is in the hover tooltip and details
     const urgent = (s.banners || []).filter((b) => b.tone === 'error' || b.tone === 'warning')
       .map((b) => ({ tone: b.tone, icon: b.icon, text: [b.text, b.detail].filter(Boolean).join(' · ') }));
@@ -216,8 +245,40 @@
       txt(E.urgent.children[1], urgent.length > 1 ? u0.text + ' (+' + (urgent.length - 1) + ')' : u0.text);
       at(E.urgent, 'title', urgent.map((x) => x.text).join('\n'));
     }
-    show(E.resumeBtn, resume.length > 0);
+    show(E.resumeBtn, resume.length > 0 || arAction);
     applyDetails();
+  }
+
+  // Auto-resume block: "Auto-resume is on for <project>  Turn off", the plan line with [Continue in background] [Cancel], the copy note
+  function renderAutoResume(ar) {
+    show(AR.el, !!ar);
+    if (!ar) return;
+    at(AR.el, 'aria-label', ar.heading);
+    txt(AR.project, ar.projectText);
+    at(AR.project, 'title', ar.projectTip || null);
+    txt(AR.toggle.children[0], ar.toggleText);
+    at(AR.toggle, 'title', ar.toggleTip || null);
+    show(AR.planLine, !!(ar.planText || ar.canNow || ar.canCancel));
+    cn(AR.icon, 'codicon codicon-' + (ar.icon || 'clock') + (ar.tone ? ' tone-' + ar.tone : ''));
+    show(AR.icon, !!ar.planText);
+    txt(AR.plan, ar.planText);
+    show(AR.plan, !!ar.planText);
+    at(AR.plan, 'title', ar.planTip || null);
+    show(AR.now, !!ar.canNow);
+    txt(AR.now.children[1], ar.nowText);
+    at(AR.now, 'title', ar.nowTip || null);
+    show(AR.cancel, !!ar.canCancel);
+    txt(AR.cancel.children[1], ar.cancelText);
+    txt(AR.note, ar.noteText);
+    show(AR.note, !!ar.noteText);
+  }
+
+  // [Resume] in the summary line: open "Details" and bring the resume hints and the auto-resume block into view (hints first when both don't fit)
+  function revealResume() {
+    const els = [E.resume, AR.el].filter((el) => !el.hidden);
+    if (!els.length) return;
+    els[els.length - 1].scrollIntoView({ block: 'nearest' });
+    els[0].scrollIntoView({ block: 'nearest' });
   }
 
   // "Details" collapsible section: collapsed by default, remembered per session
@@ -751,7 +812,7 @@
     if (act === 'emptyAction') { if (vm && vm.emptyAction) vscode.postMessage({ type: vm.emptyAction.act }); return; }
     if (act === 'toggle') { toggle(unitOf(btn)); return; }
     if (act === 'toggleDetails') { setDetails(!(shownKey && state.details[shownKey])); return; }
-    if (act === 'showResume') { setDetails(true); E.resume.scrollIntoView({ block: 'nearest' }); return; }
+    if (act === 'showResume') { setDetails(true); revealResume(); return; }
     if (act === 'compact' || btn === E.compact) { if (key) vscode.postMessage({ type: 'compact', sessionKey: key }); return; }
     if (act === 'goTo') { if (key) vscode.postMessage({ type: 'goTo', sessionKey: key }); return; }
     if (act === 'setAutoCompact' || act === 'revealTranscript' || act === 'copyTranscriptPath') {
@@ -760,6 +821,16 @@
     }
     if (act === 'resume') {
       vscode.postMessage({ type: 'copyResume', sessionKey: key, hintIndex: Number(btn.dataset.index), variant: btn.dataset.variant });
+      return;
+    }
+    // Auto-resume: only the session key goes out (the switch also says which way); the extension checks the current state again
+    if (act === 'autoResumeNow' || act === 'autoResumeCancel') {
+      if (key) vscode.postMessage({ type: act, sessionKey: key });
+      return;
+    }
+    if (act === 'autoResumeProject') {
+      const ar = vm && vm.session && vm.session.autoResume;
+      if (key && ar) vscode.postMessage({ type: 'autoResumeProject', sessionKey: key, on: !ar.projectOn });
       return;
     }
     if (act === 'copyResult' || act === 'openTranscript' || act === 'openFile') {

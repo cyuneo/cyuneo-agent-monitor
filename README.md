@@ -27,7 +27,7 @@ Claude Code and Codex now run several agents at once: subagents, background agen
 - **Get notified, even away from your desk.** When a chat starts waiting for you, VS Code or your system tells you, with a sound if you like. A short message can also go to your phone or team chat (ntfy, Bark, ServerChan, Feishu, DingTalk, WeCom, Telegram, Discord or Slack), for errors and usage limits too. Set quiet hours, and it all stays silent at night.
 - **Hear about it before you run out.** Get an alert when Codex usage reaches 90% and, if you turn them on, when today's estimated cost passes your budget or a chat's context gets close to auto-compact.
 - **Keep context under control.** See how full each chat is, compact it from the panel (with a cheaper model if you like, after seeing a cost estimate), choose when auto-compact happens, and get a reminder before the cache expires.
-- **Carry on after a usage limit.** See when the limit resets, and copy a ready-made prompt or command to resume.
+- **Carry on after an error or a usage limit.** See when a limit resets, and copy a ready-made prompt or command to resume. Or turn on auto-resume for a project: after an API error, or once a usage limit resets, Agent Monitor continues the Claude Code chat in the background, and the notification says when.
 - **See your usage over time.** A usage history page shows estimated cost and tokens per day for Claude Code and Codex over the last 30 days, also by model.
 - **Know where your chats are stored.** See how much space Claude Code and Codex chats take, with reference commands for moving them to another disk.
 
@@ -52,7 +52,7 @@ Every feature, command and setting is explained in the **[full guide](docs/GUIDE
 
 - VS Code 1.94 or later.
 - At least one supported tool, used on the same computer: Claude Code or Codex (VS Code extension, command line or desktop app), or GitHub Copilot Chat in VS Code.
-- To compact a closed chat in the background, you also need the Claude Code command line. The extension looks for `claude` on your PATH, then in the installed Claude Code extension. You can also set `agentMonitor.claude.cliPath`.
+- To compact a closed chat in the background, or for auto-resume, you also need the Claude Code command line (auto-resume needs a version with `--bg`; it was tested with 2.1.283). The extension looks for `claude` on your PATH, then in the installed Claude Code extension. You can also set `agentMonitor.claude.cliPath`.
 - The automated tests run on macOS, Windows and Linux (Node.js 22, and also Node.js 20 on Linux). Hands-on testing inside VS Code has only been done on macOS so far.
 
 ## Privacy
@@ -61,7 +61,7 @@ Every feature, command and setting is explained in the **[full guide](docs/GUIDE
 - Push notifications are optional and off by default. When you turn them on, only a short message goes to the services you set up: the project folder name and the state, plus the chat title and subagent names if you allow them. Nothing else ever leaves your computer.
 - The usage history is worked out on your computer, and sounds are played by your own system. Neither sends anything anywhere.
 - **Go to** looks at the running processes on your computer only when you use it, to find where a chat runs. It doesn't read your chats for this and sends nothing anywhere.
-- It changes a file or runs Claude Code only after you confirm (see [Disclaimer](#disclaimer)).
+- It changes a file or runs Claude Code only after you confirm, or, for auto-resume, in the projects you turned it on for (see [Disclaimer](#disclaimer)).
 - Details: [What it reads](docs/GUIDE.md#what-it-reads) and [Privacy](docs/GUIDE.md#privacy) in the full guide.
 
 ## Unofficial
@@ -79,8 +79,8 @@ CYUNEO Agent Monitor is **free for personal and noncommercial use** under the [P
 ## Disclaimer
 
 - **No warranty.** The extension is provided "as is", without warranty of any kind. As far as the law allows, the author is not liable for any loss or damage from using it, including lost data, lost work, extra costs or problems with your accounts.
-- **It only acts when you confirm.** The extension reads the session records on your computer. It changes a file or runs Claude Code only after you confirm: changing the auto-compact setting (one key, with a backup), compacting in the background, or writing a handoff note.
-- **Usage and costs are yours.** Background compaction and handoff notes run your own Claude Code and count toward your plan's usage limits or your API bill. Cost figures are estimates at list prices, not bills.
+- **It only acts when you confirm.** The extension reads the session records on your computer. It changes a file or runs Claude Code only after you confirm: changing the auto-compact setting (one key, with a backup), compacting in the background, writing a handoff note, or continuing a chat in the background. Auto-resume runs Claude Code without asking each time, but only in the projects you turned it on for.
+- **Usage and costs are yours.** Background compaction, handoff notes and auto-resume run your own Claude Code and count toward your plan's usage limits or your API bill. Cost figures are estimates at list prices, not bills.
 - **Moving data is at your own risk.** The storage page only suggests commands. You check them and decide whether to run them.
 - **Follow the services' terms.** You are responsible for using the AI coding tools you monitor and their services, and any push service you set up, in line with their terms.
 - **Not professional advice.** The context and compaction tips summarize published sources and may be out of date.

@@ -406,6 +406,20 @@ i.lamp, i.badge { color: var(--lamp, var(--c-icon)); flex: none; }
 /* The cost note may wrap: the cost is at the end of the sentence and an ellipsis would cut it off */
 .r-info { flex: 1 1 24em; white-space: normal; color: var(--vscode-descriptionForeground); }
 
+/* Auto-resume block (Claude Code chats), right after the resume hints; at most three short lines to fit a short panel:
+   "Auto-resume is on for <project>  Turn off" · plan line + [Continue in background] [Cancel] · copy note (only while the chat is open).
+   Icons sit in the gutter like the resume hints. The plan line and the note may wrap (the time and the attempt count must never be cut off by an ellipsis) */
+.ar { margin-top: 2px; }
+.ar-line { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 2px; min-width: 0; padding-left: 20px; }
+.ar-line > * { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ar-project { flex: 0 1 auto; }
+.ar-line > .link { flex: 0 1 auto; }
+.ar-line > .codicon { flex: none; width: 16px; margin-left: -20px; margin-right: -8px; color: var(--c-icon); }
+.ar-line > .codicon.tone-warning { color: var(--c-warn); }
+.ar-plan { flex: 0 1 auto; white-space: normal; overflow-wrap: anywhere; }
+.ar-btns { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; flex: none; overflow: visible; }
+.ar-note { margin: 0; padding-left: 20px; overflow-wrap: anywhere; }
+
 /* ---------- Agent table (div + CSS grid; narrow panels change layout via CSS, the DOM stays the same) ---------- */
 
 .grid { width: 100%; }
@@ -597,6 +611,8 @@ footer { padding: 8px 10px 0 calc(var(--in0) + 20px); }
 
 @container content (max-width: 479px) {
   .s-sum .sum-ctx, .s-sum .chip { display: none; }
+  /* The auto-resume copy note would take four lines here; it stays in the tooltips of the plan line and "Continue in background" */
+  .ar-note { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

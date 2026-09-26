@@ -72,12 +72,13 @@ Optional, and **off by default**. Once you turn it on, Agent Monitor can send a 
 - **an agent stops with an API error** (sent right away).
 - **a Claude Code or Codex usage limit is reached**, and again **when it resets**.
 - **a threshold alert** comes in: usage, today's cost or a chat's context passed a value you set (see [Threshold alerts](#threshold-alerts)). These are the events `usageHigh`, `costDaily` and `contextHigh`.
+- **auto-resume** continued a chat, continued it as a copy, or couldn't (the event `autoResume`; see [Auto-resume](#auto-resume)).
 
 All of them are on by default (the cost and context alerts only come once you set their thresholds). Choose them with **Choose events…** in the setup menu, or with `agentMonitor.push.events`. During [quiet hours](#quiet-hours), nothing is pushed, except API errors and usage-limit hits if you let errors through.
 
 **Network access:** push is the only feature that uses the network, so it also needs **Allow network access** (`agentMonitor.network.allow`, off by default). While that is off, nothing is sent at all, not even a test message, and the setup menu shows push as **Paused**. If you add a channel, turn push on or send a test message while it is off, a dialog says what would be sent and where; only its **Allow network access** button turns it on. Turn it off again with **Block Network Access** (the setup menu, the panel's **…** menu or the Command Palette): push stays on, and when you allow the network again, nothing that happened in between is sent. Allowing network access applies to this computer only: Settings Sync doesn't carry it to your other computers.
 
-**What is sent:** the project folder name and the state, for example "Agent needs you · my-app"; for a usage limit, the product and the reset time; for a threshold alert, what passed the threshold: the usage window and its percentage, that today's cost passed your budget (without any amount), or the chat's context percentage. With `agentMonitor.push.includeTitle`, the chat title (and the subagent's name) is added, but only a real title: one you set, or one the agent or app wrote. A title made from your first prompt is never sent. The extension never adds prompts, code, file paths, token counts or costs; a title or subagent name is sent as it is written, so it may name a file.
+**What is sent:** the project folder name and the state, for example "Agent needs you · my-app"; for a usage limit, the product and the reset time; for a threshold alert, what passed the threshold: the usage window and its percentage, that today's cost passed your budget (without any amount), or the chat's context percentage; for auto-resume, the attempt and, when it couldn't continue, the reason. When a chat's project has auto-resume on, the message about its error or usage limit also says when it will continue. With `agentMonitor.push.includeTitle`, the chat title (and the subagent's name) is added, but only a real title: one you set, or one the agent or app wrote. A title made from your first prompt is never sent. The extension never adds prompts, code, file paths, token counts or costs; a title or subagent name is sent as it is written, so it may name a file.
 
 **Setting it up:** run **Agent Monitor: Push Notifications…** from the Command Palette or the **…** menu of the panel title bar, and choose **Add a push channel**. Pick a service, read the privacy notice (shown once per service), fill in the fields and send a test message. Tokens, keys and webhook URLs go into VS Code's secure storage, never into `settings.json`. When you edit a channel, leave a secret field empty to keep its saved value, or enter `-` to remove an optional one (an ntfy access token, a Feishu or DingTalk signing secret). Secrets are not synced between computers. With Settings Sync, a channel added on another computer shows **Not set up on this computer** until you set it up there too, and removing a channel deletes its secrets only on the computer where you remove it (a copy left on another computer is never used again). Plain `http://` to your own ntfy or Bark server is allowed only for localhost and private network addresses. It isn't encrypted, and on another network (a café, a hotel) the same address can be someone else's device, so use it only with a server on a network you control. The same menu shows whether push is on, how many channels are in use and whether network access is allowed, and lets you send test messages, edit, turn off or remove a channel, turn push on or off, choose the events, and allow or block network access.
 
@@ -238,6 +239,26 @@ How it works:
 - Shows when a Claude Code chat hits its session, weekly or model limit, and when the limit resets.
 - Shows Codex's 5-hour and weekly usage percentages.
 - When a Claude Code or Codex chat or agent was stopped by a usage limit, an API error or an interruption, **Copy Resume Prompt…** copies a ready-made prompt or terminal command (`claude --resume …`, `codex resume …`). It also estimates what re-reading the context will cost.
+- For Claude Code, Agent Monitor can also continue the chat by itself: see [Auto-resume](#auto-resume).
+
+### Auto-resume
+
+Optional, **off by default**, and for Claude Code chats only. Turn it on for a project, and when a Claude Code chat in it stops, Agent Monitor continues it in the background by itself:
+
+- **After an API error** (overloaded, timed out, disconnected and so on): `agentMonitor.autoResume.errorDelayMinutes` later (2 minutes by default), and twice as long each further time (2, 4, 8 minutes).
+- **After a usage limit:** a minute after the limit resets, when the reset time is known. Turn this off with `agentMonitor.autoResume.afterLimit`. When Claude Code will continue by itself (a chat in the terminal, with Claude Code's `autoContinueAtUsageLimit` on, which is its default), it is left to Claude Code, and the panel says so.
+
+It runs your local Claude Code in the chat's folder: `claude --bg --resume <chat> "<resume prompt>"`, with the same resume prompt as **Copy Resume Prompt…**, in your display language. Claude Code carries on in the background, without opening a window, with the chat's own model. Each run is an ordinary Claude Code turn and counts toward your plan or API bill.
+
+- **Turning it on:** in a Claude Code chat's Details, click **Turn on for this project** under Auto-resume, or run **Auto-Resume: Choose Projects…** from the Command Palette and check the folders. It covers every chat in the folder and its subfolders. The list is kept on this computer only: Settings Sync doesn't carry it, and a workspace can't change it.
+- **What you see:** once a chat is planned, its Details say when, for example "Auto-resume at 3:05 PM (attempt 1 of 3)", and a notice offers **Cancel** and **Resume now**. A push message about the error or the limit says it too: "Auto-resume is on for this project: continuing at 3:05 PM (attempt 1 of 3)." Afterwards a notice, and a push (the `autoResume` event), says whether the chat continued, continued as a copy, or couldn't.
+- **How often:** each stop is resumed once at most, and a chat at most `agentMonitor.autoResume.maxAttempts` times in a row (3 by default). The count starts again when the chat finishes a turn, or 24 hours after the last try. Stops more than 24 hours old aren't resumed.
+- **A chat that is still open**, in the Claude Code panel, a terminal or already in the background: Claude Code continues a copy in the background and leaves the original unchanged. The copy shows up as a new chat in the list and counts toward the same limit.
+- **Finding a chat that continues in the background:** it has no window. `claude agents` lists these chats, and `claude attach <id>` opens one in a terminal; the id is the first 8 characters of the chat's ID.
+- **Continue in Background Now**, in the right-click or **…** menu of a Claude Code chat that stopped (an error, a usage limit, an interruption, or no activity) and under Auto-resume in its Details, continues it the same way right away, whether or not auto-resume is on. It doesn't count as an automatic attempt, and that stop isn't resumed again automatically.
+- **Cancel Auto-Resume**, in the same places or on the notice, skips the planned resume of that stop only. The chat's next stop is planned again.
+- **Folders Claude Code doesn't trust yet:** since version 2.1.283, Claude Code continues a chat in the background only in a folder where you have accepted its trust prompt. If you have used a folder only through the Claude Code extension in VS Code, you may not have. The warning then says so and offers **Open terminal**, which opens a terminal in that folder with the Claude Code command typed in. Press Enter, accept the trust prompt and type `/exit`. After that, auto-resume and **Continue in Background Now** work there.
+- **What it needs:** the Claude Code command line, in a version with `--bg` (tested with 2.1.283). It is found the same way as for background compaction: `agentMonitor.claude.cliPath`, then your PATH, then the Claude Code extension. If it is missing or too old, the chat's Details say so.
 
 ### Where your chats are stored, and moving them
 
@@ -329,7 +350,7 @@ After installing, open the **Agent Monitor** tab in the bottom panel, or run **A
 
 ## What it reads
 
-Everything is read-only, with one exception that you start yourself: when you set the auto-compact threshold, the extension may write the `autoCompactWindow` key in a Claude Code settings file (see [Set your own auto-compact threshold](#set-your-own-auto-compact-threshold)). When you compact a closed chat in the background, it is Claude Code itself that adds the summary to that chat's record.
+Everything is read-only, with one exception that you start yourself: when you set the auto-compact threshold, the extension may write the `autoCompactWindow` key in a Claude Code settings file (see [Set your own auto-compact threshold](#set-your-own-auto-compact-threshold)). When you compact a closed chat in the background, it is Claude Code itself that adds the summary to that chat's record. Likewise, when a chat is continued in the background (see [Auto-resume](#auto-resume)), Claude Code itself continues its record, or writes the copy.
 
 | File | Used for |
 | --- | --- |
@@ -337,7 +358,7 @@ Everything is read-only, with one exception that you start yourself: when you se
 | `~/.claude/projects/<project>/<session>/subagents/…` | Subagents, background agents and workflow agents |
 | `~/.claude/projects/<project>/<session>/workflows/…` | Workflow names, state and results |
 | `~/.claude/sessions/*.json` | Claude Code's list of running sessions: which chats are open, and whether each one is busy or waiting for approval, an answer or a dialog. Only the `.json` files are read. The `.key` files and sockets next to them are never opened. |
-| `~/.claude/settings.json`, `<project>/.claude/settings.json`, `<project>/.claude/settings.local.json` | Your auto-compact settings (`autoCompactWindow`, `autoCompactEnabled`) and `cleanupPeriodDays` |
+| `~/.claude/settings.json`, `<project>/.claude/settings.json`, `<project>/.claude/settings.local.json` | Your auto-compact settings (`autoCompactWindow`, `autoCompactEnabled`), `cleanupPeriodDays`, and (`~/.claude/settings.json` only) `autoContinueAtUsageLimit` for auto-resume |
 | `~/.claude/file-history/<session>` and the other folders under `~/.claude` and `~/.codex` | Sizes only (for the Transcript line and the storage page). File contents are not opened. |
 | `~/.codex/sessions/**/rollout-*.jsonl` | Codex threads, including subagent and reviewer threads and usage limits |
 | `~/.codex/session_index.jsonl` | Codex thread titles |
@@ -354,12 +375,15 @@ The extension keeps a few small things in VS Code's own storage: which chats you
 
 While `agentMonitor.shareScanAcrossWindows` is on (the default), the windows also share a folder in the extension's global storage (`shared-scan`), even when only one window is open. It says which window reads the records, and that window saves its latest results for the others in `shared-scan/snapshot.json`: chat titles, project folders, steps and costs. The file is overwritten whenever the results change and deleted when that window closes normally. Each window also keeps a small record there with its folders and the process IDs of its extension host and terminals, so that [Go to](#go-to-where-a-chat-is-running) can find the window a chat runs in; a request to another window to open a chat is a small file there too, which that window deletes when it takes it. For notifications, a small marker per wait (a hash, no chat text) goes into a private folder in your system's temporary directory, so that only one window, in any editor, shows it. Markers are removed after a day. With push on, the send times of each push channel (no message text) are kept in the same folder (`push-sent.json`), so the limits hold across windows.
 
+[Auto-resume](#auto-resume) keeps a file `autoresume.json` in the extension's global storage: the IDs of the chats it has continued, with their attempt counts and times, the IDs of the copies Claude Code started, and the stops that were run or cancelled. No chat text is stored. The list of projects with auto-resume is kept in VS Code's storage for the extension, on this computer only.
+
 The [usage history](#usage-history) page keeps a cache in the extension's storage: for each transcript it has read, the file's path, size and how far it was read, plus token counts per day and model and the message IDs it uses to avoid counting a response twice. No chat text is stored. The cache changes only while the page is open.
 
 ## Privacy
 
 - **The extension makes no network requests unless you turn on Allow network access** (`agentMonitor.network.allow`, off by default). While it is off, every request is refused in the code, push notifications and test messages included. Today only push notifications use it. There is no telemetry, no analytics and no remote content.
 - **Push notifications are optional and off by default.** When you turn them on, only a short message goes to the services you set up: the project folder name and the state, plus the chat title and subagent names if you allow them. Nothing else leaves your computer. As with any web request, the service sees that message and your IP address. Tokens and webhook URLs are kept in VS Code's secure storage and are masked in every error that is shown or logged.
+- **Auto-resume runs Claude Code only in the projects you turn it on for** (off by default). The extension then runs your local Claude Code (`claude --bg --resume <session> "<resume prompt>"`) in the chat's folder; **Continue in Background Now** does the same for one chat when you choose it. Claude Code connects to Anthropic just as it does when you use it yourself, and the usage counts toward your plan or API bill. The project list and the attempts are kept on this computer (see [What it reads](#what-it-reads)).
 - **Compacting a closed chat in the background goes through Claude Code**, and only after you confirm. The extension then runs your local Claude Code (`claude -p --resume <session> --model <model> --output-format json "/compact …"`). Claude Code connects to Anthropic just as it does when you use it yourself, and the usage counts toward your plan or API bill.
 - **Compacting an open chat, or setting its auto-compact threshold, only puts text into its input box** (`/compact …` or `/autocompact …`). Nothing is sent until you press Enter. (For a closed chat, or for one project only, the threshold is written to a settings file instead; see [What it reads](#what-it-reads).)
 - **Moving your data is up to you.** The storage page only generates commands; the extension never runs them, and **Open in Terminal** doesn't press Enter.
@@ -389,6 +413,9 @@ All commands are in the **Agent Monitor** category, and the table shows where yo
 | **Reveal Transcript File** | Chat right-click or **…**, Transcript line in the chat's Details | Shows the transcript in Finder or File Explorer |
 | **Copy Transcript Path** | Chat right-click or **…**, Transcript line in the chat's Details | Copies the transcript's full path |
 | **Copy Resume Prompt…** | Chat right-click or **…**, when a Claude Code or Codex chat has something to resume | Copies a resume prompt or terminal command |
+| **Continue in Background Now** | Chat right-click or **…**, and Auto-resume in the chat's Details, when a Claude Code chat has stopped | Continues the chat in the background now; see [Auto-resume](#auto-resume) |
+| **Cancel Auto-Resume** | Chat right-click or **…**, Auto-resume in the chat's Details, the notice, when a resume is planned | Skips the planned resume of this stop |
+| **Auto-Resume: Choose Projects…** | Command Palette | Chooses the projects with auto-resume |
 | **Compact…** | Chat row, right-click or **…** (Claude Code and Codex chats with 20K context or more), the chat's header, Command Palette | Compacts the chat; see [Compact button](#compact-button-with-a-choice-of-model-and-a-cost-estimate) |
 | **Write Handoff Note and Start Fresh…** | Chat right-click or **…** (Claude Code and Codex chats), Compact menu, Command Palette | Asks the model to write `HANDOFF.md`, then guides you to `/clear` and continue |
 | **Set Auto-Compact Threshold…** | "Auto-compact" in the chat's Details, chat right-click or **…** (Claude Code and Codex chats), Command Palette | See [Set your own auto-compact threshold](#set-your-own-auto-compact-threshold) |
@@ -419,7 +446,7 @@ All commands are in the **Agent Monitor** category, and the table shows where yo
 | `agentMonitor.shareScanAcrossWindows` | `true` | Let VS Code windows share one reading of the records (one window reads them, the others show its results) |
 | `agentMonitor.claude.enabled` | `true` | Read Claude Code records |
 | `agentMonitor.claude.projectsDir` | `""` | Claude Code records folder (empty: `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`) |
-| `agentMonitor.claude.cliPath` | `""` | Claude Code command line, used only for background compaction (empty: look for `claude` on PATH, then in the Claude Code extension) |
+| `agentMonitor.claude.cliPath` | `""` | Claude Code command line, used for background compaction and auto-resume (empty: look for `claude` on PATH, then in the Claude Code extension) |
 | `agentMonitor.codex.enabled` | `true` | Read Codex records |
 | `agentMonitor.codex.home` | `""` | Codex folder (empty: `$CODEX_HOME` or `~/.codex`) |
 | `agentMonitor.copilot.enabled` | `true` | Read GitHub Copilot Chat sessions (VS Code's built-in chat) |
@@ -446,9 +473,12 @@ All commands are in the **Agent Monitor** category, and the table shows where yo
 | `agentMonitor.alerts.usagePercent` | `90` | Alert when Codex's 5-hour or weekly usage reaches this percentage (0: off); see [Threshold alerts](#threshold-alerts) |
 | `agentMonitor.alerts.dailyCost` | `0` | Alert when today's estimated cost reaches this many US dollars (0: off) |
 | `agentMonitor.alerts.contextPercent` | `0` | Alert when a chat's main conversation reaches this percentage of its auto-compact point (0: off) |
+| `agentMonitor.autoResume.maxAttempts` | `3` | How many times in a row a chat may be resumed automatically (1–10); the count starts again once the chat finishes a turn |
+| `agentMonitor.autoResume.errorDelayMinutes` | `2` | Minutes to wait after an API error before resuming (1–60); each further attempt waits twice as long |
+| `agentMonitor.autoResume.afterLimit` | `true` | Also resume a minute after a usage limit resets, when the reset time is known |
 | `agentMonitor.network.allow` | `false` | Allow network requests. Off, the extension makes none at all; today only push notifications use it. Applies to this computer only (not synced by Settings Sync) |
 | `agentMonitor.push.enabled` | `false` | Push to your phone or team chat; see [Push to your phone or team chat](#push-to-your-phone-or-team-chat) |
-| `agentMonitor.push.events` | all on | Which events are pushed: `needsYou`, `error`, `limitHit`, `limitReset`, `usageHigh`, `costDaily`, `contextHigh` |
+| `agentMonitor.push.events` | all on | Which events are pushed: `needsYou`, `error`, `limitHit`, `limitReset`, `usageHigh`, `costDaily`, `contextHigh`, `autoResume` |
 | `agentMonitor.push.delaySeconds` | `30` | How many seconds a chat must keep waiting for you before it is pushed (0–600) |
 | `agentMonitor.push.includeTitle` | `false` | Also send the chat title and subagent name (never a title made from your prompt) |
 | `agentMonitor.push.channels` | `[]` | The push channels without their secrets; change them with **Push Notifications…** |
@@ -478,6 +508,7 @@ These tips come from a review of published research and the official documentati
 - **Some features cover only Claude Code and Codex.** Usage history, today's total cost (and the daily cost alert) and the storage page don't include GitHub Copilot Chat, which also has no auto-compact point. **Compact…**, handoff notes, the auto-compact threshold and resume prompts are only for Claude Code and Codex chats.
 - **Claude Code usage percentages aren't shown.** Claude Code doesn't save them to local files, so for Claude the extension only shows limit hits and reset times, and the usage alert is Codex only.
 - **Tab following has gaps.** It uses the tab title for Claude Code and the conversation ID for Codex. Chats shown in a side bar view (rather than an editor tab) can't be detected.
+- **Auto-resume is Claude Code only.** Codex has no official way to continue a chat in the background, so it isn't offered for Codex. **Go to** can't bring up a chat that Claude Code continues in the background; use `claude attach <id>` in a terminal.
 - **Background compaction with a chosen model is Claude Code only.** Codex compacts inside Codex. A chat can't be compacted in the background while it is open.
 - **Claude Code's environment variables are invisible to the extension.** `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` can make Claude Code compact at a different point than the one shown. A measured point appears only after a model has auto-compacted once.
 - **Windows share one reading of the records.** With several VS Code windows open, one of them reads the records and the others show its results, usually only a moment later. When that window closes, another one takes over right away; if it stops responding, within about 10 seconds (longer while no VS Code window has focus, since the windows then check on each other only every `agentMonitor.backgroundRefreshSeconds`). Windows with different reading settings (folders, activity window, guesses) or a different extension version read on their own, and so does every window when the shared folder can't be written (for example, when the disk is full). You can turn sharing off with `agentMonitor.shareScanAcrossWindows`.

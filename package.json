@@ -2,7 +2,7 @@
   "name": "cyuneo-agent-monitor",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "preview": true,
   "publisher": "cyuneo",
   "author": {
@@ -258,6 +258,24 @@
         "icon": "$(copy)"
       },
       {
+        "command": "agentMonitor.autoResume.projects",
+        "title": "%cmd.autoResume.projects%",
+        "category": "%category%",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "agentMonitor.autoResume.now",
+        "title": "%cmd.autoResume.now%",
+        "category": "%category%",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "agentMonitor.autoResume.cancel",
+        "title": "%cmd.autoResume.cancel%",
+        "category": "%category%",
+        "icon": "$(close)"
+      },
+      {
         "command": "agentMonitor.goToChat",
         "title": "%cmd.goToChat%",
         "category": "%category%",
@@ -459,9 +477,19 @@
           "group": "1_session@4"
         },
         {
+          "command": "agentMonitor.autoResume.now",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bbgResumable\\b/",
+          "group": "1_session@5"
+        },
+        {
+          "command": "agentMonitor.autoResume.cancel",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bautoResumePending\\b/",
+          "group": "1_session@6"
+        },
+        {
           "command": "agentMonitor.markSeen",
           "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
-          "group": "1_session@5"
+          "group": "1_session@7"
         },
         {
           "command": "agentMonitor.openTranscript",
@@ -516,9 +544,19 @@
           "group": "1_session@4"
         },
         {
+          "command": "agentMonitor.autoResume.now",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session' && bgResumable",
+          "group": "1_session@5"
+        },
+        {
+          "command": "agentMonitor.autoResume.cancel",
+          "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session' && autoResumePending",
+          "group": "1_session@6"
+        },
+        {
           "command": "agentMonitor.markSeen",
           "when": "webviewId == 'agentMonitor.agents' && webviewSection == 'session'",
-          "group": "1_session@5"
+          "group": "1_session@7"
         },
         {
           "command": "agentMonitor.openTranscript",
@@ -555,6 +593,14 @@
         },
         {
           "command": "agentMonitor.copyResume",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.autoResume.now",
+          "when": "false"
+        },
+        {
+          "command": "agentMonitor.autoResume.cancel",
           "when": "false"
         },
         {
@@ -883,6 +929,31 @@
           "description": "%config.postCompactHint%",
           "order": 39
         },
+        "agentMonitor.autoResume.maxAttempts": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "scope": "application",
+          "description": "%config.autoResume.maxAttempts%",
+          "order": 40
+        },
+        "agentMonitor.autoResume.errorDelayMinutes": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 60,
+          "scope": "application",
+          "description": "%config.autoResume.errorDelayMinutes%",
+          "order": 41
+        },
+        "agentMonitor.autoResume.afterLimit": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "%config.autoResume.afterLimit%",
+          "order": 42
+        },
         "agentMonitor.network.allow": {
           "type": "boolean",
           "default": false,
@@ -935,6 +1006,11 @@
               "type": "boolean",
               "default": true,
               "description": "%config.push.events.contextHigh%"
+            },
+            "autoResume": {
+              "type": "boolean",
+              "default": true,
+              "description": "%config.push.events.autoResume%"
             }
           },
           "additionalProperties": false,
@@ -945,7 +1021,8 @@
             "limitReset": true,
             "usageHigh": true,
             "costDaily": true,
-            "contextHigh": true
+            "contextHigh": true,
+            "autoResume": true
           },
           "scope": "application",
           "markdownDescription": "%config.push.events%",

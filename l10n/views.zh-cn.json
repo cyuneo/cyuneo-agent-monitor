@@ -123,6 +123,7 @@
   "ext.storageUnavailable": "存储页面目前不可用，详情见“智能体监视器”输出面板。",
   "ext.historyUnavailable": "用量历史页面目前不可用，详情见“智能体监视器”输出面板。",
   "ext.pushUnavailable": "推送通知目前不可用，详情见“智能体监视器”输出面板。",
+  "ext.autoResumeUnavailable": "自动续跑目前不可用，详情见“智能体监视器”输出面板。",
   "ext.log.learnedCompact": "已实测 {model}（{window} 窗口）的自动压缩点：{tokens}",
   "ext.compactUnavailable": "目前无法压缩，详情见“智能体监视器”输出面板。",
   "ext.agentsUnavailable": "智能体视图加载失败，详情见“智能体监视器”输出面板。",

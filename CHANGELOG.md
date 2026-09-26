@@ -4,6 +4,19 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-26
+
+### Added
+
+- **Auto-resume for Claude Code (optional, off by default).** Turn it on for a project, with **Turn on for this project** in a chat's Details or **Auto-Resume: Choose Projects…** in the Command Palette, and when a Claude Code chat in it stops, Agent Monitor continues it in the background by itself: after an API error (2 minutes later by default, then twice as long each further time), or a minute after a usage limit resets. It runs your local Claude Code in the chat's folder (`claude --bg --resume`) with the resume prompt, and Claude Code carries on with the chat's own model.
+  - The chat's Details show when it will continue ("Auto-resume at 3:05 PM (attempt 1 of 3)"), a notice offers **Cancel** and **Resume now**, and the push message about the error or the limit says that auto-resume is on and when it will continue. Afterwards a notice, and a push (the new `autoResume` event), says how it went.
+  - Each stop is resumed once at most, and a chat at most 3 times in a row by default; the count starts again when the chat finishes a turn. When Claude Code will continue by itself after a usage limit, it is left to Claude Code.
+  - If the chat is still open, for example in the Claude Code panel, Claude Code continues a copy in the background and leaves the original unchanged.
+  - Since version 2.1.283, Claude Code continues a chat in the background only in a folder where you have accepted its trust prompt. If it refuses, the warning says so and offers **Open terminal**: a terminal in that folder with the Claude Code command typed in, so you can accept the prompt once.
+  - Each run counts toward your plan or API bill, like any Claude Code turn. Details: [Auto-resume](docs/GUIDE.md#auto-resume) in the full guide.
+- **Continue in Background Now.** In the right-click or **…** menu of a Claude Code chat that stopped (an error, a usage limit, an interruption, or no activity), this continues it in the background right away, whether or not auto-resume is on.
+- **Settings:** `agentMonitor.autoResume.maxAttempts` (3), `agentMonitor.autoResume.errorDelayMinutes` (2) and `agentMonitor.autoResume.afterLimit` (on). The list of projects with auto-resume is kept on this computer only.
+
 ## [0.5.0] - 2026-09-25
 
 ### Added

@@ -123,6 +123,7 @@
   "ext.storageUnavailable": "The storage page isn't available right now. See the Agent Monitor output for details.",
   "ext.historyUnavailable": "The usage history page isn't available right now. See the Agent Monitor output for details.",
   "ext.pushUnavailable": "Push notifications aren't available right now. See the Agent Monitor output for details.",
+  "ext.autoResumeUnavailable": "Auto-resume isn't available right now. See the Agent Monitor output for details.",
   "ext.log.learnedCompact": "Measured auto-compact point for {model} ({window} window): {tokens}",
   "ext.compactUnavailable": "Compacting isn't available right now. See the Agent Monitor output for details.",
   "ext.agentsUnavailable": "The Agents view couldn't be loaded. See the Agent Monitor output for details.",

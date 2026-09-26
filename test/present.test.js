@@ -1302,6 +1302,119 @@ function formatTests() {
     assert.strictEqual(fmt.formatSessionRow(s, w, { now: NOW }).description, fmt.formatSessionRow(s, base, { now: NOW }).description);
     assert.strictEqual(fmt.formatStatus(s.main.status, s.main, w, NOW), fmt.formatStatus(s.main.status, s.main, base, NOW));
   });
+
+  autoResumeTests();
+}
+
+// ---------- Auto-resume texts (docs/DESIGN.md §12) ----------
+
+function autoResumeTests() {
+  const arPlan = (state, o = {}) => ({ state, atMs: null, attempt: 1, max: 3, unavailable: null, ...o });
+  const arInfo = (o = {}) => ({ available: true, projectOn: true, projectName: 'demo', canNow: false, plan: null, ...o });
+  // A probe dictionary shows exactly which variables each sentence gets (the real sentences are in l10n/autoresume.*.json)
+  const VARS = '{time}|{n}|{max}|{project}';
+  const probeKeys = [
+    ...fmt.AUTORESUME_STATES.map((x) => 'autoresume.state.' + x), ...fmt.AUTORESUME_UNAVAILABLE.map((x) => 'autoresume.unavailable.' + x),
+  ];
+  const probe = i18nLib.createI18n('en', {
+    timeZone: 'UTC',
+    dicts: { en: {
+      ...Object.fromEntries(probeKeys.map((k) => [k, k + ':' + VARS])),
+      'autoresume.project.on': 'on:{project}', 'autoresume.project.off': 'off:{project}',
+      'autoresume.note.copy': 'copy', 'autoresume.note.claudeOnly': 'claudeOnly', 'autoresume.note.how': 'how',
+    } },
+  });
+
+  test('auto-resume texts: every state and reason gets { time, n, max, project } (time = scheduled time or reset time, clock format); project line; notes', () => {
+    const at = NOW + 2 * MIN;
+    const clock = probe.fmtClock(at, NOW);
+    const r = fmt.formatAutoResume(arInfo({ plan: arPlan('scheduled', { atMs: at }) }), probe, NOW);
+    assert.deepStrictEqual(r, {
+      available: true, state: 'scheduled', stateText: `autoresume.state.scheduled:${clock}|1|3|demo`, unavailableText: '',
+      planText: `autoresume.state.scheduled:${clock}|1|3|demo`, projectOn: true, projectText: 'on:demo',
+      copyNote: 'copy', claudeOnlyNote: 'claudeOnly', howNote: 'how',
+    });
+    const text = (plan, o) => fmt.formatAutoResume(arInfo({ plan, ...o }), probe, NOW);
+    assert.strictEqual(text(arPlan('self', { atMs: NOW + HOUR })).stateText, `autoresume.state.self:${probe.fmtClock(NOW + HOUR, NOW)}|1|3|demo`, 'self: the reset time');
+    assert.strictEqual(text(arPlan('noReset')).stateText, 'autoresume.state.noReset:|1|3|demo');
+    assert.strictEqual(text(arPlan('gaveUp', { attempt: 3 })).stateText, 'autoresume.state.gaveUp:|3|3|demo');
+    assert.strictEqual(text(arPlan('running', { attempt: 2 })).stateText, 'autoresume.state.running:|2|3|demo');
+    assert.strictEqual(text(arPlan('running', { attempt: null, max: undefined })).stateText, 'autoresume.state.running:|?|?|demo', 'unknown counts');
+    // a reason the plan can't run right now follows the state sentence
+    const u = text(arPlan('scheduled', { atMs: at, unavailable: 'cliTooOld' }));
+    assert.strictEqual(u.unavailableText, `autoresume.unavailable.cliTooOld:${clock}|1|3|demo`);
+    assert.strictEqual(u.planText, u.stateText + fmt.SEP + u.unavailableText);
+    assert.strictEqual(text(arPlan('scheduled', { atMs: at, unavailable: 'weird' })).unavailableText, '', 'unknown reasons are not shown');
+    // no plan, or a state without a sentence: no plan line; the project line and the notes are still there
+    for (const plan of [null, arPlan('bogus'), 'x']) {
+      const n = text(plan, { projectOn: false });
+      assert.deepStrictEqual([n.state, n.stateText, n.planText, n.projectText, n.copyNote], [null, '', '', 'off:demo', 'copy'], JSON.stringify(plan));
+    }
+    // not available (not a Claude chat, or no info): nothing at all
+    for (const info of [null, undefined, 'x', arInfo({ available: false, plan: arPlan('scheduled', { atMs: at }) })]) {
+      const n = fmt.formatAutoResume(info, probe, NOW);
+      assert.strictEqual(n.available, false);
+      assert.ok(Object.values(n).every((v) => v === '' || v === false || v === null), JSON.stringify(n));
+    }
+  });
+
+  test('auto-resume menu flags: bgResumable (canNow, not while a run is starting) / autoResumePending (scheduled); only for an available Claude chat', () => {
+    const s = session({ live: true, main: agent({ status: st('apiError', NOW - MIN), tokens: tokens(25000) }) });
+    const base = fmt.sessionContextValue(s, 'error');
+    assert.strictEqual(base, 'session provider-claude lamp-error compactable live', 'unchanged without auto-resume info');
+    const cv = (info) => fmt.sessionContextValue(s, 'error', info);
+    assert.strictEqual(cv(arInfo({ canNow: true, plan: arPlan('scheduled', { atMs: NOW + MIN }) })), base + ' bgResumable autoResumePending');
+    assert.strictEqual(cv(arInfo({ canNow: true })), base + ' bgResumable');
+    assert.strictEqual(cv(arInfo({ plan: arPlan('scheduled', { atMs: NOW + MIN }) })), base + ' autoResumePending');
+    for (const state of ['self', 'noReset', 'gaveUp']) assert.strictEqual(cv(arInfo({ canNow: true, plan: arPlan(state) })), base + ' bgResumable', state);
+    assert.strictEqual(cv(arInfo({ canNow: true, plan: arPlan('running') })), base, 'no second run while one is starting');
+    assert.strictEqual(cv(arInfo({ available: false, canNow: true, plan: arPlan('scheduled') })), base);
+    assert.strictEqual(cv(null), base);
+    const codex = session({ provider: 'codex', id: 'thread-1' });
+    assert.strictEqual(fmt.sessionContextValue(codex, 'error', arInfo({ canNow: true, plan: arPlan('scheduled') })), fmt.sessionContextValue(codex, 'error'), 'Claude Code chats only');
+    assert.deepStrictEqual(fmt.autoResumeFlags(arInfo({ canNow: true, plan: arPlan('scheduled') })), { bgResumable: true, autoResumePending: true });
+    assert.deepStrictEqual(fmt.autoResumeFlags(null), { bgResumable: false, autoResumePending: false });
+  });
+
+  test('auto-resume in the session tooltip: an "Auto-resume" row with the plan line while there is a plan; stable over time; nothing for other tools', () => {
+    const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
+    const s = session({ main: agent({ status: st('apiError', NOW - MIN) }) });
+    const info = arInfo({ canNow: true, plan: arPlan('scheduled', { atMs: NOW + 2 * MIN }) });
+    const rows = fmt.formatSessionTooltip(s, en, { now: NOW, autoResumeInfo: info });
+    const row = rows.find(([k]) => k === en.t('autoresume.section'));
+    assert.ok(row, JSON.stringify(rows));
+    assert.strictEqual(row[1], fmt.formatAutoResume(info, en, NOW).planText);
+    assert.strictEqual(row[1], en.t('autoresume.state.scheduled', { time: en.fmtClock(NOW + 2 * MIN, NOW), n: 1, max: 3, project: 'demo' }));
+    assert.ok(rows.indexOf(row) <= 2, 'right after the status (and its note)');
+    for (const dt of [1000, 29000]) {
+      assert.deepStrictEqual(fmt.formatSessionTooltip(s, en, { now: NOW + dt, autoResumeInfo: info }), rows, 'no per-second changes');
+    }
+    const without = JSON.stringify(fmt.formatSessionTooltip(s, en, { now: NOW }));
+    assert.strictEqual(JSON.stringify(fmt.formatSessionTooltip(s, en, { now: NOW, autoResumeInfo: arInfo({ canNow: true }) })), without, 'no plan, no row');
+    const codex = session({ provider: 'codex', id: 'thread-1' });
+    assert.strictEqual(JSON.stringify(fmt.formatSessionTooltip(codex, en, { now: NOW, autoResumeInfo: info })),
+      JSON.stringify(fmt.formatSessionTooltip(codex, en, { now: NOW })), 'other tools: no row');
+  });
+
+  test('auto-resume texts in five languages: no unreplaced placeholders; every key the panel uses is in the dictionary', () => {
+    for (const locale of LOCALES) {
+      const base = i18nLib.createI18n(locale, { timeZone: 'UTC' });
+      const used = new Set(['autoresume.section', 'autoresume.project.turnOn', 'autoresume.project.turnOff', 'autoresume.btn.now', 'autoresume.btn.cancel']);
+      const i18n = { ...base, t: (k, v) => { used.add(k); return base.t(k, v); } };
+      for (const state of fmt.AUTORESUME_STATES) {
+        for (const unavailable of [null, ...fmt.AUTORESUME_UNAVAILABLE]) {
+          for (const projectOn of [true, false]) {
+            const r = fmt.formatAutoResume(arInfo({ projectOn, canNow: true, plan: arPlan(state, { atMs: NOW + 2 * MIN, unavailable }) }), i18n, NOW);
+            for (const text of [r.stateText, r.unavailableText, r.projectText, r.copyNote, r.claudeOnlyNote, r.howNote]) {
+              assert.ok(!PLACEHOLDER.test(text), `${locale}: unreplaced placeholder in ${text}`);
+            }
+            assert.ok(r.stateText && r.projectText && r.copyNote, `${locale} ${state}: empty text`);
+          }
+        }
+      }
+      assert.deepStrictEqual([...used].filter((k) => !base.has(k)), [], `${locale}: missing entries`);
+    }
+  });
 }
 
 // ---------- Run ----------

@@ -272,7 +272,9 @@ async function sessionsTests() {
       assert.ok(r.a11y.includes(r.title), r.a11y);
       assert.ok(r.tip.startsWith(r.title + '\n'), 'first tooltip line is the title');
       const ctx = JSON.parse(r.context);
-      assert.deepStrictEqual(Object.keys(ctx).sort(), ['autoCompact', 'compactable', 'handoff', 'preventDefaultContextMenuItems', 'resumable', 'sessionKey', 'webviewSection']);
+      assert.deepStrictEqual(Object.keys(ctx).sort(), ['autoCompact', 'autoResumePending', 'bgResumable', 'compactable', 'handoff', 'preventDefaultContextMenuItems', 'resumable', 'sessionKey', 'webviewSection']);
+      assert.strictEqual(ctx.bgResumable, false, 'no auto-resume provider');
+      assert.strictEqual(ctx.autoResumePending, false, 'no auto-resume provider');
       assert.strictEqual(ctx.webviewSection, 'session');
       assert.strictEqual(ctx.sessionKey, r.key);
       assert.strictEqual(ctx.preventDefaultContextMenuItems, true);
@@ -731,6 +733,50 @@ async function providerTests() {
   });
 }
 
+// Auto-resume (docs/DESIGN.md §12): the provider the extension hands to the tree gives each session its AutoResumeInfo
+async function autoResumeTests() {
+  const plan = { state: 'scheduled', atMs: NOW + 2 * MIN, attempt: 1, max: 3, unavailable: null };
+  let deltaInfo = { available: true, projectOn: true, projectName: 'demo', canNow: true, plan };
+  // delta (usage limit) has a plan; other Claude chats have none; a provider that wrongly says yes for Codex changes nothing
+  const infoFor = (s) => (s.key === 'claude:delta' ? deltaInfo
+    : s.provider === 'claude' ? { available: true, projectOn: false, projectName: 'demo', canNow: false, plan: null }
+      : { available: true, projectOn: true, projectName: 'demo', canNow: true, plan });
+  const list = fixtures();
+  const tree = new AgentTreeProvider({ i18n, now: () => NOW, autoResume: { infoFor } });
+  const rec = recorder(tree);
+  tree.update({ sessions: list, lamps: lampsOf(list), now: NOW, hints: {} });
+  rec.take();
+  const cv = (t, id) => t.getTreeItem(t.nodes.get(id)).contextValue.split(' ');
+  const tip = (t, id) => { const n = t.nodes.get(id); return hoverText(t.resolveTreeItem(t.getTreeItem(n), n).tooltip.value); };
+  const AR_FLAGS = ['bgResumable', 'autoResumePending'];
+
+  await test('Tree: session contextValue gets bgResumable / autoResumePending from the provider; Claude chats only', () => {
+    assert.ok(AR_FLAGS.every((f) => cv(tree, 'claude:delta').includes(f)), cv(tree, 'claude:delta').join(' '));
+    for (const id of ['claude:alpha', 'claude:beta', 'codex:gamma']) assert.ok(!cv(tree, id).some((f) => AR_FLAGS.includes(f)), id);
+    assert.strictEqual(cv(tree, 'claude:delta/main').join(' '), 'mainAgent', 'agent nodes keep their contextValue');
+  });
+
+  await test('Tree: the session tooltip has an "Auto-resume" row with the plan line (same formatter as the panel)', () => {
+    const planText = fmt.formatAutoResume(deltaInfo, i18n, NOW).planText.replace(/\s+/g, ' ');
+    assert.strictEqual(planText, i18n.t('autoresume.state.scheduled', { time: i18n.fmtClock(plan.atMs, NOW), n: 1, max: 3, project: 'demo' }).replace(/\s+/g, ' '));
+    assert.ok(tip(tree, 'claude:delta').includes(`| ${i18n.t('autoresume.section')} | ${planText} |`), tip(tree, 'claude:delta'));
+    for (const id of ['claude:beta', 'codex:gamma']) assert.ok(!tip(tree, id).includes(`| ${i18n.t('autoresume.section')} |`), id);
+  });
+
+  await test('Tree: when the plan goes away only that session node is refreshed; without a provider (or with a failing one) there are no flags', () => {
+    deltaInfo = { ...deltaInfo, plan: null, canNow: false };
+    tree.update({ sessions: list, lamps: lampsOf(list), now: NOW, hints: {} });
+    assert.deepStrictEqual(rec.take(), [['claude:delta']]);
+    assert.ok(!cv(tree, 'claude:delta').some((f) => AR_FLAGS.includes(f)));
+    for (const o of [{}, { autoResume: { infoFor: () => { throw new Error('boom'); } } }, { autoResume: 'nope' }]) {
+      const t = new AgentTreeProvider({ i18n, now: () => NOW, ...o });
+      t.update({ sessions: list, lamps: lampsOf(list), now: NOW, hints: {} });
+      for (const s of list) assert.ok(!cv(t, s.key).some((f) => AR_FLAGS.includes(f)), s.key);
+      assert.ok(!tip(t, 'claude:delta').includes(`| ${i18n.t('autoresume.section')} |`));
+    }
+  });
+}
+
 (async () => {
   console.log('Session list (agents-view.js buildSessionList + session-list.js)');
   await sessionsTests();
@@ -740,6 +786,8 @@ async function providerTests() {
   await zoneTests();
   console.log('\nCopilot');
   await providerTests();
+  console.log('\nAuto-resume');
+  await autoResumeTests();
   const failed = results.filter((x) => !x).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
   process.exit(failed ? 1 : 0);

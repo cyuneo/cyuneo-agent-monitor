@@ -222,7 +222,7 @@ function channelTests() {
     const tags = Object.fromEntries(push.EVENT_TYPES.map((event) => [event, build(CFG.ntfy, { ...MSG, event }).headers['X-Tags']]));
     assert.deepStrictEqual(tags, {
       needsYou: 'bell', error: 'warning', limitHit: 'hourglass_flowing_sand', limitReset: 'white_check_mark',
-      usageHigh: 'bar_chart', costDaily: 'moneybag', contextHigh: 'memo',
+      usageHigh: 'bar_chart', costDaily: 'moneybag', contextHigh: 'memo', autoResume: 'arrows_counterclockwise',
     });
   });
 
@@ -920,12 +920,13 @@ function policyTests() {
   test('normalizeSettings: off by default, all events on, 30 s delay, no chat titles; values clamped', () => {
     assert.deepStrictEqual(push.normalizeSettings(undefined), {
       enabled: false,
-      events: { needsYou: true, error: true, limitHit: true, limitReset: true, usageHigh: true, costDaily: true, contextHigh: true },
+      events: { needsYou: true, error: true, limitHit: true, limitReset: true, usageHigh: true, costDaily: true, contextHigh: true, autoResume: true },
       delaySeconds: 30,
       includeTitle: false,
     });
     assert.deepStrictEqual(push.ALERT_EVENT_TYPES, alerts.ALERT_TYPES.slice(), 'the threshold alerts of lib/alerts.js');
-    assert.deepStrictEqual(push.EVENT_TYPES.slice(-3), ['usageHigh', 'costDaily', 'contextHigh'], 'new events come last (setting and picker order)');
+    assert.deepStrictEqual(push.EVENT_TYPES.slice(-4), ['usageHigh', 'costDaily', 'contextHigh', 'autoResume'], 'new events come last (setting and picker order)');
+    assert.strictEqual(push.normalizeSettings({ events: { autoResume: false } }).events.autoResume, false);
     assert.strictEqual(push.normalizeSettings({ events: { costDaily: false } }).events.costDaily, false);
     const s = push.normalizeSettings({ enabled: 'yes', delaySeconds: -5, includeTitle: 1, events: { limitReset: false } });
     assert.strictEqual(s.enabled, false, 'only true turns it on');
@@ -950,6 +951,11 @@ function policyTests() {
       assert.strictEqual(push.plan({ event: ev(t), settings: { enabled: true, events: { [t]: false } } }).reason, 'eventOff', t);
     }
     assert.strictEqual(push.plan({ event: ev('error'), settings: { enabled: true, events: { error: false } } }).reason, 'eventOff');
+    // auto-resume outcomes go out at once too, and have their own switch; one without a known outcome is not an event
+    const ar = { type: 'autoResume', outcome: 'resumed', transitionId: 'autoResume|x|1|resumed|5', key: 'claude:x' };
+    assert.deepStrictEqual(push.plan({ event: ar, settings: { enabled: true, delaySeconds: 90 } }), { action: 'send', delayMs: 0, claimId: 'push|autoResume|x|1|resumed|5' });
+    assert.strictEqual(push.plan({ event: ar, settings: { enabled: true, events: { autoResume: false } } }).reason, 'eventOff');
+    for (const outcome of ['other', undefined]) assert.strictEqual(push.plan({ event: { ...ar, outcome }, settings: on }).reason, 'invalid', String(outcome));
     assert.strictEqual(push.plan({ event: { type: 'other', transitionId: 'x' }, settings: on }).action, 'drop');
     assert.strictEqual(push.plan({}).action, 'drop');
   });
@@ -1217,6 +1223,164 @@ function formatTests() {
     }
   });
 
+  // Auto-resume (DESIGN §12): a plan as the runtime copies it onto an error / limitHit event, and the outcome events.
+  // The autoresume.* strings live in l10n/autoresume.*.json: compared through i18n.t(key, vars), never as literal text.
+  const SID = 'bbbbbbbb-1111-2222-3333-444444444444';
+  const COPY = 'cccccccc-1111-2222-3333-444444444444';
+  const PLAN = {
+    key: `claude:${SID}`, sessionId: SID, project: '/work/private-client/api-server', projectName: 'api-server',
+    stopId: `${SID}|apiError|${NOW - MIN}`, trigger: 'error', state: 'scheduled', atMs: NOW + 5 * MIN, attempt: 1, max: 3, unavailable: null,
+  };
+  const withPlan = (e, plan) => ({ ...e, autoResume: push.autoResumeSnapshot({ ...PLAN, ...plan }) });
+  const keyed = (k, v) => (v ? `${k}${JSON.stringify(v)}` : k); // shows which key and values were used
+  const tclock = (ms) => `T${ms}`;
+  const OUTCOME = {
+    type: 'autoResume', outcome: 'resumed', key: `claude:${SID}`, sessionId: SID, project: '/work/private-client/api-server',
+    projectName: 'api-server', attempt: 2, max: 3, copySessionId: null, error: null, atMs: NOW,
+  };
+
+  test('auto-resume plan snapshot: state, time, attempt, limit and folder name only (no path, session id or stop id); anything else is no plan', () => {
+    assert.deepStrictEqual(push.autoResumeSnapshot(PLAN), { state: 'scheduled', atMs: NOW + 5 * MIN, attempt: 1, max: 3, projectName: 'api-server' });
+    const s = JSON.stringify(push.autoResumeSnapshot({ ...PLAN, state: 'self' }));
+    for (const x of ['/work', 'private-client', SID.slice(0, 8), 'apiError']) assert.ok(!s.includes(x), `${x} kept: ${s}`);
+    for (const p of [null, undefined, 'x', {}, { ...PLAN, state: 'other' }]) assert.strictEqual(push.autoResumeSnapshot(p), null);
+    assert.deepStrictEqual(push.autoResumeSnapshot({ ...PLAN, state: 'noReset', atMs: null, attempt: 'x', projectName: '' }),
+      { state: 'noReset', atMs: null, attempt: null, max: 3, projectName: null });
+  });
+
+  test('error with an auto-resume plan: one more line, when it continues (scheduled / self) or why not (noReset / gaveUp); none while running or without a time', () => {
+    const at = NOW + 5 * MIN;
+    const body = (e, tr = keyed) => push.formatPush([e], tr, { fmtClock: tclock }).body;
+    assert.strictEqual(body(withPlan(err)), `push.msg.error.body\nautoresume.push.line.scheduled{"time":"T${at}","n":1,"max":3}`);
+    assert.strictEqual(body(withPlan(err, { state: 'self', trigger: 'limit', atMs: NOW + HOUR })), `push.msg.error.body\nautoresume.push.line.self{"time":"T${NOW + HOUR}"}`);
+    assert.strictEqual(body(withPlan(err, { state: 'noReset', trigger: 'limit', atMs: null })), 'push.msg.error.body\nautoresume.push.line.noReset');
+    assert.strictEqual(body(withPlan(err, { state: 'gaveUp', atMs: null, attempt: 3 })), 'push.msg.error.body\nautoresume.push.line.gaveUp{"max":3}');
+    for (const plan of [{ state: 'running', atMs: null }, { state: 'running' }, { atMs: null }, { state: 'self', atMs: null }]) {
+      assert.strictEqual(body(withPlan(err, plan)), 'push.msg.error.body', JSON.stringify(plan));
+    }
+    assert.strictEqual(body({ ...needs, autoResume: push.autoResumeSnapshot(PLAN) }), 'push.msg.needsYou.body', 'only errors and limit hits');
+    // with the real strings: same title, priority and event; the time comes from the clock push uses for reset times
+    assert.deepStrictEqual(push.formatPush([withPlan(err)], en, { fmtClock: clock }), {
+      title: 'Agent stopped with an error · api-server',
+      body: `A chat stopped because of an API error.\n${en.t('autoresume.push.line.scheduled', { time: '11:00', n: 1, max: 3 })}`,
+      priority: 'high',
+      event: 'error',
+    });
+    assert.strictEqual(push.formatPush([withPlan(err)], zh, { now: NOW }).body.split('\n')[1], zh.t('autoresume.push.line.scheduled', { time: zh.fmtClock(at, NOW), n: 1, max: 3 }));
+    assert.strictEqual(push.formatPush([withPlan(err)], en, { includeTitle: true, fmtClock: clock }).body,
+      `Fix login stopped because of an API error\n${en.t('autoresume.push.line.scheduled', { time: '11:00', n: 1, max: 3 })}`);
+  });
+
+  test('limit hit with an auto-resume plan: the title names the project its line speaks of; without one it stays as it was', () => {
+    const claudeHitEv = { ...hit, key: `claude:${SID}`, transitionId: 'limitHit|claude|9', provider: 'claude', project: 'demo-app' };
+    const self = withPlan(claudeHitEv, { trigger: 'limit', state: 'self', atMs: NOW + HOUR });
+    assert.deepStrictEqual(push.formatPush([self], en, { fmtClock: clock }), {
+      title: 'Claude Code usage limit reached · demo-app',
+      body: `Resets 11:00.\n${en.t('autoresume.push.line.self', { time: '11:00' })}`,
+      priority: 'normal',
+      event: 'limitHit',
+    });
+    assert.strictEqual(push.formatPush([{ ...self, project: null }], zh, { fmtClock: clock }).title, 'Claude Code 额度用完了 · api-server', 'the plan\'s folder name when the hit has none');
+    assert.strictEqual(push.formatPush([withPlan(claudeHitEv, { trigger: 'limit', state: 'noReset', atMs: null })], keyed, { fmtClock: tclock }).body,
+      `push.msg.limitHit.body{"reset":"T${NOW + HOUR}"}\nautoresume.push.line.noReset`);
+    const running = push.formatPush([withPlan(claudeHitEv, { trigger: 'limit', state: 'running', atMs: null })], en, { fmtClock: clock });
+    assert.deepStrictEqual([running.title, running.body], ['Claude Code usage limit reached', 'Resets 11:00.']);
+    // every language, every plan line, alone and in a batch: no key names or placeholders left
+    const plans = [{}, { state: 'self', atMs: NOW + HOUR }, { state: 'noReset', atMs: null }, { state: 'gaveUp', atMs: null, attempt: 3 }];
+    for (const loc of LOCALES) {
+      const i18n = i18nLib.createI18n(loc);
+      for (const p of plans) {
+        const evs = [withPlan(err, p), withPlan(claudeHitEv, { trigger: 'limit', ...p })];
+        for (const m of [push.formatPush([evs[0]], i18n, { now: NOW }), push.formatPush([evs[1]], i18n, { now: NOW }), push.formatPush(evs, i18n, { now: NOW })]) {
+          const all = `${m.title}\n${m.body}`;
+          assert.ok(!/\{\w+\}|\b(?:push|autoresume)\./.test(all) && m.body.split('\n').length === 2, `${loc} ${JSON.stringify(p)}: ${all}`);
+        }
+      }
+    }
+  });
+
+  test('auto-resume outcome events: only the folder name, attempt, limit and error code are kept; the claim id; anything else is no event', () => {
+    assert.deepStrictEqual(push.autoResumeEvent(OUTCOME), {
+      type: 'autoResume', key: `claude:${SID}`, transitionId: `autoResume|${SID}|2|resumed|${NOW}`, outcome: 'resumed', project: 'api-server',
+      attempt: 2, max: 3, error: null, title: '', titleSource: null, agentName: null, provider: 'claude',
+    });
+    const copied = push.autoResumeEvent({ ...OUTCOME, outcome: 'copied', copySessionId: COPY });
+    assert.ok(!/\/work|private-client|cccccccc/.test(JSON.stringify(copied)), JSON.stringify(copied));
+    // gaveUp may be reported by every window: its id leaves the time out, so they all claim the same one
+    assert.strictEqual(push.autoResumeEvent({ ...OUTCOME, outcome: 'gaveUp', attempt: 3, atMs: NOW + 7 }).transitionId, `autoResume|${SID}|3|gaveUp`);
+    assert.strictEqual(push.autoResumeEvent({ ...OUTCOME, atMs: null }).transitionId, `autoResume|${SID}|2|resumed`);
+    for (const error of ['timeout', 'notResumable']) assert.strictEqual(push.autoResumeEvent({ ...OUTCOME, outcome: 'failed', error }).error, error);
+    for (const error of ['/work/x: EACCES', 'exit code 1', 7, '']) assert.strictEqual(push.autoResumeEvent({ ...OUTCOME, outcome: 'failed', error }).error, null, String(error));
+    for (const project of ['/work/private-client/api-server/', 'C:\\work\\api-server']) {
+      assert.strictEqual(push.autoResumeEvent({ ...OUTCOME, projectName: null, project }).project, 'api-server', project);
+    }
+    assert.strictEqual(push.autoResumeEvent({ ...OUTCOME, key: undefined }).key, `claude:${SID}`);
+    for (const o of [null, 'x', {}, { ...OUTCOME, outcome: 'other' }, { ...OUTCOME, sessionId: '' }, { ...OUTCOME, sessionId: 7 }]) {
+      assert.strictEqual(push.autoResumeEvent(o), null, JSON.stringify(o));
+    }
+    assert.deepStrictEqual(['resumed', 'copied', 'failed', 'gaveUp'].map((outcome) => push.isUrgent({ type: 'autoResume', outcome })), [false, false, true, true]);
+    assert.deepStrictEqual(['needsYou', 'error', 'limitHit', 'usageHigh'].map((type) => push.isUrgent({ type })), [true, true, false, false]);
+  });
+
+  test('auto-resume outcome message: title and body per outcome with the folder name, attempt / limit and the reason; failed and gaveUp are high priority; nothing private', () => {
+    const vars = { project: 'api-server', n: 2, max: 3, reason: '' };
+    for (const outcome of ['resumed', 'copied', 'failed', 'gaveUp']) {
+      const ev = push.autoResumeEvent({ ...OUTCOME, outcome, copySessionId: outcome === 'copied' ? COPY : null });
+      assert.deepStrictEqual(push.formatPush([ev], en), {
+        title: en.t(`autoresume.push.title.${outcome}`, vars), body: en.t(`autoresume.push.body.${outcome}`, vars),
+        priority: outcome === 'failed' || outcome === 'gaveUp' ? 'high' : 'normal', event: 'autoResume',
+      }, outcome);
+      for (const loc of LOCALES) {
+        const m = push.formatPush([ev], i18nLib.createI18n(loc), { includeTitle: true });
+        const all = `${m.title}\n${m.body}`;
+        for (const s of ['/work', 'private-client', SID.slice(0, 8), 'cccccccc', 'Refactor']) assert.ok(!all.includes(s), `${loc} ${outcome}: ${s} leaked: ${all}`);
+        assert.ok(m.title && m.body && !/\{\w+\}|\b(?:push|autoresume)\./.test(all), `${loc} ${outcome}: ${all}`);
+      }
+    }
+    const failed = push.autoResumeEvent({ ...OUTCOME, outcome: 'failed', error: 'cliNotFound' });
+    const withReason = { ...vars, reason: 'R:autoresume.error.cliNotFound' };
+    const reasons = (k, v) => (k.startsWith('autoresume.error.') ? `R:${k}` : keyed(k, v));
+    assert.deepStrictEqual(push.formatPush([failed], reasons), {
+      title: keyed('autoresume.push.title.failed', withReason), body: keyed('autoresume.push.body.failed', withReason), priority: 'high', event: 'autoResume',
+    });
+    assert.strictEqual(push.formatPush([failed], zh).body, zh.t('autoresume.push.body.failed', { ...vars, reason: zh.t('autoresume.error.cliNotFound') }));
+    // Claude Code refused a folder it doesn't trust yet: the message says how to fix it
+    const untrusted = push.autoResumeEvent({ ...OUTCOME, outcome: 'failed', error: 'untrusted' });
+    assert.strictEqual(push.formatPush([untrusted], en).body, en.t('autoresume.push.body.failed', { ...vars, reason: en.t('autoresume.error.untrusted') }));
+    assert.ok(/claude/.test(en.t('autoresume.error.untrusted')));
+    // a code without a text of its own shows no reason rather than a key name
+    assert.strictEqual(push.formatPush([{ ...failed, error: 'noSuchCode' }], en).body, en.t('autoresume.push.body.failed', vars));
+    // not a known outcome: not formatted
+    assert.strictEqual(push.formatPush([{ ...failed, outcome: 'other' }], en).body, '');
+  });
+
+  test('a batch with auto-resume: one line per event (after errors, before limits); a plan line, or an outcome\'s body, goes on its event\'s own line', () => {
+    const resumed = push.autoResumeEvent(OUTCOME);
+    const failed = push.autoResumeEvent({ ...OUTCOME, outcome: 'failed', error: 'timeout', atMs: NOW + 1 });
+    const claudeHitEv = withPlan({ ...hit, key: `claude:${SID}`, transitionId: 'limitHit|claude|9', provider: 'claude', project: 'demo-app' }, { trigger: 'limit', state: 'self', atMs: NOW + HOUR });
+    const m = push.formatPush([claudeHitEv, resumed, withPlan(err), needs], en, { fmtClock: clock });
+    const vars = { project: 'api-server', n: 2, max: 3, reason: '' };
+    assert.deepStrictEqual(m, {
+      title: '4 updates from your agents',
+      body: [
+        'Agent needs you · demo-app',
+        en.t('push.msg.batch.lineNote', { line: 'Agent stopped with an error · api-server', note: en.t('autoresume.push.line.scheduled', { time: '11:00', n: 1, max: 3 }) }),
+        en.t('push.msg.batch.lineNote', { line: en.t('autoresume.push.title.resumed', vars), note: en.t('autoresume.push.body.resumed', vars) }),
+        en.t('push.msg.batch.lineNote', { line: 'Claude Code usage limit reached · demo-app', note: en.t('autoresume.push.line.self', { time: '11:00' }) }),
+      ].join('\n'),
+      priority: 'high',
+      event: 'needsYou',
+    });
+    assert.strictEqual(en.t('push.msg.batch.lineNote', { line: 'A', note: 'B' }), 'A — B');
+    assert.strictEqual(zh.t('push.msg.batch.lineNote', { line: 'A', note: 'B' }), 'A；B');
+    // with includeTitle the chat title stays next to its event; normal priority unless an auto-resume failed
+    const z = push.formatPush([withPlan(err), resumed], zh, { includeTitle: true, fmtClock: clock });
+    assert.strictEqual(z.body.split('\n')[0], zh.t('push.msg.batch.lineNote', { line: '智能体出错停止了 · api-server：Fix login', note: zh.t('autoresume.push.line.scheduled', { time: '11:00', n: 1, max: 3 }) }));
+    assert.strictEqual(push.formatPush([resumed, claudeHitEv], en, { fmtClock: clock }).priority, 'normal');
+    const f = push.formatPush([resumed, failed], en);
+    assert.deepStrictEqual([f.priority, f.event, f.body.split('\n').length], ['high', 'autoResume', 2]);
+  });
+
   test('push.* keys: same set and placeholders in all five languages; every key the code uses exists', () => {
     const read = (loc) => JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', `push.${loc}.json`), 'utf8'));
     const base = read('en');
@@ -1236,6 +1400,7 @@ function formatTests() {
     }
     for (const t of push.EVENT_TYPES) used.add(`push.event.${t}`);
     for (const c of ['required', 'url', 'https', 'httpPublic', 'host', 'userinfo', 'format', 'number', 'channel']) used.add(`push.err.${c}`);
+    for (const k of ['push.msg.limitHit.titleProject', 'push.msg.batch.lineNote']) used.add(k);
     for (const k of used) assert.ok(k in base, `missing ${k}`);
     assert.ok(i18nLib.REGIONS.includes('push'), 'the push bundle is loaded');
   });
@@ -1476,6 +1641,104 @@ function runtimeTests() {
     assert.strictEqual(x.runtime._state().waits, 0);
     x.runtime.dispose();
   });
+
+  // Auto-resume: plans (plansByKey) and outcomes as lib/autoresume-runtime.js hands them over (DESIGN §12.5)
+  const planOf = (s, o) => ({
+    key: s.key, sessionId: s.id, project: '/work/private-client', projectName: 'private-client', stopId: `${s.id}|apiError|1`,
+    trigger: 'error', state: 'scheduled', atMs: Date.now() + 2 * MIN, attempt: 1, max: 3, unavailable: null, ...o,
+  });
+  const outcomeOf = (s, o) => ({
+    type: 'autoResume', outcome: 'resumed', key: s.key, sessionId: s.id, project: '/work/private-client/demo-app', projectName: 'demo-app',
+    attempt: 1, max: 3, copySessionId: null, error: null, atMs: Date.now(), ...o,
+  });
+  function arRig(o = {}) {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-ar-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const x = makeRuntime({ dir, secrets: secretsOf(cfg), settings: { enabled: true, channels: [push.splitConfig(cfg).settings], ...o.settings }, mute: o.mute });
+    x.claimed = (ev) => fs.existsSync(path.join(dir, notify.markerName(push.CLAIM_PREFIX + ev.transitionId)));
+    return x;
+  }
+
+  test('runtime auto-resume: a session\'s plan is copied onto its error / limit hit when reported (a later change does not alter the message); the push says when it continues', async () => {
+    const x = arRig();
+    const now = Date.now();
+    const calm = [working({ updatedMs: now })];
+    const broke = [failing(now - 1000, { updatedMs: now })];
+    const plan = planOf(broke[0]);
+    const plans = new Map([[plan.key, plan]]);
+    x.runtime.update({ sessions: calm, lamps: lampsOf(calm), quota: emptyQuota(), seq: 1, autoResume: plans });
+    const [ev] = x.runtime.update({ sessions: broke, lamps: lampsOf(broke), seq: 2, autoResume: plans });
+    assert.deepStrictEqual(ev.autoResume, { state: 'scheduled', atMs: plan.atMs, attempt: 1, max: 3, projectName: 'private-client' });
+    const at = plan.atMs;
+    Object.assign(plan, { state: 'running', atMs: null }); // the plan moves on before the batch goes out
+    await sleep(60);
+    assert.strictEqual(x.fetch.calls.length, 1);
+    assert.strictEqual(x.fetch.calls[0].init.body,
+      `A chat stopped because of an API error.\n${en.t('autoresume.push.line.scheduled', { time: en.fmtClock(at, Date.now()), n: 1, max: 3 })}`);
+    // a limit hit of a session with a plan; a session without one, and a needsYou, get none
+    const other = 'dddddddd-1111-2222-3333-444444444444';
+    const lim = [limited(now - 500, { updatedMs: now }), working({ updatedMs: now, id: other })];
+    const plans2 = new Map([[lim[0].key, planOf(lim[0], { trigger: 'limit', state: 'self', atMs: NOW + HOUR })]]);
+    const out = x.runtime.update({ sessions: lim, lamps: lampsOf(lim), quota: claudeHit(now - 500, now + HOUR, lim[0].key), seq: 3, autoResume: plans2 });
+    assert.deepStrictEqual(out.map((e) => [e.type, e.autoResume && e.autoResume.state]), [['limitHit', 'self']]);
+    const both = [failing(now - 200, { updatedMs: now, id: other }), asking(now - 200, { updatedMs: now })];
+    const out2 = x.runtime.update({ sessions: both, lamps: lampsOf(both), seq: 4, autoResume: new Map([[`claude:${other}-x`, planOf(both[0])]]) });
+    assert.deepStrictEqual(out2.map((e) => [e.type, 'autoResume' in e]).sort(), [['error', false], ['needsYou', false]]);
+    const out3 = x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 5, autoResume: 'not a map' });
+    assert.deepStrictEqual(out3, []);
+    x.runtime.dispose();
+  });
+
+  test('runtime auto-resume outcomes: sent at once, claimed once across windows; the same outcome handed over again is not sent twice; outcomes alone leave the latest snapshot as it was', async () => {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-ar-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const opts = { dir, secrets: secretsOf(cfg), settings: { enabled: true, delaySeconds: 600, channels: [push.splitConfig(cfg).settings] } };
+    const a = makeRuntime(opts);
+    const b = makeRuntime(opts);
+    const calm = [working({ updatedMs: Date.now() })];
+    for (const x of [a, b]) x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    const o = outcomeOf(calm[0], { outcome: 'copied', copySessionId: 'cccccccc-1111-2222-3333-444444444444' });
+    for (const x of [a, b]) {
+      assert.deepStrictEqual(x.runtime.update({ autoResumeEvents: [o, null, { ...o, outcome: 'nope' }] }).map((e) => e.type), ['autoResume']);
+    }
+    await sleep(60);
+    const calls = [...a.fetch.calls, ...b.fetch.calls];
+    assert.strictEqual(calls.length, 1, 'sent twice or not at all');
+    const ev = push.autoResumeEvent(o);
+    assert.strictEqual(calls[0].init.body, build(CFG.ntfy, push.formatPush([ev], en)).body);
+    assert.deepStrictEqual([calls[0].init.headers['X-Priority'], calls[0].init.headers['X-Tags']], ['default', 'arrows_counterclockwise']);
+    assert.ok(!/cccccccc|\/work/.test(JSON.stringify(calls[0].init)), 'a copy id or a path was sent');
+    assert.ok(fs.existsSync(path.join(dir, notify.markerName(`push|autoResume|${calm[0].id}|1|copied|${o.atMs}`))));
+    a.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 2, autoResumeEvents: [o] });
+    await sleep(40);
+    assert.strictEqual(a.fetch.calls.length + b.fetch.calls.length, 1);
+    // a needsYou waiting for its delay: an update with outcomes only does not replace the snapshot it is decided on
+    const w = waitRig();
+    const now = Date.now();
+    w.feed([working({ updatedMs: now })]);
+    assert.strictEqual(w.feed([asking(now - 1000, { updatedMs: now })]).length, 1);
+    w.runtime.update({ autoResumeEvents: [] });
+    await sleep(120); // past the delay and freshWaitMs with no newer snapshot: decided on the latest one
+    assert.strictEqual(w.fetch.calls.length, 1, 'the waiting chat was dropped');
+    for (const x of [a, b, w]) x.runtime.dispose();
+  });
+
+  test('runtime auto-resume outcomes: quiet hours ask about failed / gaveUp as an error (allowErrors lets them through) and about the others as autoResume; the event switch turns them off', async () => {
+    const asked = [];
+    const x = arRig({ mute: (type) => { asked.push(type); return type !== 'error'; } }); // quiet hours with allowErrors
+    const s = working({ updatedMs: Date.now() });
+    const evs = x.runtime.update({ autoResumeEvents: ['resumed', 'failed', 'gaveUp', 'copied'].map((outcome) => outcomeOf(s, { outcome, error: outcome === 'failed' ? 'exit' : null })) });
+    assert.deepStrictEqual(asked, ['autoResume', 'error', 'error', 'autoResume']);
+    await sleep(60);
+    assert.ok(x.fetch.calls.length >= 1 && x.fetch.calls.every((c) => c.init.headers['X-Priority'] === 'high'), 'failed / gaveUp were not sent');
+    assert.deepStrictEqual(evs.map((e) => x.claimed(e)), [false, true, true, false], 'a muted outcome must not be claimed');
+    x.runtime.dispose();
+    const off = arRig({ settings: { events: { autoResume: false } } });
+    const e2 = off.runtime.update({ autoResumeEvents: [outcomeOf(s, { outcome: 'failed', error: 'spawn' })] });
+    await sleep(40);
+    assert.deepStrictEqual([off.fetch.calls.length, off.claimed(e2[0])], [0, false]);
+    off.runtime.dispose();
+  });
 }
 
 // ---------- Network switch (lib/network.js) ----------
@@ -1585,6 +1848,8 @@ async function networkTests() {
         ...x.feed([asking(now - 1000, { updatedMs: now })], claudeHit(now, now + HOUR)),
       ];
       assert.deepStrictEqual(evs.map((e) => e.type).sort(), ['error', 'limitHit', 'needsYou'], 'the tracker still sees them');
+      const ar = { outcome: 'failed', key: 'claude:x', sessionId: 'x', projectName: 'demo-app', attempt: 1, max: 3, error: 'exit', atMs: now };
+      assert.deepStrictEqual(x.runtime.update({ autoResumeEvents: [ar] }).map((e) => e.type), ['autoResume'], 'and an auto-resume outcome');
       await sleep(120); // past the needsYou delay and any batch
       assert.strictEqual(x.fetch.calls.length, 0);
       assert.deepStrictEqual([x.runtime._state().waits, x.runtime._state().flushTimer], [0, false]);

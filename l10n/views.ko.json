@@ -123,6 +123,7 @@
   "ext.storageUnavailable": "지금은 저장 공간 페이지를 사용할 수 없습니다. 자세한 내용은 에이전트 모니터 출력을 확인하세요.",
   "ext.historyUnavailable": "지금은 사용량 기록 페이지를 사용할 수 없습니다. 자세한 내용은 에이전트 모니터 출력을 확인하세요.",
   "ext.pushUnavailable": "지금은 푸시 알림을 사용할 수 없습니다. 자세한 내용은 에이전트 모니터 출력을 확인하세요.",
+  "ext.autoResumeUnavailable": "지금은 자동 재개를 사용할 수 없습니다. 자세한 내용은 에이전트 모니터 출력을 확인하세요.",
   "ext.log.learnedCompact": "{model} ({window} 창)의 자동 압축 지점을 측정함: {tokens}",
   "ext.compactUnavailable": "지금은 압축을 사용할 수 없습니다. 자세한 내용은 에이전트 모니터 출력을 확인하세요.",
   "ext.agentsUnavailable": "에이전트 보기를 불러오지 못했습니다. 자세한 내용은 에이전트 모니터 출력을 확인하세요.",

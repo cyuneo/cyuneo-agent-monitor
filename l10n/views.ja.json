@@ -123,6 +123,7 @@
   "ext.storageUnavailable": "現在はストレージページを利用できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.historyUnavailable": "現在は使用量の履歴ページを利用できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.pushUnavailable": "現在はプッシュ通知を利用できません。詳細はエージェントモニターの出力を確認してください。",
+  "ext.autoResumeUnavailable": "現在は自動再開を利用できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.log.learnedCompact": "{model}（{window}ウィンドウ）の自動圧縮ポイントを実測しました: {tokens}",
   "ext.compactUnavailable": "現在は圧縮を実行できません。詳細はエージェントモニターの出力を確認してください。",
   "ext.agentsUnavailable": "エージェントビューを読み込めませんでした。詳細はエージェントモニターの出力を確認してください。",

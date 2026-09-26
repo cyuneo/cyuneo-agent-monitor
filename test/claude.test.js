@@ -95,7 +95,7 @@ function writeRegistry(home, entries) {
     const name = e.fileName || `${pid}${e.pid == null ? '-' + (++n) : ''}.json`;
     fs.writeFileSync(path.join(dir, name), JSON.stringify({
       pid, sessionId: e.sessionId, cwd: e.cwd ?? '/tmp/am-fixture', startedAt: e.startedAt ?? T(0), procStart: 'synthetic',
-      version: e.version ?? '2.1.280', kind: 'interactive', entrypoint: e.entrypoint ?? 'claude-vscode', name: 'synthetic',
+      version: e.version ?? '2.1.280', kind: e.kind ?? 'interactive', entrypoint: e.entrypoint ?? 'claude-vscode', name: 'synthetic',
       status: e.status, ...(e.waitingFor ? { waitingFor: e.waitingFor } : {}),
       updatedAt: e.updatedAt ?? e.statusUpdatedAt ?? T(0), statusUpdatedAt: e.statusUpdatedAt ?? T(0),
     }));
@@ -434,16 +434,20 @@ test('no registry: session H (pending Edit) and older-version session I are both
 
 // ---------- provider: with registry ----------
 
-test('registry busy: no guess, no stale; live / liveStatus / entrypoint go into Session', () => {
+test('registry busy: no guess, no stale; live / liveStatus / liveKind / entrypoint go into Session', () => {
   const h = makeHome();
   writeRegistry(h.home, [{ sessionId: SID.H, status: 'busy', statusUpdatedAt: T(0, 10), entrypoint: 'claude-vscode', cwd: '/tmp/am-fixture' }]);
   const p = provider(h);
   const s = byId(scanAll(p, T(20)), SID.H);
   assert.strictEqual(s.live, true);
   assert.strictEqual(s.liveStatus, 'busy');
+  assert.strictEqual(s.liveKind, 'interactive');
   assert.strictEqual(s.waitingFor, null);
   assert.strictEqual(s.entrypoint, 'claude-vscode');
   assert.strictEqual(s.main.status.code, 'tool');
+  // a background session (`claude --bg`) is registered as kind "bg"
+  writeRegistry(h.home, [{ sessionId: SID.H, status: 'idle', statusUpdatedAt: T(0, 10), entrypoint: 'cli', kind: 'bg', cwd: '/tmp/am-fixture' }]);
+  assert.strictEqual(byId(scanAll(provider(h), T(20)), SID.H).liveKind, 'bg');
   assert.strictEqual(s.main.status.pendingTool, 'Edit');
 });
 

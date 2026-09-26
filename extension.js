@@ -46,6 +46,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const childProcess = require('child_process');
 const { Worker } = require('worker_threads');
 const { createI18n } = require('./lib/i18n');
 const S = require('./lib/core/status');
@@ -87,6 +88,14 @@ const HOST_PID_WAIT_MS = 10000; // presence: how long to wait for a new terminal
 const PUSH_KEYS = ['push.enabled', 'push.events', 'push.delaySeconds', 'push.includeTitle', 'push.channels'];
 // The network switch (application scope, read the same way): off, lib/network.js refuses every request
 const NETWORK_KEY = 'network.allow';
+// Auto-resume (docs/DESIGN.md §12): its commands, the runtime's state file under globalStorageUri (attempts, copies,
+// handled stops), and the prefix its plan notices are claimed under in the notify claim dir (one window shows each)
+const AUTORESUME_CMD = Object.freeze({
+  projects: 'agentMonitor.autoResume.projects', now: 'agentMonitor.autoResume.now', cancel: 'agentMonitor.autoResume.cancel',
+});
+const AUTORESUME_FILE = 'autoresume.json';
+const AUTORESUME_NOTICE_PREFIX = 'autoresume-plan|';
+const CLAUDE_EXT_ID = 'anthropic.claude-code'; // its bundled CLI is where auto-resume looks last, like the compact command
 const STORAGE_WAIT_MS = 120000; // the storage scan stats recursively; large dirs can take tens of seconds
 // Settings that require rebuilding the worker; other settings just recompute from the last snapshot on the main thread
 const MONITOR_KEYS = [
@@ -187,6 +196,11 @@ class Controller {
     this.historyReq = null;      // last history request of an open page ({ type: 'history', days?, force? }); resent to a new worker
     this.historyListeners = new Set(); // onHistory listeners (the history page)
     this.push = null;            // lib/push-runtime.js (null when it failed to load)
+    this.autoResume = null;      // lib/autoresume-runtime.js (null when it failed to load)
+    this.autoResumeUi = null;    // what the panel, the tree and the "…" menu ask about auto-resume (null: no auto-resume UI)
+    this.arPlans = new Map();    // sessionKey -> auto-resume Plan, from the last render
+    this.arNotices = new Map();  // notice id -> sessionKey: scheduled plans waiting for a focused window to announce them
+    this.arNoticed = new Set();  // notice ids this window has handled (announced, or claimed by another window)
     this.jumper = null;          // lib/jump.js createJumper (Go to Chat)
     this.jumping = new Set();    // session keys whose jump is being worked out
     this.hostInfo = null;        // presence fields in this window's shared-scan record (hostFields)
@@ -231,8 +245,13 @@ class Controller {
     this.loadObserved();
     this.listWidth = this.loadListWidth();
 
+    // Auto-resume first: the tree and the panel take what they show about it when they are created
+    this.setupAutoResume();
+
     // Sidebar overview
-    this.overview = new AgentTreeProvider({ i18n: this.i18n, hideCompleted: this.cfg().get('hideCompleted', false) });
+    this.overview = new AgentTreeProvider({
+      i18n: this.i18n, hideCompleted: this.cfg().get('hideCompleted', false), autoResume: this.autoResumeUi,
+    });
     this.treeView = vscode.window.createTreeView(TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
     sub(this.overview, this.treeView);
     this.panelTree = vscode.window.createTreeView(PANEL_TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
@@ -277,6 +296,7 @@ class Controller {
     for (const timer of this.notifyTimers) clearTimeout(timer);
     this.notifyTimers.clear();
     if (this.push) this.guard('push', () => this.push.dispose());
+    if (this.autoResume) this.guard('autoResume', () => this.autoResume.dispose());
     if (this.releaseNetwork) this.releaseNetwork();
     this.stopShared();
     this.stopWorker();
@@ -301,6 +321,7 @@ class Controller {
           onSelect: (key) => this.guard('select', () => this.userSelect(key)),
           onResizeList: (width) => this.guard('resizeList', () => this.setListWidth(width)),
           onMore: (key) => { Promise.resolve(this.sessionMenu(key)).catch((err) => this.log(this.t('ext.log.failed', { what: 'sessionMenu', error: errText(err) }))); },
+          autoResume: this.autoResumeUi,
         });
       } catch (err) {
         this.agentsView = null;
@@ -545,6 +566,7 @@ class Controller {
         if (this.shared) this.shared.setWindowFocused(this.windowFocused()); // onPresence updates the interval
         else this.updateInterval();
         this.guard('notify', () => this.deliverDeferred());
+        this.guard('autoResume', () => this.announcePlans());
       }),
     );
     const tg = vscode.window.tabGroups;
@@ -1095,6 +1117,8 @@ class Controller {
     const now = Date.now();
     const st = this.settings();
     this.scoped = this.currentScoped();
+    // Auto-resume plans before anything shows them (the tree, the panel, and push when a stop is reported)
+    this.guard('autoResume', () => this.updateAutoResume(now));
     this.lamps = lampLib.computeLamps(this.scoped, { seen: this.seen.reader() });
     const bySession = this.lamps.bySession;
     const hints = { start: st.contextHintStart, act: st.contextHintAct };
@@ -1185,9 +1209,13 @@ class Controller {
     // Threshold alerts on the same data (the tracker is fed even while every threshold is off, so setting one never
     // reports what is already over it)
     const alerts = this.guard('alerts', () => this.checkAlerts(sessions)) || [];
-    // Remote push: the same sessions and lamps, plus the quota snapshot (usage limits) and the threshold alerts; seq
-    // counts real snapshots only
-    if (this.push) this.guard('push', () => this.push.update({ sessions, lamps, quota: this.last.quota, seq: this.dataSeq, alerts }));
+    // Remote push: the same sessions and lamps, plus the quota snapshot (usage limits), the threshold alerts and the
+    // auto-resume plans (an error or usage-limit message says when the chat continues); seq counts real snapshots only
+    if (this.push) {
+      this.guard('push', () => this.push.update({
+        sessions, lamps, quota: this.last.quota, seq: this.dataSeq, alerts, autoResume: this.arPlans,
+      }));
+    }
     for (const key of [...this.notifyDeferred.keys()]) if (!this.currentWait(key)) this.notifyDeferred.delete(key);
     if (this.notifyAwaiting.size && !this.last.replay) {
       for (const item of [...this.notifyAwaiting.values()]) {
@@ -1481,6 +1509,310 @@ class Controller {
       .catch((err) => this.log(this.t('ext.log.failed', { what: 'alerts', error: errText(err) })));
   }
 
+  // ---------- Auto-resume ----------
+
+  /**
+   * Auto-resume (lib/autoresume-runtime.js, docs/DESIGN.md §12): a Claude Code chat that stopped on an API error or a
+   * usage limit, in a project with auto-resume on, is continued with `claude --bg --resume`. The commands are registered
+   * even when the runtime fails to load (they say it's unavailable); the panel and the tree then show nothing about it.
+   */
+  setupAutoResume() {
+    const context = this.context;
+    let mod = null;
+    try {
+      mod = require('./lib/autoresume-runtime');
+    } catch (err) {
+      this.log(this.t('ext.log.moduleFailed', { module: 'autoresume', error: errText(err) }));
+    }
+    if (mod && typeof mod.createAutoResumeRuntime === 'function') {
+      try {
+        const storage = context.globalStorageUri;
+        this.autoResume = mod.createAutoResumeRuntime({
+          store: context.globalState,
+          stateFile: () => (storage && storage.fsPath ? path.join(storage.fsPath, AUTORESUME_FILE) : ''),
+          claimDir: () => this.notifyDir(),
+          findCli: () => this.findClaudeCli(),
+          spawn: childProcess.spawn,
+          fs,
+          now: () => Date.now(),
+          setTimeout: (fn, ms) => setTimeout(fn, ms),
+          clearTimeout: (h) => clearTimeout(h),
+          claudeSettingsPath: () => this.workerConfig().claude.settingsPath,
+          prompt: () => this.t('resume.prompt.claude'),
+          settings: () => this.autoResumeSettings(),
+          log: (line) => this.log(line),
+          t: (key, vars) => this.t(key, vars),
+          fmtTime: (ms) => this.i18n.fmtClock(ms, Date.now()),
+        });
+        this.autoResume.onOutcome((o) => this.guard('autoResume', () => this.onAutoResumeOutcome(o)));
+        this.autoResumeUi = {
+          infoFor: (s) => this.autoResumeInfo(s),
+          now: (key) => this.autoResumeNow(key),
+          cancel: (key) => this.autoResumeCancel(key),
+          setProjectFor: (s, on) => this.setAutoResumeProject(s, on),
+        };
+      } catch (err) {
+        this.autoResume = null;
+        this.autoResumeUi = null;
+        this.log(this.t('ext.log.moduleFailed', { module: 'autoresume', error: errText(err) }));
+      }
+    }
+    const cmd = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, (arg) => {
+      if (!this.autoResume) {
+        vscode.window.showErrorMessage(this.t('ext.autoResumeUnavailable'));
+        return undefined;
+      }
+      return Promise.resolve(fn(arg)).catch((err) => this.log(this.t('ext.log.failed', { what: 'autoResume', error: errText(err) })));
+    }));
+    cmd(AUTORESUME_CMD.projects, () => this.pickAutoResumeProjects());
+    cmd(AUTORESUME_CMD.now, (arg) => this.autoResumeNowCmd(arg));
+    cmd(AUTORESUME_CMD.cancel, (arg) => this.autoResumeCancelCmd(arg));
+  }
+
+  /** Auto-resume settings from user settings only (application scope; a workspace value is ignored); lib/core/autoresume.js fills in defaults */
+  autoResumeSettings() {
+    const g = (k) => this.userSetting(k);
+    return { maxAttempts: g('autoResume.maxAttempts'), errorDelayMinutes: g('autoResume.errorDelayMinutes'), afterLimit: g('autoResume.afterLimit') };
+  }
+
+  /**
+   * The Claude Code CLI, found the way the compact command finds it: the claude.cliPath setting (machine scope), PATH,
+   * then the Claude extension's bundled one. A cliPath that doesn't point at a program counts as not found (never another).
+   * @returns {{ path: string } | { error: string }}
+   */
+  findClaudeCli() {
+    const m = this.compactMod;
+    if (!m || typeof m.findCli !== 'function') return { error: 'notFound' };
+    let extensionPath = null;
+    try {
+      const ext = vscode.extensions && vscode.extensions.getExtension(CLAUDE_EXT_ID);
+      extensionPath = (ext && ext.extensionPath) || null;
+    } catch {
+      extensionPath = null;
+    }
+    const found = m.findCli({ cliPath: String(this.cfg().get('claude.cliPath', '') || ''), extensionPath });
+    return found && !found.error && typeof found.path === 'string' ? { path: found.path } : { error: (found && found.error) || 'notFound' };
+  }
+
+  /**
+   * Every render: the runtime gets all sessions (not only this window's scope, so a chat is resumed whichever window
+   * shows it) and works out the plans; a plan that just got scheduled is announced
+   */
+  updateAutoResume(now) {
+    const ar = this.autoResume;
+    if (!ar) return;
+    ar.update({ sessions: this.last.sessions, now });
+    this.arPlans = ar.plansByKey();
+    this.announcePlans();
+  }
+
+  /**
+   * What the panel, the tree and the "…" menu show about auto-resume for a chat (AutoResumeInfo, lib/format.js): Claude
+   * Code chats with a folder only. projectName: the folder with auto-resume on that the chat is in, else the one the
+   * switch would turn on.
+   */
+  autoResumeInfo(s) {
+    const ar = this.autoResume;
+    if (!ar || !s || s.provider !== 'claude') return null;
+    const project = ar.projectFor(s);
+    const target = project || this.autoResumeTarget(s);
+    if (!target) return null;
+    return {
+      available: true,
+      projectOn: !!project,
+      projectName: path.basename(target) || target,
+      plan: this.arPlans.get(s.key) || null,
+      canNow: !!ar.canResumeNow(s),
+    };
+  }
+
+  /** The folder the panel's switch turns on for a chat: this window's workspace folder it is in, else its own folder */
+  autoResumeTarget(s) {
+    const cwd = s && typeof s.cwd === 'string' && path.isAbsolute(s.cwd) ? s.cwd : null;
+    if (!cwd) return null;
+    return this.ws().paths.find((p) => scopeLib.cwdInWorkspace(cwd, { paths: [p] })) || cwd;
+  }
+
+  /**
+   * A plan that just got scheduled is announced once, in one window, with [Cancel] [Resume now]: a focused window claims
+   * it at once; with no window focused it waits until one gets focus, and is dropped once the plan has run or changed.
+   */
+  announcePlans() {
+    if (this.stopped) return;
+    const due = new Map();
+    for (const [key, plan] of this.arPlans) {
+      if (plan && plan.state === 'scheduled') due.set(`${AUTORESUME_NOTICE_PREFIX}${plan.stopId}|${plan.attempt}`, key);
+    }
+    for (const id of [...this.arNoticed]) if (!due.has(id)) this.arNoticed.delete(id);
+    if (!this.windowFocused()) return;
+    for (const [id, key] of due) {
+      if (this.arNoticed.has(id)) continue;
+      this.arNoticed.add(id);
+      if (notifyLib.claimOnce(this.notifyDir(), id, Date.now())) this.autoResumePlanToast(key);
+    }
+  }
+
+  /** The notice for a plan that just got scheduled; its buttons act only while that same plan is still scheduled (else a note says so) */
+  autoResumePlanToast(key) {
+    const plan = this.arPlans.get(key);
+    if (!plan || this.stopped) return;
+    const text = this.t('autoresume.toast.planned', {
+      project: plan.projectName, time: this.i18n.fmtClock(plan.atMs, Date.now()), n: plan.attempt, max: plan.max,
+    });
+    const cancel = this.t('autoresume.btn.cancel');
+    const resume = this.t('autoresume.btn.resumeNow');
+    Promise.resolve(vscode.window.showInformationMessage(text, cancel, resume)).then((pick) => {
+      const cur = this.arPlans.get(key);
+      const same = !!cur && cur.state === 'scheduled' && cur.stopId === plan.stopId && cur.attempt === plan.attempt;
+      if (!pick || this.stopped) return undefined;
+      if (!same) return vscode.window.showInformationMessage(this.t('autoresume.toast.stale'));
+      return pick === cancel ? this.autoResumeCancel(key) : this.autoResumeNow(key);
+    }).catch((err) => this.log(this.t('ext.log.failed', { what: 'autoResume', error: errText(err) })));
+  }
+
+  /** An automatic resume ran or gave up (only the window that ran it hears of it): push at once, say how it went, redraw */
+  onAutoResumeOutcome(o) {
+    if (this.stopped || !o || o.type !== 'autoResume') return;
+    if (this.push) this.guard('push', () => this.push.update({ autoResumeEvents: [o] }));
+    this.autoResumeResultToast(o);
+    this.render();
+  }
+
+  /**
+   * How a resume went: resumed / continued as a copy as information; failed / gave up as a warning with [Show log], and
+   * [Open terminal] when Claude Code refused a folder it doesn't trust yet
+   */
+  autoResumeResultToast(o) {
+    if (this.stopped || !o) return;
+    const code = typeof o.error === 'string' ? `autoresume.error.${o.error}` : '';
+    const vars = { project: o.projectName || '', n: o.attempt, max: o.max, reason: code && this.i18n.has(code) ? this.t(code) : '' };
+    const w = vscode.window;
+    if (o.outcome === 'resumed' || o.outcome === 'copied') {
+      Promise.resolve(w.showInformationMessage(this.t(`autoresume.toast.${o.outcome}`, vars))).catch(noop);
+      return;
+    }
+    if (o.outcome !== 'failed' && o.outcome !== 'gaveUp') return;
+    const showLog = this.t('autoresume.btn.showLog');
+    const terminal = o.outcome === 'failed' && o.error === 'untrusted' ? this.t('autoresume.btn.openTerminal') : null;
+    Promise.resolve(w.showWarningMessage(this.t(`autoresume.toast.${o.outcome}`, vars), ...(terminal ? [terminal, showLog] : [showLog])))
+      .then((pick) => {
+        if (!pick || this.stopped) return;
+        if (pick === terminal) this.autoResumeTrustTerminal(o);
+        else if (pick === showLog && this.output) this.output.show(true);
+      })
+      .catch((err) => this.log(this.t('ext.log.failed', { what: 'autoResume', error: errText(err) })));
+  }
+
+  /**
+   * [Open terminal] after failed/untrusted: a terminal in the chat's folder with the Claude Code CLI typed but not run
+   * (Enter is the user's). Run there once, Claude Code asks whether to trust the folder; after that `--bg` works in it.
+   */
+  autoResumeTrustTerminal(o) {
+    const s = o && o.key ? this.byKey.get(o.key) : null;
+    const dir = [s && s.cwd, o && o.project].find((p) => typeof p === 'string' && path.isAbsolute(p));
+    if (!dir) return;
+    const found = this.findClaudeCli();
+    const opts = { name: 'Claude Code', cwd: dir };
+    // On Windows the typed command is PowerShell syntax
+    if (process.platform === 'win32') opts.shellPath = 'powershell.exe';
+    const term = vscode.window.createTerminal(opts);
+    term.show();
+    term.sendText(require('./lib/core/autoresume').trustCommand(found.path || null, process.platform), false);
+    Promise.resolve(vscode.window.showInformationMessage(this.t('autoresume.terminal.sent'))).catch(noop);
+  }
+
+  /**
+   * "Continue in background" (the panel's button, the context menus, a plan notice): `claude --bg --resume` now, whether
+   * or not the project has auto-resume on; the stop then gets no automatic resume. null from the runtime: it did not run
+   * (the chat moved on, or another window is already on it; the log says which).
+   */
+  async autoResumeNow(key) {
+    const ar = this.autoResume;
+    if (!ar || !this.byKey.has(key)) return;
+    const out = await ar.resumeNow(key);
+    if (out) this.autoResumeResultToast(out);
+    this.render();
+  }
+
+  /** Cancels the scheduled auto-resume of this stop (the next stop of the chat is planned again) */
+  autoResumeCancel(key) {
+    const ar = this.autoResume;
+    const plan = this.arPlans.get(key);
+    if (!ar || !plan || plan.state !== 'scheduled') return;
+    ar.cancel(key);
+    Promise.resolve(vscode.window.showInformationMessage(this.t('autoresume.toast.cancelled'))).catch(noop);
+    this.render();
+  }
+
+  // agentMonitor.autoResume.now / .cancel: the context menus and "…" pass the chat; without an argument one is picked
+  async autoResumeNowCmd(arg) {
+    const ok = (s) => fmt.autoResumeFlags(this.autoResumeInfo(s)).bgResumable;
+    const key = this.keyOf(arg) || (arg == null ? await this.pickSessionKey(ok) : null);
+    const s = key ? this.byKey.get(key) : null;
+    if (!s) return;
+    if (!ok(s)) {
+      const info = this.autoResumeInfo(s);
+      const project = (info && info.projectName) || String(s.title || s.id || '');
+      vscode.window.showInformationMessage(this.t('autoresume.toast.failed', { project, reason: this.t('autoresume.error.notResumable') }));
+      return;
+    }
+    await this.autoResumeNow(key);
+  }
+
+  async autoResumeCancelCmd(arg) {
+    const ok = (s) => fmt.autoResumeFlags(this.autoResumeInfo(s)).autoResumePending;
+    const key = this.keyOf(arg) || (arg == null ? await this.pickSessionKey(ok) : null);
+    if (key) this.autoResumeCancel(key);
+  }
+
+  /**
+   * The panel's project switch: on → the folder autoResumeTarget picks; off → the folder with auto-resume on that the chat
+   * is in (which may be a parent folder, so other chats under it stop being resumed too)
+   */
+  async setAutoResumeProject(s, on) {
+    const ar = this.autoResume;
+    if (!ar || !s) return;
+    const dir = on ? this.autoResumeTarget(s) : ar.projectFor(s);
+    if (!dir) return;
+    await ar.setProject(dir, !!on);
+    this.render();
+  }
+
+  /**
+   * agentMonitor.autoResume.projects: a multi-select list of this window's folders and the folders that have auto-resume
+   * on elsewhere (checked = on); only what changed is written. The list lives in globalState (this computer only), never
+   * in settings a workspace could change.
+   */
+  async pickAutoResumeProjects() {
+    const ar = this.autoResume;
+    const same = (a, b) => scopeLib.cwdInWorkspace(a, { paths: [b] }) && scopeLib.cwdInWorkspace(b, { paths: [a] });
+    const items = [];
+    const add = (dir, other) => {
+      if (items.some((it) => same(it.dir, dir))) return;
+      items.push({
+        label: path.basename(dir) || dir, description: other ? this.t('autoresume.pick.otherWindow') : undefined,
+        detail: dir, dir, picked: other || ar.isProjectOn(dir),
+      });
+    };
+    for (const dir of this.ws().paths) add(dir, false);
+    for (const dir of ar.projects()) add(dir, true);
+    if (!items.length) {
+      vscode.window.showInformationMessage(this.t('autoresume.pick.none'));
+      return;
+    }
+    const chosen = await vscode.window.showQuickPick(items, {
+      canPickMany: true, title: this.t('autoresume.pick.title'), placeHolder: this.t('autoresume.pick.placeholder'), matchOnDetail: true,
+    });
+    if (!chosen) return;
+    const on = new Set(chosen.map((it) => it.dir));
+    for (const it of items) {
+      if (on.has(it.dir) !== it.picked) await ar.setProject(it.dir, on.has(it.dir));
+    }
+    const n = ar.projects().length;
+    vscode.window.showInformationMessage(n ? this.t('autoresume.pick.saved', { n }) : this.t('autoresume.pick.savedNone'));
+    this.render();
+  }
+
   // ---------- Remote push ----------
 
   // The runtime (lib/push-runtime.js) and the agentMonitor.push.setup command (lib/push-setup.js); if either fails to
@@ -1542,17 +1874,19 @@ class Controller {
       .catch(noop);
   }
 
+  /** A setting's value in user settings (inspect().globalValue): a workspace value is ignored; undefined when not set there */
+  userSetting(key) {
+    try {
+      const i = this.cfg().inspect(key);
+      return i ? i.globalValue : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Push settings from user settings only: a workspace value is ignored (inspect().globalValue), defaults in lib/push.js */
   pushSettings() {
-    const c = this.cfg();
-    const g = (k) => {
-      try {
-        const i = c.inspect(k);
-        return i ? i.globalValue : undefined;
-      } catch {
-        return undefined;
-      }
-    };
+    const g = (k) => this.userSetting(k);
     const channels = g('push.channels');
     return {
       enabled: g('push.enabled') === true,
@@ -1938,7 +2272,7 @@ class Controller {
     if (!s || !m || typeof m.sessionMenuItems !== 'function') return;
     const L = this.lamps && this.lamps.bySession.get(key);
     const flags = m._internal && typeof m._internal.flagsOf === 'function'
-      ? m._internal.flagsOf(fmt.sessionContextValue(s, L ? L.lamp : undefined)) : {};
+      ? m._internal.flagsOf(fmt.sessionContextValue(s, L ? L.lamp : undefined, this.autoResumeInfo(s))) : {};
     const titles = this.commandTitles();
     const items = [];
     let group = null;

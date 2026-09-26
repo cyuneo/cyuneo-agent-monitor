@@ -11,6 +11,8 @@
 // - Go to Chat: lib/jump.js is the real module, but its process list, open-file holders, Claude live registry,
 //   window raising and osascript calls come from fakes (jumpFake), so no process is ever listed or run; terminals are fake
 //   objects in window.terminals.
+// - Auto-resume: lib/autoresume-runtime.js is the real module, but its spawn is a fake (arFake) that only records the
+//   command and prints a canned answer, and the tests fire its plan timer by hand, so the claude CLI is never run.
 // - All data is synthetic; nothing is read from ~/.claude or ~/.codex. Temp files go under AGENT_MONITOR_TEST_TMP (or the system temp dir if unset) and are deleted afterwards.
 
 const assert = require('assert');
@@ -34,7 +36,7 @@ const log = {
   contexts: {}, executed: [], opened: [], updates: [], output: [], workers: [], progress: [],
   info: [], warn: [], error: [], clipboard: [], quickPicks: [], agentInputs: [], compactSnapshots: [],
   compactDeps: null, reveals: [], treeViews: {}, webviews: {}, statusItem: null,
-  handoffs: [], autoDeps: null, storageOpens: [], inputs: [], historyOpens: [], external: [],
+  handoffs: [], autoDeps: null, storageOpens: [], inputs: [], historyOpens: [], external: [], createdTerminals: [],
 };
 const config = {}; // setting name -> { globalValue, workspaceValue }
 const listeners = { config: [], folders: [], tabs: [], tabGroups: [], windowState: [], terminals: [] };
@@ -165,6 +167,12 @@ const vscode = {
     },
     onDidChangeWindowState: on(listeners.windowState),
     terminals: [], // fake integrated terminals: { name, processId: Promise<pid>, show() }
+    // terminals the extension opens: only recorded (options, shown, text typed with or without Enter)
+    createTerminal: (opts) => {
+      const t = { opts, shown: false, sent: [], show() { t.shown = true; }, sendText(text, addNewLine) { t.sent.push([text, addNewLine]); }, dispose() {} };
+      log.createdTerminals.push(t);
+      return t;
+    },
     onDidOpenTerminal: on(listeners.terminals),
     onDidCloseTerminal: on(listeners.terminals),
     createOutputChannel: () => ({ appendLine: (l) => log.output.push(l), append() {}, show() {}, dispose() {} }),
@@ -265,7 +273,7 @@ const autoWrap = realAuto && {
   },
 };
 // simulate a missing module: when set to {}, the extension should register placeholder commands
-const modOverride = { autocompact: null, storage: null, history: null };
+const modOverride = { autocompact: null, storage: null, history: null, autoresume: null };
 // storage page: only records the deps passed when it opens (the page itself is covered by the storage tests)
 const storageWrap = {
   openStorageView(context, deps) { log.storageOpens.push(deps); return { reveal() {} }; },
@@ -404,6 +412,53 @@ const pushRtWrap = {
   ...realPushRt,
   createPushRuntime: (deps) => realPushRt.createPushRuntime({ ...deps, clock: pushNow, timing: PUSH_TIMING }),
 };
+// Auto-resume: the real runtime with a fake spawn (no process is ever started: `--help` answers that --bg exists, a
+// resume prints arFake.out and exits with arFake.code), timers the tests fire by hand and a clock they move ahead
+const realArRt = require(path.join(ROOT, 'lib', 'autoresume-runtime'));
+const arFake = { runs: [], helps: 0, out: '', code: 0, clock: 0, timers: [], runtimes: [] };
+function fakeChild(stdout, code) {
+  const child = new NodeEmitter();
+  child.stdout = new NodeEmitter();
+  child.stderr = new NodeEmitter();
+  child.kill = () => true;
+  setImmediate(() => {
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    child.emit('exit', code, null);
+    child.emit('close', code, null);
+  });
+  return child;
+}
+const arWrap = {
+  ...realArRt,
+  createAutoResumeRuntime(deps) {
+    const rt = realArRt.createAutoResumeRuntime({
+      ...deps,
+      now: () => Date.now() + arFake.clock,
+      setTimeout: (fn, ms) => { const h = { fn, ms, unref() {} }; arFake.timers.push(h); return h; },
+      clearTimeout: (h) => { const i = arFake.timers.indexOf(h); if (i >= 0) arFake.timers.splice(i, 1); },
+      spawn: (cmd, args, opts) => {
+        if (args[0] === '--help') {
+          arFake.helps++;
+          return fakeChild('Usage: claude [options] [prompt]\n  --bg  Run the session in the background\n', 0);
+        }
+        arFake.runs.push({ cmd, args, opts });
+        return fakeChild(arFake.out, arFake.code);
+      },
+    });
+    arFake.runtimes.push(rt);
+    return rt;
+  },
+};
+// Fires the runtime's plan timer (its onTimer; not the timeouts of a running child)
+function fireArTimers() {
+  const due = arFake.timers.filter((h) => h.fn && h.fn.name === 'onTimer');
+  for (const h of due) {
+    const i = arFake.timers.indexOf(h);
+    if (i >= 0) arFake.timers.splice(i, 1);
+    h.fn();
+  }
+  return due.length;
+}
 // Network: every request lands here and is only recorded (a real request would be a test bug); tests set the answer
 const net = { calls: [], answer: null };
 globalThis.fetch = async (url, init) => {
@@ -439,6 +494,7 @@ Module._load = function (request, parent) {
   if (fromExt && request === './lib/notify') return notifyWrap;
   if (fromExt && request === './lib/shared-scan') return sharedWrap;
   if (fromExt && request === './lib/push-runtime') return pushRtWrap;
+  if (fromExt && request === './lib/autoresume-runtime') return modOverride.autoresume || arWrap;
   if (fromExt && request === './lib/jump') return jumpWrap;
   return origLoad.apply(this, arguments);
 };
@@ -3023,6 +3079,7 @@ async function pushTests() {
       assert.strictEqual(log.quickPicks[before + 2].o.canPickMany, true);
       assert.deepStrictEqual(config['push.events'].globalValue, {
         needsYou: true, error: true, limitHit: true, limitReset: false, usageHigh: true, costDaily: false, contextHigh: true,
+        autoResume: true,
       });
     } finally {
       quickPickAnswer = null;
@@ -3477,6 +3534,252 @@ async function pushTests() {
 // Network access switch (agentMonitor.network.allow, lib/network.js)
 // ---------------------------------------------------------------------------
 
+async function autoResumeTests() {
+  // the claude CLI the setting points at: never run (spawn is arFake's), it only has to exist and be executable
+  const cli = path.join(TMP, 'bin', 'claude');
+  fs.mkdirSync(path.dirname(cli), { recursive: true });
+  fs.writeFileSync(cli, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const win = activateWindow('win-autoresume', { 'claude.cliPath': cli });
+  const ctl = win.ctl;
+  const gs = win.context.globalState;
+  const PROJECTS = 'agentMonitor.autoResume.projects';
+  const pushInputs = [];
+  const pushUpdate = ctl.push.update;
+  ctl.push.update = (input) => { pushInputs.push(input); return pushUpdate(input); };
+  const pushedOutcomes = () => pushInputs.flatMap((x) => x.autoResumeEvents || []);
+  const settle = async () => { for (let i = 0; i < 10; i++) await tick(); };
+  const byKey = (k) => ctl.byKey.get(k);
+  const ws = path.basename(WS);
+  // Claude chats that stopped on an API error `ago` ms ago, in WS unless said otherwise
+  const failed = (id, title, ago, o = {}) => session({ id, title, main: agent({ status: st('apiError', Date.now() - ago) }), ...o });
+  // Sends the snapshot, moves the clock past the plan (a past time becomes now + 5 s) and fires the runtime's timer
+  const runDue = async (sessions) => {
+    win.send(sessions);
+    await settle();
+    arFake.clock = 6000;
+    const fired = fireArTimers();
+    await settle();
+    arFake.clock = 0;
+    return fired;
+  };
+  const ECHO = '44444444-4444-4444-8444-444444444444';
+  try {
+    await test('auto-resume is off until a project is turned on: no plan; the panel offers the switch for Claude Code chats only', async () => {
+      win.send(fixtures());
+      await settle();
+      assert.strictEqual(ctl.arPlans.size, 0);
+      const info = ctl.autoResumeInfo(byKey(DELTA));
+      assert.deepStrictEqual(info, { available: true, projectOn: false, projectName: ws, plan: null, canNow: true });
+      assert.strictEqual(ctl.autoResumeInfo(byKey(GAMMA)), null, 'not for Codex');
+      assert.strictEqual(ctl.autoResumeInfo(byKey(ALPHA)).canNow, false, 'a chat that is working is not continued in the background');
+      assert.ok(/\bbgResumable\b/.test(fmt.sessionContextValue(byKey(DELTA), 'error', info)));
+      assert.deepStrictEqual(arFake.runs, []);
+    });
+
+    await test('turning the project on from the panel plans the usage-limit chat a minute after the reset: one notice, push gets the plan, the menu can cancel it', async () => {
+      const n = log.info.length;
+      await ctl.setAutoResumeProject(byKey(DELTA), true);
+      assert.deepStrictEqual(gs.get(PROJECTS), [WS]);
+      const plan = ctl.arPlans.get(DELTA);
+      assert.deepStrictEqual([plan.state, plan.trigger, plan.atMs, plan.attempt, plan.max, plan.projectName],
+        ['scheduled', 'limit', NOW + HOUR + 60e3, 1, 3, ws]);
+      const notice = i18n.t('autoresume.toast.planned', { project: ws, time: i18n.fmtClock(plan.atMs, Date.now()), n: 1, max: 3 });
+      assert.deepStrictEqual(log.info.slice(n), [notice]);
+      assert.strictEqual(last(pushInputs).autoResume.get(DELTA).stopId, plan.stopId, 'push gets the plans of the same render');
+      const info = ctl.autoResumeInfo(byKey(DELTA));
+      assert.ok(info.projectOn);
+      assert.ok(/\bautoResumePending\b/.test(fmt.sessionContextValue(byKey(DELTA), 'error', info)));
+      // the next snapshot does not announce the same plan again
+      win.send(fixtures());
+      await settle();
+      assert.deepStrictEqual(log.info.slice(n), [notice]);
+    });
+
+    await test('Cancel on the notice drops the auto-resume of that stop only; the next stop of the chat is planned again', async () => {
+      const cancel = i18n.t('autoresume.btn.cancel');
+      infoAnswer = (m, items) => (items.includes(cancel) ? cancel : undefined);
+      try {
+        assert.strictEqual(await runDue([...fixtures(), failed(ECHO, 'Echo chat', 10 * MIN)]), 1);
+      } finally {
+        infoAnswer = null;
+      }
+      assert.ok(log.info.includes(i18n.t('autoresume.toast.cancelled')));
+      assert.strictEqual(ctl.arPlans.get(`claude:${ECHO}`), undefined);
+      assert.deepStrictEqual(arFake.runs, [], 'a cancelled stop is not resumed');
+      win.send([...fixtures(), failed(ECHO, 'Echo chat', 9 * MIN)]);
+      await settle();
+      assert.strictEqual(ctl.arPlans.get(`claude:${ECHO}`).state, 'scheduled');
+    });
+
+    await test('when the time comes: one run of claude --bg --resume <id> <resume prompt> in the chat\'s folder, without a shell; the outcome goes to push and a notice', async () => {
+      const echo = failed(ECHO, 'Echo chat', 8 * MIN);
+      const n = log.info.length;
+      assert.strictEqual(await runDue([...fixtures(), echo]), 1);
+      assert.strictEqual(arFake.runs.length, 1);
+      const run = arFake.runs[0];
+      assert.strictEqual(run.cmd, cli);
+      assert.deepStrictEqual(run.args, ['--bg', '--resume', ECHO, i18n.t('resume.prompt.claude')]);
+      assert.strictEqual(run.opts.cwd, WS);
+      assert.strictEqual(run.opts.shell, false);
+      assert.ok(log.info.slice(n).includes(i18n.t('autoresume.toast.resumed', { project: ws })), log.info.slice(n).join('\n'));
+      assert.deepStrictEqual(pushedOutcomes().map((o) => [o.outcome, o.sessionId, o.attempt, o.max]), [['resumed', ECHO, 1, 3]]);
+      assert.ok(fs.readFileSync(path.join(win.gs, 'autoresume.json'), 'utf8').includes(ECHO), 'the attempt is on record in global storage');
+      // the same stop is never run twice (the timer that fires now is the usage-limit chat's, an hour away)
+      await runDue([...fixtures(), echo]);
+      assert.strictEqual(arFake.runs.length, 1);
+      assert.strictEqual(ctl.arPlans.get(`claude:${ECHO}`), undefined);
+    });
+
+    await test('the chat was still open → a copy continues (notice says so); a failed run → a warning with Show log', async () => {
+      const FOX = '55555555-5555-4555-8555-555555555555';
+      const COPY = '66666666-6666-4666-8666-666666666666';
+      arFake.out = `${FOX} is open in another Claude Code process, so this started a copy as ${COPY}. The original conversation is unchanged.\n`;
+      await runDue([...fixtures(), failed(FOX, 'Foxtrot chat', 7 * MIN)]);
+      assert.ok(log.info.includes(i18n.t('autoresume.toast.copied', { project: ws })));
+      assert.strictEqual(last(pushedOutcomes()).copySessionId, COPY);
+      const GOLF = '77777777-7777-4777-8777-777777777777';
+      arFake.out = 'Error: something went wrong\n';
+      arFake.code = 1;
+      const w = log.warn.length;
+      try {
+        await runDue([...fixtures(), failed(GOLF, 'Golf chat', 6 * MIN)]);
+      } finally {
+        arFake.out = '';
+        arFake.code = 0;
+      }
+      assert.deepStrictEqual(log.warn.slice(w), [i18n.t('autoresume.toast.failed', { project: ws, reason: i18n.t('autoresume.error.exit') })]);
+      assert.deepStrictEqual(last(pushedOutcomes()).error, 'exit');
+    });
+
+    await test('Claude Code 2.1.283 output: another job id after "backgrounded ·" is a copy, recorded by that job id', async () => {
+      const IND = '99999999-9999-4999-8999-999999999999';
+      arFake.out = 'backgrounded · ec451a24\n  claude agents             list sessions\n  claude attach ec451a24    open in this terminal\n';
+      try {
+        await runDue([...fixtures(), failed(IND, 'India chat', 5 * MIN)]);
+      } finally {
+        arFake.out = '';
+      }
+      assert.deepStrictEqual([last(pushedOutcomes()).outcome, last(pushedOutcomes()).copySessionId], ['copied', 'ec451a24']);
+      const state = JSON.parse(fs.readFileSync(path.join(win.gs, 'autoresume.json'), 'utf8'));
+      assert.strictEqual(state.aliases.ec451a24, IND);
+    });
+
+    await test('a folder Claude Code does not trust yet: the warning says how to fix it and offers Open terminal, which types the CLI in the chat\'s folder without pressing Enter', async () => {
+      const JUL = 'aaaaaaaa-0000-4000-8000-00000000000a';
+      arFake.out = `Workspace not trusted. Run \`claude\` in ${WS} once and accept the trust prompt, then retry.\n`;
+      arFake.code = 1;
+      const open = i18n.t('autoresume.btn.openTerminal');
+      const offered = [];
+      warnAnswer = (m, items) => { offered.push(items); return items.includes(open) ? open : undefined; };
+      const w = log.warn.length;
+      const terms = log.createdTerminals.length;
+      try {
+        await runDue([...fixtures(), failed(JUL, 'Juliett chat', 4 * MIN)]);
+        await settle();
+      } finally {
+        arFake.out = '';
+        arFake.code = 0;
+        warnAnswer = null;
+      }
+      assert.deepStrictEqual(log.warn.slice(w), [i18n.t('autoresume.toast.failed', { project: ws, reason: i18n.t('autoresume.error.untrusted') })]);
+      assert.deepStrictEqual(last(offered), [open, i18n.t('autoresume.btn.showLog')]);
+      assert.strictEqual(last(pushedOutcomes()).error, 'untrusted');
+      assert.strictEqual(log.createdTerminals.length, terms + 1);
+      const t = last(log.createdTerminals);
+      assert.strictEqual(t.opts.cwd, WS);
+      assert.strictEqual(t.opts.shellPath, process.platform === 'win32' ? 'powershell.exe' : undefined);
+      assert.strictEqual(t.shown, true);
+      // the CLI as the shell of this platform takes it (`& '<path>'` in PowerShell), typed, never run
+      const typed = require(path.join(ROOT, 'lib', 'core', 'autoresume')).trustCommand(cli, process.platform);
+      assert.deepStrictEqual(t.sent, [[typed, false]]);
+      if (process.platform !== 'win32') assert.strictEqual(typed, cli);
+      assert.strictEqual(last(log.info), i18n.t('autoresume.terminal.sent'));
+    });
+
+    await test('a plan notice answered after the plan ran or changed does nothing and says so', async () => {
+      const KIL = 'bbbbbbbb-0000-4000-8000-00000000000b';
+      const resume = i18n.t('autoresume.btn.resumeNow');
+      let answer = null;
+      const gate = new Promise((r) => { answer = r; });
+      infoAnswer = (m, items) => (items.includes(resume) ? gate.then(() => resume) : undefined);
+      const runs = arFake.runs.length;
+      try {
+        win.send([...fixtures(), failed(KIL, 'Kilo chat', 3 * MIN)]);
+        await settle();
+        // the chat moves on before the answer comes
+        win.send([...fixtures(), session({ id: KIL, title: 'Kilo chat', main: agent({ status: st('thinking', Date.now()) }) })]);
+        await settle();
+        answer();
+        await settle();
+      } finally {
+        infoAnswer = null;
+      }
+      assert.strictEqual(arFake.runs.length, runs);
+      assert.strictEqual(last(log.info), i18n.t('autoresume.toast.stale'));
+    });
+
+    await test('Continue in background from the context menu works with auto-resume off: one run, a notice, nothing pushed; a chat that is working is refused', async () => {
+      await ctl.setAutoResumeProject(byKey(DELTA), false);
+      assert.deepStrictEqual(gs.get(PROJECTS), []);
+      const HOTEL = '88888888-8888-4888-8888-888888888888';
+      const hotel = session({ id: HOTEL, title: 'Hotel chat', cwd: OTHER, main: agent({ status: st('interrupted', Date.now() - MIN) }) });
+      win.send([...fixtures(), hotel]);
+      await settle();
+      const runs = arFake.runs.length;
+      const pushed = pushedOutcomes().length;
+      await registered.get('agentMonitor.autoResume.now')({ webviewSection: 'session', sessionKey: hotel.key, bgResumable: true });
+      await settle();
+      assert.strictEqual(arFake.runs.length, runs + 1);
+      assert.strictEqual(last(arFake.runs).opts.cwd, OTHER);
+      assert.strictEqual(last(log.info), i18n.t('autoresume.toast.resumed', { project: path.basename(OTHER) }));
+      assert.strictEqual(pushedOutcomes().length, pushed, 'a run the user asked for is not pushed');
+      await registered.get('agentMonitor.autoResume.now')({ sessionKey: ALPHA });
+      await settle();
+      assert.strictEqual(arFake.runs.length, runs + 1);
+      assert.strictEqual(last(log.info), i18n.t('autoresume.toast.failed', { project: ws, reason: i18n.t('autoresume.error.notResumable') }));
+    });
+
+    await test('Auto-resume: choose projects… lists this window\'s folders (checked when on) and folders turned on elsewhere; only changes are written', async () => {
+      await gs.update(PROJECTS, [OTHER]);
+      let items = null;
+      quickPickAnswer = (it) => { items = it; return it.filter((x) => x.dir === WS); };
+      try {
+        await registered.get('agentMonitor.autoResume.projects')();
+      } finally {
+        quickPickAnswer = null;
+      }
+      assert.strictEqual(last(log.quickPicks).o.canPickMany, true);
+      assert.deepStrictEqual(items.map((x) => [x.label, x.picked, x.description]),
+        [[ws, false, undefined], [path.basename(OTHER), true, i18n.t('autoresume.pick.otherWindow')]]);
+      assert.deepStrictEqual(gs.get(PROJECTS), [WS]);
+      assert.strictEqual(last(log.info), i18n.t('autoresume.pick.saved', { n: 1 }));
+    });
+  } finally {
+    infoAnswer = null;
+    quickPickAnswer = null;
+    win.close();
+  }
+
+  await test('the runtime fails to load: its commands say it isn\'t available and the panel shows nothing about it', async () => {
+    modOverride.autoresume = {};
+    const w2 = activateWindow('win-autoresume-missing');
+    try {
+      assert.strictEqual(w2.ctl.autoResume, null);
+      assert.strictEqual(w2.ctl.autoResumeUi, null);
+      w2.send(fixtures());
+      await tick();
+      assert.strictEqual(w2.ctl.autoResumeInfo(w2.ctl.byKey.get(DELTA)), null);
+      for (const id of ['projects', 'now', 'cancel']) {
+        await registered.get('agentMonitor.autoResume.' + id)({ sessionKey: DELTA });
+        assert.strictEqual(last(log.error), i18n.t('ext.autoResumeUnavailable'));
+      }
+    } finally {
+      modOverride.autoresume = null;
+      w2.close();
+    }
+  });
+}
+
 async function networkTests() {
   const network = require(path.join(ROOT, 'lib', 'network'));
   const run = () => registered.get('agentMonitor.push.setup')();
@@ -3755,7 +4058,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.5.0');
+    assert.strictEqual(pkg.version, '0.6.0');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');
@@ -3839,6 +4142,7 @@ async function manifestTests() {
       compact: '$(screen-normal)', handoff: '$(export)', setAutoCompact: '$(settings)', storage: '$(database)', history: '$(graph)',
       'push.setup': '$(bell)', 'network.allow': '$(globe)', 'network.block': '$(circle-slash)', 'network.toggle': undefined,
       goToChat: '$(link-external)',
+      'autoResume.projects': '$(debug-rerun)', 'autoResume.now': '$(debug-continue)', 'autoResume.cancel': '$(close)',
     };
     assert.deepStrictEqual([...commands].sort(), Object.keys(want).map((x) => 'agentMonitor.' + x).sort());
     for (const [id, icon] of Object.entries(want)) assert.strictEqual(c.commands.find((x) => x.command === 'agentMonitor.' + id).icon, icon, id);
@@ -3864,7 +4168,8 @@ async function manifestTests() {
     const order = ctxMenu.filter((m) => !m.group.startsWith('inline')).map((m) => m.group + ' ' + m.command.replace('agentMonitor.', ''));
     assert.deepStrictEqual(order[0], '0_goto@1 goToChat', 'Go to Chat comes first');
     assert.deepStrictEqual(order.filter((x) => x.startsWith('1_session')), [
-      '1_session@1 compact', '1_session@2 handoff', '1_session@3 setAutoCompact', '1_session@4 copyResume', '1_session@5 markSeen']);
+      '1_session@1 compact', '1_session@2 handoff', '1_session@3 setAutoCompact', '1_session@4 copyResume',
+      '1_session@5 autoResume.now', '1_session@6 autoResume.cancel', '1_session@7 markSeen']);
     assert.deepStrictEqual(order.filter((x) => x.startsWith('2_open')), ['2_open@1 openTranscript', '2_open@2 revealTranscript', '2_open@3 copyTranscriptPath']);
     // storage: the … menu in the bottom panel title bar (not in the navigation group)
     const st = c.menus['view/title'].filter((m) => m.command === 'agentMonitor.storage');
@@ -3903,7 +4208,7 @@ async function manifestTests() {
 
   await test('webview context menu: when = webviewId + webviewSection + compactable / resumable / handoff / autoCompact; evaluated against the data-vscode-context of the row', () => {
     const menu = c.menus['webview/context'];
-    assert.ok(Array.isArray(menu) && menu.length === 9);
+    assert.ok(Array.isArray(menu) && menu.length === 11);
     // minimal when evaluator: only supports key == 'v' / key / !key joined by && (all that is used here)
     const evalWhen = (when, ctx) => when.split('&&').map((x) => x.trim()).every((cl) => {
       let m = /^(\w+) == '([^']*)'$/.exec(cl);
@@ -3927,17 +4232,27 @@ async function manifestTests() {
     // Copilot rows: no handoff note and no auto-compact setting (Go to Chat is always there and says why when it can't)
     assert.deepStrictEqual(shown(row({ compactable: false, resumable: false, handoff: false, autoCompact: false })),
       ['goToChat', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    // auto-resume: "Continue in background" for a stopped Claude chat, "Cancel auto-resume" while one is scheduled
+    assert.deepStrictEqual(shown(row({ resumable: true, ...cc, bgResumable: true, autoResumePending: true })),
+      ['goToChat', 'handoff', 'setAutoCompact', 'copyResume', 'autoResume.now', 'autoResume.cancel', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    assert.deepStrictEqual(shown(row({ ...cc, bgResumable: false, autoResumePending: true })).filter((x) => x.startsWith('autoResume')), ['autoResume.cancel']);
     assert.deepStrictEqual(shown({}), [], 'no session menu in the content area (no webviewSection)');
     assert.deepStrictEqual(menu.filter((m) => evalWhen(m.when, { webviewId: 'other.view', webviewSection: 'session', compactable: true })), [], 'not shown in other webviews');
     // group order: session actions → open
-    assert.deepStrictEqual(menu.map((m) => m.group), ['0_goto@1', '1_session@1', '1_session@2', '1_session@3', '1_session@4', '1_session@5', '2_open@1', '2_open@2', '2_open@3']);
+    assert.deepStrictEqual(menu.map((m) => m.group), [
+      '0_goto@1', '1_session@1', '1_session@2', '1_session@3', '1_session@4', '1_session@5', '1_session@6', '1_session@7',
+      '2_open@1', '2_open@2', '2_open@3',
+    ]);
   });
 
   await test('menus: compact is in the overview tree context menu (viewItem =~ /\\bcompactable\\b/) and the webview context menu (compactable); only declared commands, views and settings are referenced', () => {
     const tree = c.menus['view/item/context'].filter((m) => m.command === 'agentMonitor.compact');
     assert.ok(tree.some((m) => !m.group.startsWith('inline') && m.when.includes(TREE_VIEWS) && m.when.includes('viewItem =~ /\\bcompactable\\b/')));
     assert.ok(c.menus['webview/context'].some((m) => m.command === 'agentMonitor.compact' && / && compactable$/.test(m.when)));
-    const contextValues = ['session', 'provider-claude', 'lamp-doneUnseen', 'resumable', 'compactable', 'goTo', 'agent', 'mainAgent', 'workflow'];
+    const contextValues = [
+      'session', 'provider-claude', 'lamp-doneUnseen', 'resumable', 'compactable', 'bgResumable', 'autoResumePending',
+      'goTo', 'agent', 'mainAgent', 'workflow',
+    ];
     for (const [menu, items] of Object.entries(c.menus)) {
       if (menu !== 'commandPalette' && !menu.startsWith('view/') && !menu.startsWith('webview/')) assert.ok(submenus.has(menu), `undeclared submenu ${menu}`);
       for (const it of items) {
@@ -3976,9 +4291,11 @@ async function manifestTests() {
   await test('Command Palette: commands that need a node argument are hidden; compact / handoff / setAutoCompact / storage / usage history / push setup are available', () => {
     // network.toggle is for key bindings: the palette shows Allow / Block Network Access, whichever applies
     const hidden = c.menus.commandPalette.filter((x) => x.when === 'false' && x.command !== 'agentMonitor.network.toggle').map((x) => x.command);
-    assert.deepStrictEqual(hidden.sort(), ['openTranscript', 'revealTranscript', 'copyTranscriptPath', 'markSeen', 'copyResume'].map((x) => 'agentMonitor.' + x).sort());
+    assert.deepStrictEqual(hidden.sort(), [
+      'openTranscript', 'revealTranscript', 'copyTranscriptPath', 'markSeen', 'copyResume', 'autoResume.now', 'autoResume.cancel',
+    ].map((x) => 'agentMonitor.' + x).sort());
     assert.strictEqual(nls['cmd.history'], 'Show Usage History');
-    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'history', 'push.setup', 'goToChat']) {
+    for (const id of ['compact', 'handoff', 'setAutoCompact', 'storage', 'history', 'push.setup', 'goToChat', 'autoResume.projects']) {
       assert.ok(!c.menus.commandPalette.some((x) => x.command === 'agentMonitor.' + id), id + ' should be visible in the Command Palette');
     }
   });
@@ -4029,7 +4346,9 @@ async function manifestTests() {
       onlyWorkspace: ['boolean', false],
       notifyNeedsYou: ['boolean', true], backgroundRefreshSeconds: ['number', 5], shareScanAcrossWindows: ['boolean', true],
       'push.enabled': ['boolean', false],
-      'push.events': ['object', { needsYou: true, error: true, limitHit: true, limitReset: true, usageHigh: true, costDaily: true, contextHigh: true }],
+      'push.events': ['object', {
+        needsYou: true, error: true, limitHit: true, limitReset: true, usageHigh: true, costDaily: true, contextHigh: true, autoResume: true,
+      }],
       'push.delaySeconds': ['number', 30], 'push.includeTitle': ['boolean', false], 'push.channels': ['array', []],
       'network.allow': ['boolean', false],
       'sound.enabled': ['boolean', false], 'sound.needsYou': ['string', 'default'], 'sound.error': ['string', 'default'],
@@ -4037,6 +4356,7 @@ async function manifestTests() {
       'quietHours.enabled': ['boolean', false], 'quietHours.start': ['string', '22:00'], 'quietHours.end': ['string', '08:00'],
       'quietHours.days': ['array', []], 'quietHours.allowErrors': ['boolean', false],
       'alerts.usagePercent': ['number', 90], 'alerts.dailyCost': ['number', 0], 'alerts.contextPercent': ['number', 0],
+      'autoResume.maxAttempts': ['number', 3], 'autoResume.errorDelayMinutes': ['number', 2], 'autoResume.afterLimit': ['boolean', true],
     };
     const props = c.configuration.properties;
     assert.deepStrictEqual(Object.keys(props).map((k) => k.replace(/^agentMonitor\./, '')).sort(), Object.keys(want).sort());
@@ -4059,6 +4379,10 @@ async function manifestTests() {
     }
     // the shared scan and the background interval concern every window on this machine, so they are user settings too
     for (const k of ['backgroundRefreshSeconds', 'shareScanAcrossWindows']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
+    // auto-resume starts Claude Code by itself: its settings are user settings only (the project list is in globalState)
+    for (const k of ['autoResume.maxAttempts', 'autoResume.errorDelayMinutes', 'autoResume.afterLimit']) {
+      assert.strictEqual(props['agentMonitor.' + k].scope, 'application', k);
+    }
     // notifications keep the default (window) scope: a window with them off simply never claims, and a machine setting would
     // neither sync nor apply from user settings in remote windows
     assert.strictEqual(props['agentMonitor.notifyNeedsYou'].scope, undefined);
@@ -4247,7 +4571,7 @@ async function providerTests() {
     results.push(false);
     console.log('  FAIL  (extension tests aborted)', err && err.stack);
   }
-  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Network access', networkTests], ['Copilot', providerTests]]) {
+  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Auto-resume', autoResumeTests], ['Network access', networkTests], ['Copilot', providerTests]]) {
     console.log(`\n${title}`);
     try {
       await fn();

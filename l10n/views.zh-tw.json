@@ -123,6 +123,7 @@
   "ext.storageUnavailable": "儲存頁面目前無法使用，詳情請見「智慧體監視器」輸出面板。",
   "ext.historyUnavailable": "用量歷史頁面目前無法使用，詳情請見「智慧體監視器」輸出面板。",
   "ext.pushUnavailable": "推播通知目前無法使用，詳情請見「智慧體監視器」輸出面板。",
+  "ext.autoResumeUnavailable": "自動續跑目前無法使用，詳情請見「智慧體監視器」輸出面板。",
   "ext.log.learnedCompact": "已實測 {model}（{window} 視窗）的自動壓縮點：{tokens}",
   "ext.compactUnavailable": "目前無法壓縮，詳情請見「智慧體監視器」輸出面板。",
   "ext.agentsUnavailable": "智慧體檢視載入失敗，詳情請見「智慧體監視器」輸出面板。",

@@ -840,8 +840,9 @@ test('session list view model: data-vscode-context content; no group label when 
   assert.strictEqual(vm.width, 210);
   const rows = vm.items.filter((x) => x.kind === 'session');
   assert.deepStrictEqual(rows.map((r) => r.key), [open.key, done.key]);
-  assert.deepStrictEqual(JSON.parse(rows[0].context), { webviewSection: 'session', sessionKey: open.key, compactable: true, resumable: false, handoff: true, autoCompact: true, preventDefaultContextMenuItems: true });
-  assert.deepStrictEqual(JSON.parse(rows[1].context), { webviewSection: 'session', sessionKey: done.key, compactable: false, resumable: true, handoff: true, autoCompact: true, preventDefaultContextMenuItems: true });
+  const noAr = { bgResumable: false, autoResumePending: false }; // no auto-resume provider
+  assert.deepStrictEqual(JSON.parse(rows[0].context), { webviewSection: 'session', sessionKey: open.key, compactable: true, resumable: false, handoff: true, autoCompact: true, ...noAr, preventDefaultContextMenuItems: true });
+  assert.deepStrictEqual(JSON.parse(rows[1].context), { webviewSection: 'session', sessionKey: done.key, compactable: false, resumable: true, handoff: true, autoCompact: true, ...noAr, preventDefaultContextMenuItems: true });
   assert.strictEqual(vm.items.filter((x) => x.kind === 'group').length, 2);
   const one = AV.buildSessionList({ arranged: createSessionOrder().arrange([done]), i18n, now: NOW, selectedKey: 'claude:nope' });
   assert.strictEqual(one.showGroups, false);
@@ -872,17 +873,24 @@ test('session menu: SESSION_MENU matches webview/context in package.json one to 
     assert.ok(m.group.startsWith(d.group + '@'), m.group);
   });
   assert.deepStrictEqual(AV.SESSION_MENU.map((m) => m.command.replace('agentMonitor.', '')),
-    ['goToChat', 'compact', 'handoff', 'setAutoCompact', 'copyResume', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
+    ['goToChat', 'compact', 'handoff', 'setAutoCompact', 'copyResume', 'autoResume.now', 'autoResume.cancel', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   const names = (f) => AV.sessionMenuItems(f).map((m) => m.command.replace('agentMonitor.', ''));
   // Go to Chat is on every session (when the jump is not possible, the command says why)
   assert.deepStrictEqual(names({}), ['goToChat', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   assert.deepStrictEqual(names({ handoff: true, autoCompact: true }), ['goToChat', 'handoff', 'setAutoCompact', 'markSeen', 'openTranscript', 'revealTranscript', 'copyTranscriptPath']);
   assert.ok(names({ compactable: true }).includes('compact') && !names({ compactable: true }).includes('copyResume'));
   assert.ok(names({ resumable: true }).includes('copyResume'));
-  assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-idle resumable compactable'), { compactable: true, resumable: true, handoff: true, autoCompact: true });
-  assert.deepStrictEqual(AV._internal.flagsOf('session provider-codex lamp-idle'), { compactable: false, resumable: false, handoff: true, autoCompact: true });
-  for (const p of ['copilot']) assert.deepStrictEqual(AV._internal.flagsOf(`session provider-${p} lamp-idle`), { compactable: false, resumable: false, handoff: false, autoCompact: false }, p);
-  assert.deepStrictEqual(AV._internal.flagsOf('session lamp-compactable'), { compactable: false, resumable: false, handoff: false, autoCompact: false }, 'whole-word match');
+  // auto-resume: "Continue in background" and "Cancel auto-resume" right after copyResume, each behind its own flag
+  assert.deepStrictEqual(names({ resumable: true, bgResumable: true, autoResumePending: true }).slice(1, 4), ['copyResume', 'autoResume.now', 'autoResume.cancel']);
+  assert.deepStrictEqual(names({ bgResumable: true }).filter((n) => n.startsWith('autoResume.')), ['autoResume.now']);
+  assert.deepStrictEqual(names({ autoResumePending: true }).filter((n) => n.startsWith('autoResume.')), ['autoResume.cancel']);
+  const noAr = { bgResumable: false, autoResumePending: false };
+  assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-idle resumable compactable'), { compactable: true, resumable: true, handoff: true, autoCompact: true, ...noAr });
+  assert.deepStrictEqual(AV._internal.flagsOf('session provider-codex lamp-idle'), { compactable: false, resumable: false, handoff: true, autoCompact: true, ...noAr });
+  for (const p of ['copilot']) assert.deepStrictEqual(AV._internal.flagsOf(`session provider-${p} lamp-idle`), { compactable: false, resumable: false, handoff: false, autoCompact: false, ...noAr }, p);
+  assert.deepStrictEqual(AV._internal.flagsOf('session lamp-compactable'), { compactable: false, resumable: false, handoff: false, autoCompact: false, ...noAr }, 'whole-word match');
+  assert.deepStrictEqual(AV._internal.flagsOf('session provider-claude lamp-error live bgResumable autoResumePending'),
+    { compactable: false, resumable: false, handoff: true, autoCompact: true, bgResumable: true, autoResumePending: true });
 });
 
 test('content empty state: offers "show all sessions" when showing only the workspace and it has no sessions; not while loading', () => {
@@ -1223,6 +1231,204 @@ test('media: guessed statuses are italic in the session bar and the table; the c
   const js = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
   assert.ok(/E\.status\.classList\.toggle\('guess', !!s\.guess\)/.test(js));
   assert.ok(/txt\(E\.costHead, m\.costHead \? m\.costHead\.text : t\('webview\.col\.cost'\)\)/.test(js), 'header text from the view model, default "Cost"');
+});
+
+// ---------- Auto-resume (docs/DESIGN.md §12) ----------
+// The autoresume.* strings live in l10n/autoresume.*.json; every expectation goes through i18n.t(key, vars), never literal text.
+
+const F = require('../lib/format');
+const HOUR = 60 * MIN;
+const tick = () => new Promise((r) => setImmediate(r));
+function arPlan(state, o = {}) {
+  return {
+    key: 'claude:11111111-0000-4000-8000-000000000001', sessionId: '11111111-0000-4000-8000-000000000001', project: '/work/demo', projectName: 'demo',
+    stopId: `11111111-0000-4000-8000-000000000001|apiError|${NOW - MIN}`, trigger: 'error', state, atMs: null, attempt: 1, max: 3, unavailable: null, ...o,
+  };
+}
+const arInfo = (o = {}) => ({ available: true, projectOn: true, projectName: 'demo', plan: null, canNow: false, ...o });
+// Fake provider: infoFor answers from a value or a function; now() finishes a little later, like starting `claude --bg`
+function arProvider(infoOf) {
+  const calls = [];
+  return {
+    calls,
+    infoFor: (s) => (typeof infoOf === 'function' ? infoOf(s) : infoOf),
+    now: (key) => { calls.push(['now', key]); return new Promise((r) => setTimeout(() => r({ outcome: 'resumed' }), 10)); },
+    cancel: (key) => { calls.push(['cancel', key]); },
+    setProjectFor: (s, on) => { calls.push(['project', s.key, on]); return Promise.resolve(); },
+  };
+}
+// The variables format.js formatAutoResume gives every state / reason sentence
+const arVars = (plan) => ({ time: plan.atMs != null ? i18n.fmtClock(plan.atMs, NOW) : '', n: plan.attempt, max: plan.max, project: 'demo' });
+
+test('auto-resume block: plan line for scheduled / self / noReset / gaveUp / running (dictionary texts), buttons and note follow the state', () => {
+  const s = session({ live: true, main: agent({ status: S.makeStatus('apiError', NOW - MIN) }) });
+  const block = (info) => build(s, { autoResume: arProvider(info) }).session.autoResume;
+  const cases = [
+    ['scheduled', { atMs: NOW + 2 * MIN }, { canNow: true, canCancel: true, icon: 'clock', tone: '' }],
+    ['self', { trigger: 'limit', atMs: NOW + HOUR }, { canNow: true, canCancel: false, icon: 'clock', tone: '' }],
+    ['noReset', { trigger: 'limit' }, { canNow: true, canCancel: false, icon: 'warning', tone: 'warning' }],
+    ['gaveUp', { attempt: 3 }, { canNow: true, canCancel: false, icon: 'warning', tone: 'warning' }],
+    ['running', { attempt: 2 }, { canNow: false, canCancel: false, icon: 'sync', tone: '' }], // never a second run while one is starting
+  ];
+  for (const [state, extra, want] of cases) {
+    const plan = arPlan(state, extra);
+    const ar = block(arInfo({ plan, canNow: true }));
+    assert.strictEqual(ar.state, state);
+    assert.strictEqual(ar.planText, i18n.t('autoresume.state.' + state, arVars(plan)), state);
+    assert.ok(!/\{\w+\}/.test(ar.planText), state + ': no unreplaced placeholders');
+    assert.strictEqual(ar.heading, i18n.t('autoresume.section'));
+    assert.strictEqual(ar.projectText, i18n.t('autoresume.project.on', { project: 'demo' }));
+    assert.strictEqual(ar.toggleText, i18n.t('autoresume.project.turnOff'));
+    assert.ok(ar.toggleTip.includes(i18n.t('autoresume.note.how')) && ar.toggleTip.includes(i18n.t('autoresume.note.claudeOnly')));
+    assert.strictEqual(ar.canNow, want.canNow, state);
+    assert.strictEqual(ar.nowText, want.canNow ? i18n.t('autoresume.btn.now') : '', state);
+    assert.strictEqual(ar.nowTip, want.canNow ? i18n.t('autoresume.note.copy') : '', state);
+    assert.strictEqual(ar.canCancel, want.canCancel, state);
+    assert.strictEqual(ar.cancelText, want.canCancel ? i18n.t('autoresume.btn.cancel') : '', state);
+    assert.strictEqual(ar.icon, want.icon, state);
+    assert.strictEqual(ar.tone, want.tone, state);
+    // the copy note: the chat is open and something may run in the background (here every case: a button or a scheduled / running plan)
+    assert.strictEqual(ar.noteText, i18n.t('autoresume.note.copy'), state);
+    assert.ok(ar.planTip.split('\n').includes(i18n.t('autoresume.note.copy')), state + ': also in the plan tooltip (narrow panels hide the note line)');
+  }
+  // chat not open: Claude Code resumes it in place, so the note stays in the button's tooltip only
+  const closed = build({ ...s, live: false }, { autoResume: arProvider(arInfo({ plan: arPlan('scheduled', { atMs: NOW + MIN }), canNow: true })) }).session.autoResume;
+  assert.strictEqual(closed.noteText, '');
+  assert.strictEqual(closed.nowTip, i18n.t('autoresume.note.copy'));
+  // a plan that can't run right now: the reason follows the state sentence
+  const plan = arPlan('scheduled', { atMs: NOW + 2 * MIN, unavailable: 'cliNotFound' });
+  const u = block(arInfo({ plan }));
+  assert.strictEqual(u.planText, [i18n.t('autoresume.state.scheduled', arVars(plan)), i18n.t('autoresume.unavailable.cliNotFound', arVars(plan))].join(F.SEP));
+  assert.strictEqual(u.icon, 'warning');
+  assert.strictEqual(u.tone, 'warning');
+  // nothing planned (project off): the block stays so the project can be switched on; no plan line, buttons or note
+  const off = block(arInfo({ projectOn: false }));
+  assert.strictEqual(off.projectOn, false);
+  assert.strictEqual(off.projectText, i18n.t('autoresume.project.off', { project: 'demo' }));
+  assert.strictEqual(off.toggleText, i18n.t('autoresume.project.turnOn'));
+  assert.deepStrictEqual([off.state, off.planText, off.canNow, off.canCancel, off.noteText], [null, '', false, false, '']);
+  // "Continue in background" is hidden while it is starting
+  const busy = build(s, { autoResume: arProvider(arInfo({ canNow: true })), autoResumeBusy: new Set([s.key]) }).session.autoResume;
+  assert.strictEqual(busy.canNow, false);
+  assert.strictEqual(busy.noteText, '');
+});
+
+test('auto-resume block: Claude Code chats only; no provider, no info, not available or a failing provider → no block at all', () => {
+  const s = session();
+  const on = arInfo({ plan: arPlan('scheduled', { atMs: NOW + MIN }), canNow: true });
+  assert.strictEqual(build(s).session.autoResume, null, 'no provider');
+  assert.strictEqual(build(s, { autoResume: arProvider(null) }).session.autoResume, null, 'no info for this session');
+  assert.strictEqual(build(s, { autoResume: arProvider({ ...on, available: false }) }).session.autoResume, null, 'not available');
+  assert.strictEqual(build(s, { autoResume: { infoFor: () => { throw new Error('boom'); } } }).session.autoResume, null, 'provider fails');
+  assert.ok(build(s, { autoResume: arProvider(on) }).session.autoResume, 'Claude chat with a provider');
+  for (const provider of ['codex', 'copilot']) {
+    const other = session({ provider, id: provider + '-thread-1' });
+    assert.strictEqual(build(other, { autoResume: arProvider(on) }).session.autoResume, null, provider + ': nothing, whatever the provider says');
+    assert.ok(!/bgResumable|autoResumePending/.test(F.sessionContextValue(other, 'error', on)), provider);
+  }
+});
+
+test('auto-resume in the session list: data-vscode-context carries bgResumable / autoResumePending, the row tooltip has the plan line', () => {
+  const { a, b, input } = listFixture();
+  const plan = arPlan('scheduled', { atMs: NOW + 2 * MIN });
+  const ar = arProvider((s) => (s.key === a.key ? arInfo({ plan, canNow: true }) : arInfo({ projectOn: false })));
+  const rows = AV.buildSessionList({ ...input, i18n, autoResume: ar }).items.filter((x) => x.kind === 'session');
+  const row = (k) => rows.find((r) => r.key === k);
+  const ctx = (k) => JSON.parse(row(k).context);
+  assert.strictEqual(ctx(a.key).bgResumable, true);
+  assert.strictEqual(ctx(a.key).autoResumePending, true);
+  assert.deepStrictEqual(AV.sessionMenuItems(ctx(a.key)).map((m) => m.command).filter((c) => c.startsWith('agentMonitor.autoResume.')),
+    ['agentMonitor.autoResume.now', 'agentMonitor.autoResume.cancel'], 'the "…" menu reads the same flags');
+  assert.strictEqual(ctx(b.key).bgResumable, false);
+  assert.strictEqual(ctx(b.key).autoResumePending, false);
+  const line = i18n.t('autoresume.section') + ': ' + i18n.t('autoresume.state.scheduled', arVars(plan));
+  assert.ok(row(a.key).tip.split('\n').includes(line), row(a.key).tip);
+  assert.ok(!row(b.key).tip.includes(i18n.t('autoresume.section') + ': '), 'no plan, no line');
+  // without a provider: the flags are false and the tooltip is unchanged
+  const plain = AV.buildSessionList({ ...input, i18n }).items.filter((x) => x.kind === 'session');
+  assert.ok(plain.every((r) => { const c = JSON.parse(r.context); return c.bgResumable === false && c.autoResumePending === false; }));
+  assert.ok(!plain.find((r) => r.key === a.key).tip.includes(line));
+});
+
+test('provider: autoResumeNow / autoResumeCancel / autoResumeProject go to the auto-resume provider for the shown session only, after checking its current state', async () => {
+  const st = makeStub();
+  let info = arInfo({ plan: arPlan('scheduled', { atMs: NOW + 2 * MIN }), canNow: true });
+  const ar = arProvider(() => info);
+  const p = new AV.AgentsViewProvider(st.context, { vscode: st.vscode, i18n, autoResume: ar });
+  p.resolveWebviewView(st.view);
+  const { input } = listFixture();
+  const s = session();
+  p.updateList(input);
+  p.update({ session: s, now: NOW, loaded: true });
+  st.listeners.msg({ type: 'ready' });
+  const lastRender = () => st.log.posted.filter((m) => m.type === 'render').pop();
+  const lastList = () => st.log.posted.filter((m) => m.type === 'list').pop();
+  assert.strictEqual(lastRender().session.autoResume.planText, i18n.t('autoresume.state.scheduled', arVars(info.plan)));
+  assert.ok(lastList().items.some((x) => x.kind === 'session' && JSON.parse(x.context).autoResumePending), 'the list gets the same provider');
+  // other sessions, bad values, unknown fields: ignored
+  st.listeners.msg({ type: 'autoResumeNow', sessionKey: 'claude:other' });
+  st.listeners.msg({ type: 'autoResumeCancel', sessionKey: 42 });
+  st.listeners.msg({ type: 'autoResumeProject', sessionKey: s.key, on: 'yes' });
+  st.listeners.msg({ type: 'autoResumeProject', sessionKey: s.key });
+  await tick();
+  assert.deepStrictEqual(ar.calls, []);
+  // "Continue in background": a second click while it is starting is ignored, and the button is hidden meanwhile
+  st.listeners.msg({ type: 'autoResumeNow', sessionKey: s.key });
+  st.listeners.msg({ type: 'autoResumeNow', sessionKey: s.key });
+  await tick();
+  assert.deepStrictEqual(ar.calls, [['now', s.key]]);
+  assert.strictEqual(lastRender().session.autoResume.canNow, false, 'hidden while starting');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.strictEqual(lastRender().session.autoResume.canNow, true, 'back once the provider is done');
+  st.listeners.msg({ type: 'autoResumeCancel', sessionKey: s.key });
+  st.listeners.msg({ type: 'autoResumeProject', sessionKey: s.key, on: false, path: '/etc' });
+  await tick();
+  assert.deepStrictEqual(ar.calls.slice(1), [['cancel', s.key], ['project', s.key, false]]);
+  // the state is checked again in the extension: nothing planned and nothing to continue → Cancel / Continue do nothing
+  info = arInfo({ projectOn: false });
+  st.listeners.msg({ type: 'autoResumeCancel', sessionKey: s.key });
+  st.listeners.msg({ type: 'autoResumeNow', sessionKey: s.key });
+  st.listeners.msg({ type: 'autoResumeProject', sessionKey: s.key, on: true });
+  await tick();
+  assert.deepStrictEqual(ar.calls.slice(3), [['project', s.key, true]]);
+  assert.strictEqual(lastRender().session.autoResume.toggleText, i18n.t('autoresume.project.turnOn'), 'reposted after the switch');
+  // a failing provider is logged, not thrown
+  const logs = [];
+  const st2 = makeStub();
+  const bad = { infoFor: () => arInfo({ canNow: true }), now: () => Promise.reject(new Error('spawn failed')) };
+  const p2 = new AV.AgentsViewProvider(st2.context, { vscode: st2.vscode, i18n, autoResume: bad, log: (l) => logs.push(l) });
+  p2.resolveWebviewView(st2.view);
+  p2.update({ session: s, now: NOW, loaded: true });
+  st2.listeners.msg({ type: 'ready' });
+  st2.listeners.msg({ type: 'autoResumeNow', sessionKey: s.key });
+  await tick();
+  await tick();
+  assert.ok(logs.some((l) => l.includes('autoResumeNow') && l.includes('spawn failed')), logs.join('\n'));
+  // no provider: no block, and the messages do nothing
+  const st3 = makeStub();
+  const p3 = new AV.AgentsViewProvider(st3.context, { vscode: st3.vscode, i18n });
+  p3.resolveWebviewView(st3.view);
+  p3.update({ session: s, now: NOW, loaded: true });
+  st3.listeners.msg({ type: 'ready' });
+  st3.listeners.msg({ type: 'autoResumeNow', sessionKey: s.key });
+  assert.strictEqual(st3.log.posted[0].session.autoResume, null);
+});
+
+test('media: the auto-resume block is built by the page from view-model texts only, right after the resume hints; its buttons send only the session key (and on / off for the project switch)', () => {
+  const js = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
+  assert.ok(/E\.resume\.parentNode\.insertBefore\(AR\.el, E\.resume\.nextSibling\)/.test(js), 'placed right after the resume hints');
+  for (const act of ['autoResumeProject', 'autoResumeNow', 'autoResumeCancel']) assert.ok(js.includes(`'data-act': '${act}'`) || js.includes(`btn('${act}'`), act);
+  assert.ok(/act === 'autoResumeNow' \|\| act === 'autoResumeCancel'\)[\s\S]{0,80}postMessage\(\{ type: act, sessionKey: key \}\)/.test(js), 'now / cancel send only the type and the session key');
+  assert.ok(/postMessage\(\{ type: 'autoResumeProject', sessionKey: key, on: !ar\.projectOn \}\)/.test(js), 'the switch says which way');
+  const render = js.slice(js.indexOf('function renderAutoResume'), js.indexOf('function revealResume'));
+  assert.ok(render.length > 200 && !/\bt\(/.test(render), 'no dictionary lookups or sentences: every text comes from the view model');
+  assert.ok(/show\(E\.resumeBtn, resume\.length > 0 \|\| arAction\)/.test(js), '[Resume] also leads to a plan or "Continue in background"');
+  const css = fs.readFileSync(path.join(ROOT, 'media', 'agents.css'), 'utf8');
+  assert.ok(/\.ar-plan \{[^}]*white-space: normal;/.test(css), 'the plan line wraps instead of cutting off the time');
+  assert.ok(/\.ar-line > \.codicon\.tone-warning \{ color: var\(--c-warn\); \}/.test(css), 'warning color from the theme');
+  const narrow = css.slice(css.indexOf('@container content (max-width: 479px)'));
+  assert.ok(/\.ar-note \{ display: none; \}/.test(narrow), 'a narrow content area drops the copy note line (it stays in the tooltips)');
+  assert.ok(/at\(AR\.el, 'aria-label', ar\.heading\)/.test(js), 'the heading names the block for screen readers');
 });
 
 // ---------- Finish ----------
