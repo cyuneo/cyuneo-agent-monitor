@@ -71,6 +71,10 @@ function fakeExec(behaviors = []) {
   return fn;
 }
 
+// The time zone this process started in. On Windows, deleting TZ does not bring it back (the last zone set stays),
+// so there withTz restores it by name.
+const START_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 /** Runs fn with process.env.TZ set to tz, then restores it */
 function withTz(tz, fn) {
   const prev = process.env.TZ;
@@ -78,8 +82,9 @@ function withTz(tz, fn) {
   try {
     return fn();
   } finally {
-    if (prev === undefined) delete process.env.TZ;
-    else process.env.TZ = prev;
+    if (prev !== undefined) process.env.TZ = prev;
+    else if (process.platform === 'win32') process.env.TZ = START_TZ;
+    else delete process.env.TZ;
   }
 }
 

@@ -2829,6 +2829,13 @@ async function alertTests() {
     const back = activateWindow('win-sound-back', settings); // e.g. the leader, whose own scan comes first
     const front = activateWindow('win-sound-front', settings); // the window the user is in
     back.ctl.windowFocused = () => false;
+    // The claim delay ends when the test says so (runDelayed), not on a real timer, so a slow machine can't end it
+    // before a check that nothing has played yet
+    const delayed = [];
+    for (const w of [back, front]) {
+      w.ctl.later = (fn, ms) => { assert.strictEqual(ms, notifyWrap.CLAIM_DELAY_MS); delayed.push(fn); };
+    }
+    const runDelayed = async () => { while (delayed.length) await delayed.shift()(); };
     const played = (from) => sounds.calls.slice(from).map((c) => c.event);
     const a = () => fixtures()[0];
     const rest = () => fixtures().slice(1);
@@ -2844,7 +2851,7 @@ async function alertTests() {
       await tick();
       assert.deepStrictEqual(played(s0), [], 'the unfocused window played before the focused one could claim it');
       front.send([finished(a(), doneAt), ...rest()]);
-      await settle();
+      await runDelayed();
       assert.deepStrictEqual(played(s0), [], 'a sound for the chat the user is looking at');
       assert.ok(fs.existsSync(soundMarker(back.notifyDir, `done|${ALPHA}|main|${doneAt}`)), 'claimed silently');
       // nobody looks at it: the focused window plays it at once, the unfocused one not again after its delay
@@ -2855,7 +2862,7 @@ async function alertTests() {
       front.send([finished(a(), done2), ...rest()]);
       await tick();
       assert.deepStrictEqual(played(s0), ['done']);
-      await settle();
+      await runDelayed();
       assert.deepStrictEqual(played(s0), ['done'], 'played twice');
       // no window has focus: the one that sees it plays it after the claim delay
       front.ctl.windowFocused = () => false;
@@ -2864,14 +2871,14 @@ async function alertTests() {
       run([finished(a(), done3), ...rest()], [back, front]);
       await tick();
       assert.deepStrictEqual(played(s0), ['done'], 'no delay in an unfocused window');
-      await settle();
+      await runDelayed();
       assert.deepStrictEqual(played(s0), ['done', 'done']);
       // the unfocused window gets focus and shows that chat before its delay is over: checked again, silent
       run([running(a(), since()), ...rest()], [back]);
       back.send([finished(a(), since()), ...rest()]);
       back.ctl.windowFocused = () => true;
       tabState.active = chatTab('Alpha chat');
-      await settle();
+      await runDelayed();
       tabState.active = null;
       assert.deepStrictEqual(played(s0), ['done', 'done'], 'a sound for the chat the user looks at by then');
       // an error has no "looking at it" exception: it plays at once, once
