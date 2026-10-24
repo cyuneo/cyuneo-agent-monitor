@@ -1337,6 +1337,10 @@ function autoResumeTests() {
     const text = (plan, o) => fmt.formatAutoResume(arInfo({ plan, ...o }), probe, NOW);
     assert.strictEqual(text(arPlan('self', { atMs: NOW + HOUR })).stateText, `autoresume.state.self:${probe.fmtClock(NOW + HOUR, NOW)}|1|3|demo`, 'self: the reset time');
     assert.strictEqual(text(arPlan('noReset')).stateText, 'autoresume.state.noReset:|1|3|demo');
+    // moved up by an account switch (cswap): its own sentence, with the account
+    const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
+    const sw = fmt.formatAutoResume(arInfo({ plan: arPlan('scheduled', { atMs: at, via: 'switch', account: '#2' }) }), en, NOW);
+    assert.strictEqual(sw.stateText, `Switched to account #2: auto-resume at ${en.fmtClock(at, NOW)} (attempt 1 of 3)`);
     assert.strictEqual(text(arPlan('gaveUp', { attempt: 3 })).stateText, 'autoresume.state.gaveUp:|3|3|demo');
     assert.strictEqual(text(arPlan('running', { attempt: 2 })).stateText, 'autoresume.state.running:|2|3|demo');
     assert.strictEqual(text(arPlan('running', { attempt: null, max: undefined })).stateText, 'autoresume.state.running:|?|?|demo', 'unknown counts');

@@ -4,6 +4,12 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-25
+
+### Added
+
+- **Auto-resume after an account switch (claude-swap).** If you use claude-swap (`cswap`) to switch between Claude accounts, a chat stopped on a usage limit no longer waits hours for the reset: about 30 seconds after cswap moves to an account that still has room, Agent Monitor resumes the chat on that account. The chat's Details and the notice say so ("Switched to account #2: auto-resume at 3:05 PM"). Agent Monitor only reads cswap's local state with `cswap policy list --json`, and only while a chat waits on a usage limit; without cswap nothing changes. Turn it off with `agentMonitor.autoResume.afterAccountSwitch`.
+
 ## [0.7.0] - 2026-09-26
 
 ### Added

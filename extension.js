@@ -1543,6 +1543,7 @@ class Controller {
           log: (line) => this.log(line),
           t: (key, vars) => this.t(key, vars),
           fmtTime: (ms) => this.i18n.fmtClock(ms, Date.now()),
+          account: () => this.autoResumeAccount(),
         });
         this.autoResume.onOutcome((o) => this.guard('autoResume', () => this.onAutoResumeOutcome(o)));
         this.autoResumeUi = {
@@ -1567,6 +1568,19 @@ class Controller {
     cmd(AUTORESUME_CMD.projects, () => this.pickAutoResumeProjects());
     cmd(AUTORESUME_CMD.now, (arg) => this.autoResumeNowCmd(arg));
     cmd(AUTORESUME_CMD.cancel, (arg) => this.autoResumeCancelCmd(arg));
+  }
+
+  /**
+   * cswap (claude-swap), when installed: its last account switch, so a chat stopped on a usage limit is resumed once
+   * cswap has moved to an account with room (lib/accountswitch.js). agentMonitor.autoResume.afterAccountSwitch off → null.
+   */
+  autoResumeAccount() {
+    if (this.userSetting('autoResume.afterAccountSwitch') === false) return Promise.resolve(null);
+    if (!this.cswapRead) {
+      const m = require('./lib/accountswitch');
+      this.cswapRead = m.createCswapReader({ log: (line) => this.log(line) });
+    }
+    return this.cswapRead();
   }
 
   /** Auto-resume settings from user settings only (application scope; a workspace value is ignored); lib/core/autoresume.js fills in defaults */
@@ -1641,7 +1655,7 @@ class Controller {
     if (this.stopped) return;
     const due = new Map();
     for (const [key, plan] of this.arPlans) {
-      if (plan && plan.state === 'scheduled') due.set(`${AUTORESUME_NOTICE_PREFIX}${plan.stopId}|${plan.attempt}`, key);
+      if (plan && plan.state === 'scheduled') due.set(`${AUTORESUME_NOTICE_PREFIX}${plan.stopId}|${plan.attempt}${plan.via ? `|${plan.via}` : ''}`, key);
     }
     for (const id of [...this.arNoticed]) if (!due.has(id)) this.arNoticed.delete(id);
     if (!this.windowFocused()) return;
@@ -1656,8 +1670,9 @@ class Controller {
   autoResumePlanToast(key) {
     const plan = this.arPlans.get(key);
     if (!plan || this.stopped) return;
-    const text = this.t('autoresume.toast.planned', {
+    const text = this.t(plan.via === 'switch' ? 'autoresume.toast.plannedSwitch' : 'autoresume.toast.planned', {
       project: plan.projectName, time: this.i18n.fmtClock(plan.atMs, Date.now()), n: plan.attempt, max: plan.max,
+      account: plan.account || '',
     });
     const cancel = this.t('autoresume.btn.cancel');
     const resume = this.t('autoresume.btn.resumeNow');

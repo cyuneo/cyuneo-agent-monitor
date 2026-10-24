@@ -246,7 +246,7 @@ Claude Code 会在上下文到达某个容量时自动压缩，这发生在你�
 可选功能，**默认关闭**，只支持 Claude Code 聊天窗口。为一个项目开启后，这个项目里的 Claude Code 聊天窗口停下时，智能体监视器会自己在后台继续它：
 
 - **API 出错后**（服务过载、超时、连接断开等）：过 `agentMonitor.autoResume.errorDelayMinutes`（默认 2 分钟）后续跑，之后每多试一次，等待时间翻倍（2、4、8 分钟）。
-- **撞上额度后：** 知道额度重置时间时，在重置一分钟后续跑。可以用 `agentMonitor.autoResume.afterLimit` 关闭这一项。如果 Claude Code 自己会继续（终端里的聊天，并且打开了 Claude Code 的 `autoContinueAtUsageLimit`，这也是它的默认值），就交给 Claude Code，面板上也会这样说明。
+- **撞上额度后：** 知道额度重置时间时，在重置一分钟后续跑。可以用 `agentMonitor.autoResume.afterLimit` 关闭这一项。如果装了 claude-swap（`cswap`）并由它自动切换账号，就不用等重置：cswap 换到还有额度的账号后约 30 秒，就在新账号上续跑。Agent Monitor 只读取 cswap 的本地状态（`cswap policy list --json`）。可以用 `agentMonitor.autoResume.afterAccountSwitch` 关闭。如果 Claude Code 自己会继续（终端里的聊天，并且打开了 Claude Code 的 `autoContinueAtUsageLimit`，这也是它的默认值），就交给 Claude Code，面板上也会这样说明。
 
 它会在聊天窗口所在的文件夹里运行你本机的 Claude Code：`claude --bg --resume <chat> "<resume prompt>"`，续跑提示和 **复制续跑提示…** 复制的一样，用你的显示语言。Claude Code 会在后台继续工作，不打开窗口，用的是这个聊天窗口原来的模型。每次运行都是一轮普通的 Claude Code 对话，会计入你的套餐或 API 账单。
 
@@ -476,6 +476,7 @@ node bin/agent-monitor.js --json           # 以 JSON 形式输出数据
 | `agentMonitor.autoResume.maxAttempts` | `3` | 同一个聊天窗口最多可以连续自动续跑几次（1–10）；聊天窗口完成一轮回复后重新计数 |
 | `agentMonitor.autoResume.errorDelayMinutes` | `2` | API 出错后等待多少分钟再续跑（1–60）；之后每多试一次，等待时间翻倍 |
 | `agentMonitor.autoResume.afterLimit` | `true` | 知道额度重置时间时，也在额度重置一分钟后续跑 |
+| `agentMonitor.autoResume.afterAccountSwitch` | `true` | 装了 claude-swap（`cswap`）时：cswap 换到还有额度的账号后约 30 秒就续跑，不等额度重置 |
 | `agentMonitor.network.allow` | `false` | 允许网络请求。关闭时扩展不发起任何网络请求；目前只有推送通知会用到它。只对这台电脑有效（设置同步不会同步它） |
 | `agentMonitor.push.enabled` | `false` | 推送到手机或团队聊天，见[推送到手机或团队聊天](#推送到手机或团队聊天) |
 | `agentMonitor.push.events` | 全部开启 | 哪些事件要推送：`needsYou`、`error`、`limitHit`、`limitReset`、`usageHigh`、`costDaily`、`contextHigh`、`autoResume` |

@@ -479,6 +479,10 @@ function fakeSecrets() {
   };
 }
 
+// account switcher (cswap): never runs the real command; acct.value is what the reader answers, acct.reads counts calls
+const acct = { value: null, reads: 0 };
+const acctWrap = { createCswapReader: () => () => { acct.reads++; return Promise.resolve(acct.value); } };
+
 const origLoad = Module._load;
 Module._load = function (request, parent) {
   if (request === 'vscode') return vscode;
@@ -496,6 +500,7 @@ Module._load = function (request, parent) {
   if (fromExt && request === './lib/push-runtime') return pushRtWrap;
   if (fromExt && request === './lib/autoresume-runtime') return modOverride.autoresume || arWrap;
   if (fromExt && request === './lib/jump') return jumpWrap;
+  if (fromExt && request === './lib/accountswitch') return acctWrap;
   return origLoad.apply(this, arguments);
 };
 
@@ -4065,7 +4070,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.7.0');
+    assert.strictEqual(pkg.version, '0.8.0');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');
@@ -4364,6 +4369,7 @@ async function manifestTests() {
       'quietHours.days': ['array', []], 'quietHours.allowErrors': ['boolean', false],
       'alerts.usagePercent': ['number', 90], 'alerts.dailyCost': ['number', 0], 'alerts.contextPercent': ['number', 0],
       'autoResume.maxAttempts': ['number', 3], 'autoResume.errorDelayMinutes': ['number', 2], 'autoResume.afterLimit': ['boolean', true],
+      'autoResume.afterAccountSwitch': ['boolean', true],
     };
     const props = c.configuration.properties;
     assert.deepStrictEqual(Object.keys(props).map((k) => k.replace(/^agentMonitor\./, '')).sort(), Object.keys(want).sort());
@@ -4387,7 +4393,7 @@ async function manifestTests() {
     // the shared scan and the background interval concern every window on this machine, so they are user settings too
     for (const k of ['backgroundRefreshSeconds', 'shareScanAcrossWindows']) assert.strictEqual(props['agentMonitor.' + k].scope, 'machine', k);
     // auto-resume starts Claude Code by itself: its settings are user settings only (the project list is in globalState)
-    for (const k of ['autoResume.maxAttempts', 'autoResume.errorDelayMinutes', 'autoResume.afterLimit']) {
+    for (const k of ['autoResume.maxAttempts', 'autoResume.errorDelayMinutes', 'autoResume.afterLimit', 'autoResume.afterAccountSwitch']) {
       assert.strictEqual(props['agentMonitor.' + k].scope, 'application', k);
     }
     // notifications keep the default (window) scope: a window with them off simply never claims, and a machine setting would

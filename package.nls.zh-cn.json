@@ -95,6 +95,7 @@
   "config.autoResume.maxAttempts": "同一个对话最多可以连续自动续跑几次，达到后就不再续跑。对话完成一轮回复后重新计数。",
   "config.autoResume.errorDelayMinutes": "API 出错后等待多少分钟再续跑。之后每多试一次，等待时间翻倍。",
   "config.autoResume.afterLimit": "知道额度重置时间时，也在额度重置一分钟后自动续跑。",
+  "config.autoResume.afterAccountSwitch": "装了 claude-swap（cswap）时：对话因额度用完停下后，cswap 一换到还有额度的账号，约 30 秒后就续跑，不等额度重置。只读取 cswap 的本地状态。",
   "config.network.allow": "允许 Agent Monitor 发出网络请求。**默认关闭**：关闭时，扩展不会发出任何网络请求。目前只有推送通知（`#agentMonitor.push.enabled#`）和它的测试消息会用到，其它功能都不联网。只从你的用户设置里读取，工作区无法把它打开。",
   "config.push.enabled": "智能体需要你、因错误停止、撞上或解除使用额度时，向你的手机或团队聊天发送一条简短推送。默认关闭；用 [推送通知…](command:agentMonitor.push.setup) 选择推送到哪里。只发送项目文件夹名和状态（开启 `#agentMonitor.push.includeTitle#` 才会带上对话标题和子智能体名称）。它需要联网，所以还要打开 `#agentMonitor.network.allow#`；联网关闭时推送会暂停。",
   "config.push.events": "推送开启时，哪些事件会发送推送。",

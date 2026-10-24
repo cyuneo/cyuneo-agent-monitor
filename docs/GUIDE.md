@@ -246,7 +246,7 @@ How it works:
 Optional, **off by default**, and for Claude Code chats only. Turn it on for a project, and when a Claude Code chat in it stops, Agent Monitor continues it in the background by itself:
 
 - **After an API error** (overloaded, timed out, disconnected and so on): `agentMonitor.autoResume.errorDelayMinutes` later (2 minutes by default), and twice as long each further time (2, 4, 8 minutes).
-- **After a usage limit:** a minute after the limit resets, when the reset time is known. Turn this off with `agentMonitor.autoResume.afterLimit`. When Claude Code will continue by itself (a chat in the terminal, with Claude Code's `autoContinueAtUsageLimit` on, which is its default), it is left to Claude Code, and the panel says so.
+- **After a usage limit:** a minute after the limit resets, when the reset time is known. Turn this off with `agentMonitor.autoResume.afterLimit`. With claude-swap (`cswap`) installed and switching accounts for you, it doesn't wait for the reset: about 30 seconds after cswap moves to an account that still has room, the chat is resumed on that account. Agent Monitor only reads cswap's local state (`cswap policy list --json`). Turn this off with `agentMonitor.autoResume.afterAccountSwitch`. When Claude Code will continue by itself (a chat in the terminal, with Claude Code's `autoContinueAtUsageLimit` on, which is its default), it is left to Claude Code, and the panel says so.
 
 It runs your local Claude Code in the chat's folder: `claude --bg --resume <chat> "<resume prompt>"`, with the same resume prompt as **Copy Resume Prompt…**, in your display language. Claude Code carries on in the background, without opening a window, with the chat's own model. Each run is an ordinary Claude Code turn and counts toward your plan or API bill.
 
@@ -476,6 +476,7 @@ All commands are in the **Agent Monitor** category, and the table shows where yo
 | `agentMonitor.autoResume.maxAttempts` | `3` | How many times in a row a chat may be resumed automatically (1–10); the count starts again once the chat finishes a turn |
 | `agentMonitor.autoResume.errorDelayMinutes` | `2` | Minutes to wait after an API error before resuming (1–60); each further attempt waits twice as long |
 | `agentMonitor.autoResume.afterLimit` | `true` | Also resume a minute after a usage limit resets, when the reset time is known |
+| `agentMonitor.autoResume.afterAccountSwitch` | `true` | With claude-swap (`cswap`) installed: resume a usage-limited chat about 30 seconds after cswap switches to an account with room, instead of waiting for the reset |
 | `agentMonitor.network.allow` | `false` | Allow network requests. Off, the extension makes none at all; today only push notifications use it. Applies to this computer only (not synced by Settings Sync) |
 | `agentMonitor.push.enabled` | `false` | Push to your phone or team chat; see [Push to your phone or team chat](#push-to-your-phone-or-team-chat) |
 | `agentMonitor.push.events` | all on | Which events are pushed: `needsYou`, `error`, `limitHit`, `limitReset`, `usageHigh`, `costDaily`, `contextHigh`, `autoResume` |

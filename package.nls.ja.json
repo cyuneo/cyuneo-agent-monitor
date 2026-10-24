@@ -95,6 +95,7 @@
   "config.autoResume.maxAttempts": "自動再開をあきらめるまでに、1つのチャットを続けて自動再開できる回数です。チャットが1ターンを終えると回数は数え直しになります。",
   "config.autoResume.errorDelayMinutes": "API エラーの後、再開するまで待つ時間（分）です。以降は試行のたびに待ち時間が2倍になります。",
   "config.autoResume.afterLimit": "リセット時刻がわかる場合は、使用上限がリセットされた1分後にも再開します。",
+  "config.autoResume.afterAccountSwitch": "claude-swap（cswap）がある場合：使用上限で止まったチャットを、cswap が余裕のあるアカウントに切り替えた約30秒後に再開します（リセットを待ちません）。cswap のローカル状態を読むだけです。",
   "config.network.allow": "Agent Monitor にネットワーク要求を許可します。**既定はオフ**で、オフの間、拡張機能はネットワーク要求を一切行いません。現在これを使うのはプッシュ通知（`#agentMonitor.push.enabled#`）とそのテストメッセージだけで、ほかの機能は使いません。ユーザー設定からのみ読み込むため、ワークスペースからオンにすることはできません。",
   "config.push.enabled": "エージェントが対応を待っているとき、エラーで停止したとき、使用上限に達したときや上限が解除されたときに、スマートフォンやチームのチャットへ短いプッシュメッセージを送ります。既定はオフです。送信先は [プッシュ通知…](command:agentMonitor.push.setup) で選びます。送るのはプロジェクトフォルダー名と状態だけです（チャットのタイトルとサブエージェント名は `#agentMonitor.push.includeTitle#` をオンにした場合のみ）。ネットワークを使うため、`#agentMonitor.network.allow#` もオンにする必要があります。ネットワークアクセスがオフの間、プッシュは一時停止します。",
   "config.push.events": "プッシュがオンのとき、どのイベントでプッシュを送るかを選びます。",

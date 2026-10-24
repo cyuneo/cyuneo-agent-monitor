@@ -95,6 +95,7 @@
   "config.autoResume.maxAttempts": "자동 재개를 멈추기 전까지 한 대화를 연속으로 자동 재개할 수 있는 횟수입니다. 대화가 한 턴을 마치면 횟수를 처음부터 다시 셉니다.",
   "config.autoResume.errorDelayMinutes": "API 오류가 난 뒤 재개하기 전까지 기다리는 시간(분)입니다. 이후 시도할 때마다 대기 시간이 두 배가 됩니다.",
   "config.autoResume.afterLimit": "초기화 시각을 알 수 있으면 사용 한도가 초기화되고 1분 뒤에도 재개합니다.",
+  "config.autoResume.afterAccountSwitch": "claude-swap(cswap)가 설치된 경우: 사용 한도로 멈춘 대화를 cswap이 여유 있는 계정으로 전환한 뒤 약 30초 후에 재개합니다(초기화를 기다리지 않음). cswap의 로컬 상태만 읽습니다.",
   "config.network.allow": "Agent Monitor가 네트워크 요청을 보내도록 허용합니다. **기본값은 꺼짐**이며, 꺼져 있으면 확장은 네트워크 요청을 전혀 보내지 않습니다. 지금은 푸시 알림(`#agentMonitor.push.enabled#`)과 그 테스트 메시지만 사용하며, 다른 기능은 사용하지 않습니다. 사용자 설정에서만 읽으므로 작업 영역에서 켤 수 없습니다.",
   "config.push.enabled": "에이전트가 나를 기다리거나, 오류로 멈추거나, 사용 한도에 도달하거나 한도가 풀리면 휴대폰이나 팀 채팅으로 짧은 푸시 메시지를 보냅니다. 기본값은 꺼짐이며, 보낼 곳은 [푸시 알림…](command:agentMonitor.push.setup)에서 정합니다. 프로젝트 폴더 이름과 상태만 보냅니다(대화 제목과 하위 에이전트 이름은 `#agentMonitor.push.includeTitle#`을 켠 경우에만). 네트워크를 사용하므로 `#agentMonitor.network.allow#`도 켜야 하며, 네트워크 접근이 꺼져 있으면 푸시는 일시 중지됩니다.",
   "config.push.events": "푸시가 켜져 있을 때 어떤 이벤트를 푸시할지 정합니다.",

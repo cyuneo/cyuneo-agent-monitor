@@ -1160,6 +1160,126 @@ test('never throws: garbage snapshots, throwing deps, a broken state file; dispo
   assert.strictEqual(await h6.rt.resumeNow(`claude:${A}`), null);
 });
 
+section('account switch (cswap)');
+
+test('core: a limit stop resumes 30 s after a switch to an account with room; otherwise the reset time stands', () => {
+  const lim = session({ status: status('quota', NOW, quotaHit(NOW + 3 * HOUR)) });
+  const acc = (switchedAtMs, hasRoom = true) => ({ account: { switchedAtMs, hasRoom, label: '#3' } });
+  const p = plan(lim, 0, { ...acc(NOW + 2 * MIN), now: NOW + 2 * MIN });
+  assert.deepStrictEqual([p.state, p.atMs, p.via, p.account, p.trigger], ['scheduled', NOW + 2 * MIN + core.SWITCH_PAD_MS, 'switch', '#3', 'limit']);
+  // a switch shortly before the stop counts (the chat kept the old login); counted from the stop
+  assert.strictEqual(plan(lim, 0, acc(NOW - 10 * MIN)).atMs, NOW + core.SWITCH_PAD_MS);
+  // too long before the stop, no room, unknown time, no account → the reset
+  for (const o of [acc(NOW - 20 * MIN), acc(NOW + MIN, false), acc(null), { account: null }, {}]) {
+    const q = plan(lim, 0, o);
+    assert.deepStrictEqual([q.state, q.atMs, q.via], ['scheduled', NOW + 3 * HOUR + MIN, undefined], JSON.stringify(o));
+  }
+  // no reset time known: the switch still resumes it
+  const unknown = session({ status: status('quota', NOW, quotaHit(null)) });
+  assert.strictEqual(plan(unknown).state, 'noReset');
+  assert.deepStrictEqual([plan(unknown, 0, acc(NOW + MIN)).state, plan(unknown, 0, acc(NOW + MIN)).via], ['scheduled', 'switch']);
+  // never later than the reset itself
+  const soon = session({ status: status('quota', NOW, quotaHit(NOW + MIN)) });
+  assert.deepStrictEqual([plan(soon, 0, acc(NOW + 5 * MIN)).atMs, plan(soon, 0, acc(NOW + 5 * MIN)).via], [NOW + 2 * MIN, undefined]);
+  // API errors and live CLI chats that continue by themselves are not affected
+  assert.strictEqual(plan(session(), 0, acc(NOW + MIN)).via, undefined);
+  assert.strictEqual(plan(session({ live: true, status: status('quota', NOW, quotaHit(NOW + HOUR)) }), 0, acc(NOW + MIN)).state, 'self');
+  // a past switch time with a later reset plan as prev: not kept, now + 5 s
+  const prev = plan(lim);
+  const late = plan(lim, 0, { ...acc(NOW + MIN), now: NOW + 10 * MIN, prev });
+  assert.strictEqual(late.atMs, NOW + 10 * MIN + core.ASAP_MS);
+  assert.strictEqual(plan(lim, 0, { ...acc(NOW + MIN), now: NOW + 10 * MIN + SEC, prev: late }).atMs, late.atMs, 'clamped time kept');
+});
+
+test('runtime: asks the account switcher while a limit plan waits (at most every 30 s) and resumes after the switch', async () => {
+  let answer = null;
+  let reads = 0;
+  const h = harness({ deps: { account: () => { reads++; return Promise.resolve(answer); } } });
+  const err = h.sess({ id: B, key: `claude:${B}` });
+  h.update([err]);
+  await flush();
+  assert.strictEqual(reads, 0, 'not asked without a limit plan');
+  const s = h.sess({ status: status('quota', NOW, quotaHit(NOW + 3 * HOUR)) });
+  h.update([s]);
+  await flush();
+  assert.strictEqual(reads, 1);
+  assert.strictEqual(h.plan(s.key).atMs, NOW + 3 * HOUR + MIN);
+  h.update([s]);
+  await flush();
+  assert.strictEqual(reads, 1, 'not again within 30 s');
+  answer = { switchedAtMs: NOW + 40 * SEC, hasRoom: true, label: '#2' };
+  await h.clock.advance(31 * SEC); // the poll timer fires without a new snapshot
+  assert.strictEqual(reads, 2);
+  const p = h.plan(s.key);
+  assert.deepStrictEqual([p.via, p.account, p.atMs], ['switch', '#2', NOW + 70 * SEC]);
+  assert.ok(h.logs.some((l) => l.startsWith('autoresume.log.planned') && l.includes('autoresume.trigger.switch')), 'logged again as moved up');
+  await h.clock.advance(MIN);
+  assert.strictEqual(h.spawn.resumes().length, 1);
+  assert.strictEqual(h.outcomes[0].outcome, 'resumed');
+  h.update([s]);
+  await h.clock.advance(5 * MIN);
+  assert.strictEqual(reads, 2, 'not asked once the stop has run');
+});
+
+test('runtime: a failing or throwing account switcher changes nothing', async () => {
+  for (const account of [() => Promise.reject(new Error('boom')), () => { throw new Error('sync boom'); }, () => 'nonsense']) {
+    const h = harness({ deps: { account } });
+    const s = h.sess({ status: status('quota', NOW, quotaHit(NOW + HOUR)) });
+    h.update([s]);
+    await flush();
+    assert.deepStrictEqual([h.plan(s.key).state, h.plan(s.key).atMs, h.plan(s.key).via], ['scheduled', NOW + HOUR + MIN, undefined]);
+  }
+});
+
+test('accountswitch: parseCswap, findCswap, the reader (fake execFile)', async () => {
+  const acs = require('../lib/accountswitch');
+  const row = (o) => ({ number: '3', active: true, enabled: true, usage5h: 10, max5h: 98, usage7d: 50, max7d: 100, lastError: null, quarantined: null, ...o });
+  const doc = (rows, last) => ({ accounts: rows, autoswitch: { lastSwitch: last } });
+  const last = { at: NOW / 1000, from: '1', to: '3', trigger: 'policy-limit', auto: true };
+  assert.deepStrictEqual(acs.parseCswap(doc([row({ active: false, number: '1' }), row()], last)), { switchedAtMs: NOW, hasRoom: true, label: '#3' });
+  assert.strictEqual(acs.parseCswap(doc([row()], { ...last, to: '1' })).switchedAtMs, null, 'last switch went elsewhere');
+  assert.strictEqual(acs.parseCswap(doc([row()], null)).switchedAtMs, null);
+  for (const o of [{ usage5h: 98 }, { usage7d: 100 }, { enabled: false }, { lastError: 'x' }, { quarantined: { at: 1 } }]) {
+    assert.strictEqual(acs.parseCswap(doc([row(o)], last)).hasRoom, false, JSON.stringify(o));
+  }
+  assert.strictEqual(acs.parseCswap(doc([row({ usage5h: null, max5h: null })], last)).hasRoom, true, 'unknown usage');
+  for (const bad of [null, 'x', {}, { accounts: [] }, doc([row({ active: false })], last)]) assert.strictEqual(acs.parseCswap(bad), null);
+
+  const dir = fs.mkdtempSync(path.join(TMP, 'cswap-'));
+  const bin = path.join(dir, 'bin');
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(bin);
+  fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+  assert.strictEqual(acs.findCswap({ env: { PATH: `${bin}:relative` }, home, platform: 'linux' }), null);
+  const local = path.join(home, '.local', 'bin', 'cswap');
+  fs.writeFileSync(local, '#!/bin/sh\n', { mode: 0o755 });
+  assert.strictEqual(acs.findCswap({ env: { PATH: bin }, home, platform: 'linux' }), local, '~/.local/bin');
+  const onPath = path.join(bin, 'cswap');
+  fs.writeFileSync(onPath, '#!/bin/sh\n', { mode: 0o644 });
+  assert.strictEqual(acs.findCswap({ env: { PATH: bin }, home, platform: 'linux' }), local, 'not executable → skipped');
+  fs.chmodSync(onPath, 0o755);
+  assert.strictEqual(acs.findCswap({ env: { PATH: bin }, home, platform: 'linux' }), onPath);
+
+  const calls = [];
+  const logs = [];
+  let reply = { err: null, out: JSON.stringify(doc([row()], last)) };
+  const read = acs.createCswapReader({
+    find: () => '/fake/cswap',
+    execFile: (cmd, args, opts, cb) => { calls.push({ cmd, args, opts }); setImmediate(() => cb(reply.err, reply.out)); },
+    log: (l) => logs.push(l),
+  });
+  assert.deepStrictEqual(await read(), { switchedAtMs: NOW, hasRoom: true, label: '#3' });
+  assert.deepStrictEqual([calls[0].cmd, calls[0].args, calls[0].opts.shell, calls[0].opts.timeout], ['/fake/cswap', ['policy', 'list', '--json'], false, acs.RUN_TIMEOUT_MS]);
+  reply = { err: new Error('exit 1\nmore'), out: '' };
+  assert.strictEqual(await read(), null);
+  assert.strictEqual(await read(), null);
+  assert.strictEqual(logs.length, 1, 'logged once');
+  reply = { err: null, out: 'not json' };
+  assert.strictEqual(await read(), null);
+  assert.strictEqual(await acs.createCswapReader({ find: () => null, execFile: () => { throw new Error('never'); } })(), null, 'no cswap');
+  assert.strictEqual(await acs.createCswapReader({ find: () => '/x', execFile: () => { throw new Error('spawn'); } })(), null);
+});
+
 // ---------- Run ----------
 
 runAll().then(() => {

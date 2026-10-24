@@ -246,7 +246,7 @@ Claude Code 會在上下文到達某個容量時自動壓縮，這發生在你�
 選用功能，**預設關閉**，而且只支援 Claude Code 聊天視窗。為某個專案開啟後，只要其中的 Claude Code 聊天視窗停止，智慧體監視器就會自己在背景讓它繼續：
 
 - **API 錯誤後**（過載、逾時、連線中斷等）：等待 `agentMonitor.autoResume.errorDelayMinutes`（預設 2 分鐘）再續跑，之後每多試一次，等待時間加倍（2、4、8 分鐘）。
-- **額度用完後：** 知道重置時間時，在額度重置一分鐘後自動續跑。可以用 `agentMonitor.autoResume.afterLimit` 關閉這一項。如果 Claude Code 會自行繼續（終端機裡的聊天視窗，而且開啟了 Claude Code 的 `autoContinueAtUsageLimit`，這也是它的預設值），就交給 Claude Code，面板上會註明。
+- **額度用完後：** 知道重置時間時，在額度重置一分鐘後自動續跑。可以用 `agentMonitor.autoResume.afterLimit` 關閉這一項。如果裝了 claude-swap（`cswap`）並由它自動切換帳號，就不用等重置：cswap 換到還有額度的帳號後約 30 秒，就在新帳號上續跑。Agent Monitor 只讀取 cswap 的本機狀態（`cswap policy list --json`）。可以用 `agentMonitor.autoResume.afterAccountSwitch` 關閉。如果 Claude Code 會自行繼續（終端機裡的聊天視窗，而且開啟了 Claude Code 的 `autoContinueAtUsageLimit`，這也是它的預設值），就交給 Claude Code，面板上會註明。
 
 它會在聊天視窗所在的資料夾裡執行你本機的 Claude Code：`claude --bg --resume <chat> "<resume prompt>"`，續跑提示詞和 **複製續跑提示…** 用的相同，並使用你的顯示語言。Claude Code 會在背景接著做，不開任何視窗，用的是這個聊天視窗原本的模型。每次執行都是一輪普通的 Claude Code 對話，會計入你的方案或 API 帳單。
 
@@ -476,6 +476,7 @@ node bin/agent-monitor.js --json           # 以 JSON 形式輸出資料
 | `agentMonitor.autoResume.maxAttempts` | `3` | 同一個聊天視窗最多可以連續自動續跑幾次（1–10）；聊天視窗完成一輪回覆後重新計算 |
 | `agentMonitor.autoResume.errorDelayMinutes` | `2` | API 錯誤後等待幾分鐘再續跑（1–60）；之後每多試一次，等待時間加倍 |
 | `agentMonitor.autoResume.afterLimit` | `true` | 知道額度重置時間時，也在額度重置一分鐘後自動續跑 |
+| `agentMonitor.autoResume.afterAccountSwitch` | `true` | 裝了 claude-swap（`cswap`）時：cswap 換到還有額度的帳號後約 30 秒就續跑，不等額度重置 |
 | `agentMonitor.network.allow` | `false` | 允許網路請求。關閉時擴充功能不會發出任何網路請求；目前只有推播通知會用到它。只對這台電腦有效（設定同步不會同步它） |
 | `agentMonitor.push.enabled` | `false` | 推播到手機或團隊聊天，見[推播到手機或團隊聊天](#推播到手機或團隊聊天) |
 | `agentMonitor.push.events` | 全部開啟 | 哪些事件要推播：`needsYou`、`error`、`limitHit`、`limitReset`、`usageHigh`、`costDaily`、`contextHigh`、`autoResume` |

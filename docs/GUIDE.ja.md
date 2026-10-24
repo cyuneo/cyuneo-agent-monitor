@@ -246,7 +246,7 @@ Claude Codeはコンテキストが一定の容量に達すると自動的に圧
 オプション機能で、**既定はオフ**です。対象はClaude Codeのチャットだけです。プロジェクトでオンにすると、そのプロジェクトのClaude Codeのチャットが停止したとき、次のタイミングでエージェントモニターがバックグラウンドで自動的に続行します。
 
 - **APIエラーの後**（過負荷、タイムアウト、接続切断など）: `agentMonitor.autoResume.errorDelayMinutes`で決めた時間（既定は2分）がたってから続行し、以降は試行のたびに待ち時間が2倍になります（2分、4分、8分）。
-- **使用上限の後:** リセット時刻がわかる場合は、上限がリセットされた1分後に続行します。これは`agentMonitor.autoResume.afterLimit`でオフにできます。Claude Code自身が続行する場合（ターミナルのチャットで、Claude Codeの`autoContinueAtUsageLimit`がオンのとき。これがClaude Codeの既定です）はClaude Codeに任せ、パネルにもそう表示されます。
+- **使用上限の後:** リセット時刻がわかる場合は、上限がリセットされた1分後に続行します。これは`agentMonitor.autoResume.afterLimit`でオフにできます。claude-swap（`cswap`）がアカウントを自動で切り替えている場合は、リセットを待ちません。cswap が余裕のあるアカウントに切り替えた約30秒後に、そのアカウントで続行します。Agent Monitor は cswap のローカル状態（`cswap policy list --json`）を読むだけです。`agentMonitor.autoResume.afterAccountSwitch`でオフにできます。Claude Code自身が続行する場合（ターミナルのチャットで、Claude Codeの`autoContinueAtUsageLimit`がオンのとき。これがClaude Codeの既定です）はClaude Codeに任せ、パネルにもそう表示されます。
 
 このとき、チャットのフォルダーでローカルのClaude Codeを実行します: `claude --bg --resume <chat> "<resume prompt>"`。再開プロンプトは**再開プロンプトをコピー…**と同じもので、表示言語で書かれます。Claude Codeはウィンドウを開かずに、そのチャットのモデルのままバックグラウンドで作業を続けます。1回ごとの実行は通常のClaude Codeの1ターンで、使用量はプランまたはAPIの請求に反映されます。
 
@@ -476,6 +476,7 @@ node bin/agent-monitor.js --json           # データをJSONとして出力
 | `agentMonitor.autoResume.maxAttempts` | `3` | 1つのチャットを続けて自動再開できる回数（1〜10）。チャットが1ターンを終えると回数は数え直しになる |
 | `agentMonitor.autoResume.errorDelayMinutes` | `2` | APIエラーの後、再開するまで待つ時間（分、1〜60）。以降は試行のたびに待ち時間が2倍になる |
 | `agentMonitor.autoResume.afterLimit` | `true` | リセット時刻がわかる場合は、使用上限がリセットされた1分後にも再開する |
+| `agentMonitor.autoResume.afterAccountSwitch` | `true` | claude-swap（`cswap`）がある場合：使用上限で止まったチャットを、cswap が余裕のあるアカウントに切り替えた約30秒後に再開する（リセットを待たない） |
 | `agentMonitor.network.allow` | `false` | ネットワークリクエストを許可。オフの間、拡張機能はネットワークリクエストを一切行わない。現在これを使うのはプッシュ通知だけ。このコンピューターだけに適用（設定の同期では同期されない） |
 | `agentMonitor.push.enabled` | `false` | スマートフォンやチームのチャットへのプッシュ。[スマートフォンやチームのチャットへのプッシュ](#スマートフォンやチームのチャットへのプッシュ)を参照 |
 | `agentMonitor.push.events` | すべてオン | プッシュするイベント: `needsYou`、`error`、`limitHit`、`limitReset`、`usageHigh`、`costDaily`、`contextHigh`、`autoResume` |

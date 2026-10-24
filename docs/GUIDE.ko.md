@@ -246,7 +246,7 @@ Claude Code는 컨텍스트가 특정 용량에 도달하면 스스로 압축합
 선택 기능이며 **기본값은 꺼짐**이고, Claude Code 채팅에서만 작동합니다. 프로젝트에 켜 두면, 그 안의 Claude Code 채팅이 멈췄을 때 에이전트 모니터가 알아서 백그라운드에서 이어 갑니다.
 
 - **API 오류가 난 뒤**(과부하, 시간 초과, 연결 끊김 등): `agentMonitor.autoResume.errorDelayMinutes`(기본 2분)가 지난 뒤 이어 가며, 그 뒤로는 시도할 때마다 두 배씩 기다립니다(2분, 4분, 8분).
-- **사용 한도에 걸린 뒤:** 초기화 시각을 알 수 있으면 한도가 초기화되고 1분 뒤에 이어 갑니다. `agentMonitor.autoResume.afterLimit`으로 끌 수 있습니다. Claude Code가 스스로 계속하는 경우(터미널의 채팅이고, Claude Code의 `autoContinueAtUsageLimit`이 기본값대로 켜져 있을 때)에는 Claude Code에 맡기며, 패널에 그렇게 표시됩니다.
+- **사용 한도에 걸린 뒤:** 초기화 시각을 알 수 있으면 한도가 초기화되고 1분 뒤에 이어 갑니다. `agentMonitor.autoResume.afterLimit`으로 끌 수 있습니다. claude-swap(`cswap`)이 계정을 자동으로 전환하고 있다면 초기화를 기다리지 않습니다. cswap이 여유 있는 계정으로 전환한 뒤 약 30초 후에 그 계정으로 이어 갑니다. Agent Monitor는 cswap의 로컬 상태(`cswap policy list --json`)만 읽습니다. `agentMonitor.autoResume.afterAccountSwitch`로 끌 수 있습니다. Claude Code가 스스로 계속하는 경우(터미널의 채팅이고, Claude Code의 `autoContinueAtUsageLimit`이 기본값대로 켜져 있을 때)에는 Claude Code에 맡기며, 패널에 그렇게 표시됩니다.
 
 채팅의 폴더에서 로컬 Claude Code를 실행합니다: `claude --bg --resume <chat> "<resume prompt>"`. 재개 프롬프트는 **재개 프롬프트 복사…**와 같은 것이며, 표시 언어로 작성됩니다. Claude Code는 창을 열지 않고 백그라운드에서, 그 채팅의 모델 그대로 이어서 작업합니다. 실행할 때마다 평범한 Claude Code 턴 한 번이며, 요금제나 API 청구서에 반영됩니다.
 
@@ -476,6 +476,7 @@ node bin/agent-monitor.js --json           # 데이터를 JSON으로 출력
 | `agentMonitor.autoResume.maxAttempts` | `3` | 한 채팅을 연속으로 자동 재개할 수 있는 횟수(1–10). 채팅이 한 턴을 마치면 횟수를 처음부터 다시 셈 |
 | `agentMonitor.autoResume.errorDelayMinutes` | `2` | API 오류가 난 뒤 재개하기 전까지 기다리는 시간(분)(1–60). 이후 시도할 때마다 두 배로 기다림 |
 | `agentMonitor.autoResume.afterLimit` | `true` | 초기화 시각을 알 수 있으면 사용 한도가 초기화되고 1분 뒤에도 재개 |
+| `agentMonitor.autoResume.afterAccountSwitch` | `true` | claude-swap(`cswap`)이 있으면: cswap이 여유 있는 계정으로 전환한 뒤 약 30초 후에 사용 한도로 멈춘 대화를 재개(초기화를 기다리지 않음) |
 | `agentMonitor.network.allow` | `false` | 네트워크 요청 허용. 꺼져 있으면 확장 프로그램은 네트워크 요청을 전혀 하지 않으며, 지금은 푸시 알림만 이를 사용. 이 컴퓨터에만 적용(설정 동기화로 동기화되지 않음) |
 | `agentMonitor.push.enabled` | `false` | 휴대폰이나 팀 채팅으로 푸시. [휴대폰이나 팀 채팅으로 푸시](#휴대폰이나-팀-채팅으로-푸시) 참고 |
 | `agentMonitor.push.events` | 모두 켜짐 | 푸시할 이벤트: `needsYou`, `error`, `limitHit`, `limitReset`, `usageHigh`, `costDaily`, `contextHigh`, `autoResume` |
