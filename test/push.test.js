@@ -69,6 +69,7 @@ const K = {
   barkKey: 'synthBarkDeviceKey0001',
   sctKey: 'SCT123456TsynthKey000000000',
   sctpKey: 'sctp9876tSynthKey0000000000',
+  pushplusToken: 'synthPushPlusToken0000000000000a',
   feishuHook: 'https://open.feishu.cn/open-apis/bot/v2/hook/0f0e0d0c-aaaa-bbbb-cccc-111122223333',
   feishuSecret: 'synthetic-feishu-secret',
   dingHook: 'https://oapi.dingtalk.com/robot/send?access_token=5a5b5c5d000011112222333344445555666677778888999900001111aaaabbbb',
@@ -83,6 +84,7 @@ const CFG = {
   ntfy: { channel: 'ntfy', topic: K.ntfyTopic, token: K.ntfyToken },
   bark: { channel: 'bark', deviceKey: K.barkKey },
   serverchan: { channel: 'serverchan', sendKey: K.sctKey },
+  pushplus: { channel: 'pushplus', pushToken: K.pushplusToken },
   feishu: { channel: 'feishu', webhook: K.feishuHook, secret: K.feishuSecret },
   dingtalk: { channel: 'dingtalk', webhook: K.dingHook, secret: K.dingSecret, keyword: 'AgentBot' },
   wecom: { channel: 'wecom', webhook: K.wecomHook },
@@ -95,6 +97,7 @@ const NEEDLES = {
   ntfy: [K.ntfyTopic, K.ntfyToken],
   bark: [K.barkKey],
   serverchan: [K.sctKey, 'TsynthKey000000000'],
+  pushplus: [K.pushplusToken],
   feishu: ['0f0e0d0c-aaaa-bbbb-cccc-111122223333', K.feishuSecret],
   dingtalk: ['5a5b5c5d000011112222333344445555666677778888999900001111aaaabbbb', K.dingSecret, 'synthetic0dingtalk0secret'],
   wecom: ['00000000-1111-2222-3333-444444444444'],
@@ -161,11 +164,11 @@ const zh = i18nLib.createI18n('zh-cn');
 // ---------- Channels: exact requests ----------
 
 function channelTests() {
-  test('registry: nine channels, each with an l10n label, typed fields and a build function; secrets are marked', () => {
-    assert.deepStrictEqual([...push.CHANNEL_IDS], ['ntfy', 'bark', 'serverchan', 'feishu', 'dingtalk', 'wecom', 'telegram', 'discord', 'slack']);
+  test('registry: ten channels, each with an l10n label, typed fields and a build function; secrets are marked', () => {
+    assert.deepStrictEqual([...push.CHANNEL_IDS], ['ntfy', 'bark', 'serverchan', 'pushplus', 'feishu', 'dingtalk', 'wecom', 'telegram', 'discord', 'slack']);
     const secretKeys = Object.fromEntries(push.CHANNEL_IDS.map((id) => [id, push.CHANNELS[id].fields.filter((f) => f.secret).map((f) => f.key)]));
     assert.deepStrictEqual(secretKeys, {
-      ntfy: ['token', 'topic'], bark: ['deviceKey'], serverchan: ['sendKey'], feishu: ['webhook', 'secret'],
+      ntfy: ['token', 'topic'], bark: ['deviceKey'], serverchan: ['sendKey'], pushplus: ['pushToken'], feishu: ['webhook', 'secret'],
       dingtalk: ['webhook', 'secret'], wecom: ['webhook'], telegram: ['botToken'], discord: ['webhook'], slack: ['webhook'],
     });
     for (const id of push.CHANNEL_IDS) {
@@ -177,10 +180,11 @@ function channelTests() {
     }
     const daily = (id) => push.CHANNELS[id].fields.find((f) => f.key === 'dailyMax').default;
     assert.strictEqual(daily('serverchan'), 5, 'ServerChan free plan: 5 a day');
+    assert.strictEqual(daily('pushplus'), 200, 'PushPlus: 200 a day for a verified account');
     assert.strictEqual(daily('ntfy'), 0);
     const boundKeys = Object.fromEntries(push.CHANNEL_IDS.map((id) => [id, push.CHANNELS[id].fields.filter((f) => f.bound).map((f) => f.key)]));
     assert.deepStrictEqual(boundKeys, {
-      ntfy: ['server'], bark: ['server'], serverchan: [], feishu: [], dingtalk: [], wecom: [], telegram: ['chatId'], discord: [], slack: [],
+      ntfy: ['server'], bark: ['server'], serverchan: [], pushplus: [], feishu: [], dingtalk: [], wecom: [], telegram: ['chatId'], discord: [], slack: [],
     });
     const { settings, secrets } = push.splitConfig({ ...CFG.dingtalk, key: 'ding-1' });
     assert.deepStrictEqual(settings, { channel: 'dingtalk', keyword: 'AgentBot', key: 'ding-1' });
@@ -257,6 +261,19 @@ function channelTests() {
     assert.strictEqual(batch.get('short'), 'Agent needs you · demo-app · Agent stopped with an error · my_api (v2)'.slice(0, 63) + '…');
     assert.ok(!batch.get('short').includes('\\'));
     assert.strictEqual(new URLSearchParams(build(CFG.serverchan, { ...MSG, body: '' }).body).has('short'), false, 'no empty short');
+  });
+
+  test('PushPlus: POST JSON with the token, plain-text template and the WeChat channel; title and content capped', () => {
+    assert.deepStrictEqual(build(CFG.pushplus), {
+      url: 'https://www.pushplus.plus/send',
+      method: 'POST',
+      headers: JSON_CT,
+      body: JSON.stringify({ token: K.pushplusToken, title: MSG.title, content: MSG.body, template: 'txt', channel: 'wechat' }),
+    });
+    const long = JSON.parse(build(CFG.pushplus, { ...MSG, title: 't'.repeat(300), body: 'b'.repeat(5000) }).body);
+    assert.ok(Array.from(long.title).length <= 100, 'title capped');
+    assert.ok(Array.from(long.content).length <= 2000, 'content capped');
+    assert.strictEqual(JSON.parse(build(CFG.pushplus, { ...MSG, body: '' }).body).content, MSG.title, 'no body: the title is the content');
   });
 
   test('Feishu: msg_type text; with a secret, timestamp (seconds) and sign in the JSON body (known answer)', () => {
@@ -411,6 +428,8 @@ function validationTests() {
     assert.deepStrictEqual(push.validateConfig(CFG.ntfy), { ok: true, errors: [] });
     for (const id of push.CHANNEL_IDS) assert.ok(push.validateConfig(CFG[id]).ok, id);
     assert.deepStrictEqual(push.validateConfig({ channel: 'ntfy' }).errors, [{ key: 'topic', code: 'required' }]);
+    assert.deepStrictEqual(push.validateConfig({ channel: 'pushplus' }).errors, [{ key: 'pushToken', code: 'required' }]);
+    assert.deepStrictEqual(push.validateConfig({ channel: 'pushplus', pushToken: 'has space' }).errors, [{ key: 'pushToken', code: 'format' }]);
     assert.deepStrictEqual(push.validateConfig({ channel: 'ntfy', topic: 'has space' }).errors, [{ key: 'topic', code: 'format' }]);
     assert.deepStrictEqual(push.validateConfig({ channel: 'telegram', botToken: 'nope', chatId: 'x y' }).errors,
       [{ key: 'botToken', code: 'format' }, { key: 'chatId', code: 'format' }]);
@@ -477,6 +496,7 @@ function parseTests() {
       ['ntfy', 200, { id: 'x1', time: 1, event: 'message', topic: 't' }],
       ['bark', 200, { code: 200, message: 'success', timestamp: 1 }],
       ['serverchan', 200, { code: 0, message: '', data: { pushid: '1', readkey: 'r', error: 'SUCCESS', errno: 0 } }],
+      ['pushplus', 200, { code: 200, msg: '请求成功', data: 'a1b2c3' }],
       ['feishu', 200, { code: 0, msg: 'success', data: {} }],
       ['feishu', 200, { Extra: null, StatusCode: 0, StatusMessage: 'success' }],
       ['dingtalk', 200, { errcode: 0, errmsg: 'ok' }],
@@ -492,6 +512,8 @@ function parseTests() {
     const errCases = [
       ['bark', 200, { code: 400, message: 'failed to get device token' }, 'failed to get device token (400)'],
       ['serverchan', 200, { code: 40001, message: 'bad pushtoken' }, 'bad pushtoken (40001)'],
+      ['pushplus', 200, { code: 999, msg: '服务端验证错误', data: 'token not found' }, '服务端验证错误: token not found (999)'],
+      ['pushplus', 200, { code: 900, msg: '用户账号使用受限' }, '用户账号使用受限 (900)'],
       ['feishu', 200, { code: 19021, msg: 'sign match fail or timestamp is not within one hour from current time' },
         'sign match fail or timestamp is not within one hour from current time (19021)'],
       ['feishu', 200, { code: 19024, msg: 'Key Words Not Found' }, 'Key Words Not Found (19024)'],
@@ -1793,7 +1815,7 @@ async function networkTests() {
     assert.notStrictEqual(network.offResult(), network.offResult(), 'a fresh object each time');
   });
 
-  await serial('send: with the switch off, all nine channels answer networkOff without a request; describeError says so in all five languages', async () => {
+  await serial('send: with the switch off, all ten channels answer networkOff without a request; describeError says so in all five languages', async () => {
     netSwitch.on = false;
     const f = fakeFetch();
     try {

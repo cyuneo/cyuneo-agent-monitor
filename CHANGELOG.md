@@ -4,6 +4,12 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-26
+
+### Added
+
+- **PushPlus push channel (WeChat).** Pushes can now arrive in WeChat through PushPlus's official account: in **Agent Monitor: Push Notifications…**, choose **Add a push channel**, pick **PushPlus (WeChat)** and paste your token from pushplus.plus. PushPlus only sends for accounts that passed its real-name verification. The channel's daily limit starts at 200, what a verified account can send a day.
+
 ## [0.6.0] - 2026-09-26
 
 ### Added
