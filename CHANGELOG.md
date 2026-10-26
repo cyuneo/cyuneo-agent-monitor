@@ -4,6 +4,12 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-10-26
+
+### Fixed
+
+- **Auto-resume after an account switch** no longer resumes on an account that claude-swap reports as unable to take work: at a limit other than its 5-hour and weekly ones (a model's weekly limit), outside its hours, or with its usage unread. The chat then waits for its own limit to reset, as without claude-swap.
+
 ## [0.9.0] - 2026-10-26
 
 ### Added
