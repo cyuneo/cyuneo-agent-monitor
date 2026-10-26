@@ -145,7 +145,10 @@ const vscode = {
     openExternal: async (u) => { log.external.push(String(u)); return true; },
   },
   // extensions other than this one are missing, except the ids tests put in extraExtensions
-  extensions: { getExtension: (id) => (extraExtensions.has(id) ? { id, isActive: true } : undefined) },
+  extensions: {
+    getExtension: (id) => (extraExtensions.has(id) ? { id, isActive: true } : undefined),
+    onDidChange: (fn) => { extensionListeners.push(fn); return { dispose() {} }; },
+  },
   workspace: {
     workspaceFolders: undefined,
     getConfiguration: (section) => ({
@@ -219,6 +222,7 @@ const vscode = {
 };
 const extraCommands = new Set();
 const extraExtensions = new Set();
+const extensionListeners = [];
 
 // fake worker: tests send snapshots by hand and simulate crashes; after terminate it exits with 1, like the real one
 class FakeWorker extends NodeEmitter {
@@ -670,7 +674,15 @@ async function extensionTests() {
   const page = openPanel();
 
   await test('activation: the bottom panel has a single webview (no native session tree) + the sidebar overview tree; the worker starts with the v2 config; context keys before loading', () => {
-    assert.deepStrictEqual(Object.keys(log.treeViews), ['agentMonitor.tree', 'agentMonitor.panelOverview'], 'only the sidebar tree and the hidden panel badge carrier (no native session tree)');
+    assert.deepStrictEqual(Object.keys(log.treeViews), ['agentMonitor.tree', 'agentMonitor.panelOverview', 'agentMonitor.cswapOverview'], 'only the sidebar tree, the hidden panel badge carrier and the copy in cswap\'s side bar (no native session tree)');
+    assert.strictEqual(log.treeViews['agentMonitor.cswapOverview'].opts.treeDataProvider, tv.opts.treeDataProvider, 'the cswap side bar shows the same overview');
+    assert.strictEqual(log.contexts['agentMonitor.cswapSidebar'], false, 'no cswap Status extension: not shown in its side bar');
+    extraExtensions.add('chenyu.cswap-status');
+    extensionListeners.forEach((fn) => fn());
+    assert.strictEqual(log.contexts['agentMonitor.cswapSidebar'], true, 'installed later: shown in its side bar');
+    extraExtensions.delete('chenyu.cswap-status');
+    extensionListeners.forEach((fn) => fn());
+    assert.strictEqual(log.contexts['agentMonitor.cswapSidebar'], false);
     assert.strictEqual(tv.opts.showCollapseAll, true);
     assert.ok(log.webviews['agentMonitor.agents'], 'webview not registered');
     assert.ok(log.webviews['agentMonitor.agents'].provider instanceof RecordingAgentsView);
@@ -2905,7 +2917,7 @@ async function alertTests() {
 // ---------------------------------------------------------------------------
 
 // The overview tree's menus apply to the side bar tree and its (hidden) copy in the bottom panel
-const TREE_VIEWS = 'view =~ /^agentMonitor\\.(tree|panelOverview)$/';
+const TREE_VIEWS = 'view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/';
 
 // ---------------------------------------------------------------------------
 // Remote push
@@ -4070,7 +4082,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.8.0');
+    assert.strictEqual(pkg.version, '0.9.0');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');
@@ -4127,7 +4139,10 @@ async function manifestTests() {
   });
 
   await test('views and containers: the bottom panel shows a single webview view (title merged into the panel tab, like the terminal) plus a hidden badge-carrying tree; the sidebar has the overview tree', () => {
-    for (const v of views.values()) assert.ok(containers.has(v.container), `container ${v.container} not declared`);
+    // cswap is the container of the cswap Status extension: the overview joins it only where that is installed
+    for (const v of views.values()) assert.ok(containers.has(v.container) || (v.container === 'cswap' && v.when === 'agentMonitor.cswapSidebar'), `container ${v.container} not declared`);
+    assert.deepStrictEqual(c.views.cswap.map((v) => v.id), ['agentMonitor.cswapOverview']);
+    assert.deepStrictEqual(c.viewsWelcome.filter((w) => w.view === 'agentMonitor.cswapOverview').map((w) => w.when), c.viewsWelcome.filter((w) => w.view === 'agentMonitor.tree').map((w) => w.when));
     assert.deepStrictEqual(c.views.agentMonitor.map((v) => v.id), ['agentMonitor.agents', 'agentMonitor.panelOverview']);
     assert.deepStrictEqual(c.views.agentMonitor.filter((v) => v.visibility !== 'hidden').map((v) => v.id), ['agentMonitor.agents'], 'bottom panel shows a single view by default');
     assert.strictEqual(views.get('agentMonitor.panelOverview').type, undefined, 'the badge carrier must be a tree view (created at activation)');
@@ -4214,7 +4229,7 @@ async function manifestTests() {
     }
     // the one scope entry per submenu covers the panel and both trees
     for (const m of c.menus['view/title'].filter((x) => x.submenu)) {
-      for (const v of ['agents', 'tree', 'panelOverview']) assert.ok(new RegExp(m.when.match(/\/(.*)\//)[1]).test('agentMonitor.' + v), `${m.submenu} shows on ${v}`);
+      for (const v of ['agents', 'tree', 'panelOverview', 'cswapOverview']) assert.ok(new RegExp(m.when.match(/\/(.*)\//)[1]).test('agentMonitor.' + v), `${m.submenu} shows on ${v}`);
     }
   });
 

@@ -2,7 +2,7 @@
   "name": "cyuneo-agent-monitor",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "preview": true,
   "publisher": "cyuneo",
   "author": {
@@ -129,6 +129,15 @@
           "contextualTitle": "%container.title%",
           "visibility": "hidden"
         }
+      ],
+      "cswap": [
+        {
+          "id": "agentMonitor.cswapOverview",
+          "name": "%container.title%",
+          "icon": "media/icon.svg",
+          "contextualTitle": "%container.title%",
+          "when": "agentMonitor.cswapSidebar"
+        }
       ]
     },
     "viewsWelcome": [
@@ -169,6 +178,26 @@
       },
       {
         "view": "agentMonitor.panelOverview",
+        "contents": "%welcome.noFolder%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
+        "when": "agentMonitor.filteredOut && agentMonitor.noFolder"
+      },
+      {
+        "view": "agentMonitor.cswapOverview",
+        "contents": "%welcome.loading%",
+        "when": "!agentMonitor.loaded"
+      },
+      {
+        "view": "agentMonitor.cswapOverview",
+        "contents": "%welcome.empty.all%\n[%welcome.openSettings%](command:agentMonitor.openSettings)",
+        "when": "agentMonitor.loaded && !agentMonitor.filteredOut"
+      },
+      {
+        "view": "agentMonitor.cswapOverview",
+        "contents": "%welcome.empty.workspace%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
+        "when": "agentMonitor.filteredOut && !agentMonitor.noFolder"
+      },
+      {
+        "view": "agentMonitor.cswapOverview",
         "contents": "%welcome.noFolder%\n[%welcome.showAll%](command:agentMonitor.scope.all)",
         "when": "agentMonitor.filteredOut && agentMonitor.noFolder"
       }
@@ -371,12 +400,12 @@
       "view/title": [
         {
           "submenu": "agentMonitor.scopeMenu.all",
-          "when": "view =~ /^agentMonitor\\.(agents|tree|panelOverview)$/ && config.agentMonitor.scope != 'workspace'",
+          "when": "view =~ /^agentMonitor\\.(agents|tree|panelOverview|cswapOverview)$/ && config.agentMonitor.scope != 'workspace'",
           "group": "navigation@1"
         },
         {
           "submenu": "agentMonitor.scopeMenu.workspace",
-          "when": "view =~ /^agentMonitor\\.(agents|tree|panelOverview)$/ && config.agentMonitor.scope == 'workspace'",
+          "when": "view =~ /^agentMonitor\\.(agents|tree|panelOverview|cswapOverview)$/ && config.agentMonitor.scope == 'workspace'",
           "group": "navigation@1"
         },
         {
@@ -431,89 +460,89 @@
         },
         {
           "command": "agentMonitor.hideCompleted",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && !config.agentMonitor.hideCompleted",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && !config.agentMonitor.hideCompleted",
           "group": "navigation@2"
         },
         {
           "command": "agentMonitor.showCompleted",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && config.agentMonitor.hideCompleted",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && config.agentMonitor.hideCompleted",
           "group": "navigation@2"
         },
         {
           "command": "agentMonitor.refresh",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/",
           "group": "navigation@3"
         },
         {
           "command": "agentMonitor.openSettings",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/",
           "group": "navigation@4"
         }
       ],
       "view/item/context": [
         {
           "command": "agentMonitor.goToChat",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
           "group": "0_goto@1"
         },
         {
           "command": "agentMonitor.compact",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bcompactable\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bcompactable\\b/",
           "group": "1_session@1"
         },
         {
           "command": "agentMonitor.handoff",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/ && viewItem =~ /\\bprovider-(claude|codex)\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bsession\\b/ && viewItem =~ /\\bprovider-(claude|codex)\\b/",
           "group": "1_session@2"
         },
         {
           "command": "agentMonitor.setAutoCompact",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/ && viewItem =~ /\\bprovider-(claude|codex)\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bsession\\b/ && viewItem =~ /\\bprovider-(claude|codex)\\b/",
           "group": "1_session@3"
         },
         {
           "command": "agentMonitor.copyResume",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bresumable\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bresumable\\b/",
           "group": "1_session@4"
         },
         {
           "command": "agentMonitor.autoResume.now",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bbgResumable\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bbgResumable\\b/",
           "group": "1_session@5"
         },
         {
           "command": "agentMonitor.autoResume.cancel",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bautoResumePending\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bautoResumePending\\b/",
           "group": "1_session@6"
         },
         {
           "command": "agentMonitor.markSeen",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "1_session@7"
         },
         {
           "command": "agentMonitor.openTranscript",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\b(session|agent|mainAgent)\\b/",
           "group": "2_open@1"
         },
         {
           "command": "agentMonitor.revealTranscript",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "2_open@2"
         },
         {
           "command": "agentMonitor.copyTranscriptPath",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bsession\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bsession\\b/",
           "group": "2_open@3"
         },
         {
           "command": "agentMonitor.openTranscript",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bagent\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bagent\\b/",
           "group": "inline@1"
         },
         {
           "command": "agentMonitor.goToChat",
-          "when": "view =~ /^agentMonitor\\.(tree|panelOverview)$/ && viewItem =~ /\\bgoTo\\b/",
+          "when": "view =~ /^agentMonitor\\.(tree|panelOverview|cswapOverview)$/ && viewItem =~ /\\bgoTo\\b/",
           "group": "inline@1"
         }
       ],

@@ -4,6 +4,12 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-26
+
+### Added
+
+- **The overview in cswap's side bar.** Where the cswap Status extension (claude-swap's accounts) is installed, its side bar also shows the Agent Monitor overview, so chats and accounts are on one screen. It is the same overview as in Agent Monitor's own side bar, with the same menus. To remove it, right-click the cswap side bar's title and uncheck Agent Monitor.
+
 ## [0.8.0] - 2026-10-25
 
 ### Added

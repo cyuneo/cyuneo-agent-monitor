@@ -70,6 +70,10 @@ const TREE_VIEW = 'agentMonitor.tree';
 // Hidden overview tree in the bottom panel. Tree views exist from activation (webview views only after first shown),
 // so its badge is what puts the count on the panel tab even before the panel has been opened.
 const PANEL_TREE_VIEW = 'agentMonitor.panelOverview';
+// The same overview in the side bar of the cswap Status extension (claude-swap's accounts), shown only where that
+// extension is installed (context key agentMonitor.cswapSidebar), so a cswap user sees chats and accounts together.
+const CSWAP_TREE_VIEW = 'agentMonitor.cswapOverview';
+const CSWAP_STATUS_EXT_ID = 'chenyu.cswap-status';
 const INTRO_KEY = 'agentMonitor.panelIntro.v1';     // globalState: the bottom panel was focused on first activation
 const LIST_WIDTH_KEY = 'agentMonitor.sessionListWidth';   // globalState: width of the session list in the bottom panel
 const OBSERVED_KEY = 'agentMonitor.observedCompact';       // globalState: { 'model|window': observed auto-compaction point }
@@ -256,6 +260,10 @@ class Controller {
     sub(this.overview, this.treeView);
     this.panelTree = vscode.window.createTreeView(PANEL_TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
     sub(this.panelTree);
+    this.cswapTree = vscode.window.createTreeView(CSWAP_TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
+    sub(this.cswapTree);
+    this.updateCswapSidebar();
+    if (vscode.extensions && typeof vscode.extensions.onDidChange === 'function') sub(vscode.extensions.onDidChange(() => this.updateCswapSidebar()));
 
     // Bottom panel: session list + agents (one webview)
     this.setupAgentsView();
@@ -2090,7 +2098,14 @@ class Controller {
     const sDesc = scopeText || undefined;
     if (sDesc !== this.chrome.sDesc && av && typeof av.setDescription === 'function') { this.chrome.sDesc = sDesc; av.setDescription(sDesc); }
     const tDesc = [scopeText, this.settings().hideCompleted ? i18n.t('tree.hideCompleted') : ''].filter(Boolean).join(fmt.SEP) || undefined;
-    if (tDesc !== this.chrome.tDesc) { this.chrome.tDesc = tDesc; this.treeView.description = tDesc; this.panelTree.description = tDesc; }
+    if (tDesc !== this.chrome.tDesc) { this.chrome.tDesc = tDesc; this.treeView.description = tDesc; this.panelTree.description = tDesc; this.cswapTree.description = tDesc; }
+  }
+
+  // Show the overview in cswap's side bar while the cswap Status extension is installed (no badge there: the cswap
+  // icon's number would read as an account count)
+  updateCswapSidebar() {
+    const ext = vscode.extensions && typeof vscode.extensions.getExtension === 'function' ? vscode.extensions.getExtension(CSWAP_STATUS_EXT_ID) : undefined;
+    this.setContext('cswapSidebar', !!ext);
   }
 
   setContext(key, value) {
