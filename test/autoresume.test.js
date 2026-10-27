@@ -1246,6 +1246,9 @@ test('accountswitch: parseCswap, findCswap, the reader (fake execFile)', async (
   // newer cswap says what the row can do: a model's own limit or an account outside its hours has no room
   for (const st of ['active', 'ready', 'reserve']) assert.strictEqual(acs.parseCswap(doc([row({ state: st })], last)).hasRoom, true, st);
   for (const st of ['limit', 'off-schedule', 'disabled', 'unknown']) assert.strictEqual(acs.parseCswap(doc([row({ state: st })], last)).hasRoom, false, st);
+  // with a state, usage nobody could read is no room (cswap calls such a reserve account "reserve", not "unknown")
+  assert.strictEqual(acs.parseCswap(doc([row({ state: 'reserve', usage5h: null, usage7d: null })], last)).hasRoom, false, 'reserve, usage unread');
+  assert.strictEqual(acs.parseCswap(doc([row({ state: 'reserve', usage5h: 10, usage7d: null })], last)).hasRoom, true, 'reserve, 5h read');
   for (const bad of [null, 'x', {}, { accounts: [] }, doc([row({ active: false })], last)]) assert.strictEqual(acs.parseCswap(bad), null);
 
   const dir = fs.mkdtempSync(path.join(TMP, 'cswap-'));

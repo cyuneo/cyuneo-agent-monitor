@@ -821,8 +821,9 @@ class Controller {
       if (timer && typeof timer.unref === 'function') timer.unref();
       this.waiters.push(() => { clearTimeout(timer); resolve(); });
     });
-    const panelVisible = !!(this.agentsView && this.agentsView.visible);
-    const viewId = panelVisible || !this.treeView.visible ? AGENTS_VIEW : TREE_VIEW;
+    // the spinner goes where the user can see it (Refresh may come from the cswap side bar)
+    const shown = (v) => !!(v && v.visible);
+    const viewId = shown(this.agentsView) ? AGENTS_VIEW : shown(this.treeView) ? TREE_VIEW : shown(this.cswapTree) ? CSWAP_TREE_VIEW : AGENTS_VIEW;
     return vscode.window.withProgress({ location: { viewId } }, () => next);
   }
 

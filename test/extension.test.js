@@ -1166,6 +1166,23 @@ async function extensionTests() {
     send(fixtures());
     await tick();
     assert.strictEqual(finished, true);
+    // only the copy in cswap's side bar is on screen: its spinner turns there
+    const tv = log.treeViews['agentMonitor.tree'];
+    const cv = log.treeViews['agentMonitor.cswapOverview'];
+    page.setVisible(false);
+    tv.setVisible(false);
+    registered.get('agentMonitor.refresh')();
+    assert.deepStrictEqual(last(log.progress), { location: { viewId: 'agentMonitor.cswapOverview' } });
+    cv.setVisible(false);
+    registered.get('agentMonitor.refresh')();
+    assert.deepStrictEqual(last(log.progress), { location: { viewId: 'agentMonitor.agents' } });
+    tv.setVisible(true);
+    registered.get('agentMonitor.refresh')();
+    assert.deepStrictEqual(last(log.progress), { location: { viewId: 'agentMonitor.tree' } });
+    cv.setVisible(true);
+    page.setVisible(true);
+    send(fixtures());
+    await tick();
   });
 
   await test('content area: compact from the session bar only goes to the current session; compact at a list row end can target any session in the list', async () => {
@@ -4082,7 +4099,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.9.1');
+    assert.strictEqual(pkg.version, '0.9.2');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');
