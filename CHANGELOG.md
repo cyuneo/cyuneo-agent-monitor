@@ -4,6 +4,12 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-10-27
+
+### Changed
+
+- **Steps in an agent's details are blocks.** The steps stack from the top, oldest first, as the agent works; new ones slide in below the others. Each tool call and its result are one gray block that says what it does (Running command, Searching, Editing…) and shows whether it is still running, finished, failed or stopped without a result. Click a block to see the call's input and output, read from the transcript only when you open it. Prompts, thinking and replies are plain lines between the blocks. Up to 30 recent steps are shown instead of 12. Works for Claude Code and Codex chats; Copilot steps show as blocks without the call log.
+
 ## [0.9.2] - 2026-10-27
 
 ### Fixed

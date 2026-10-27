@@ -135,6 +135,39 @@ test('20 snapshots in a row: two agents take turns being active, input order shu
   }
 });
 
+test('steps: a call and its result are one block; ids open the log only with a transcript; a turn that ended stops what still ran; keys stay put', () => {
+  const tl = [
+    { ms: NOW - 9e3, kind: 'prompt', tool: null, detail: 'Fix it', ref: null },
+    { ms: NOW - 8e3, kind: 'thinking', tool: null, detail: null, ref: null },
+    { ms: NOW - 7e3, kind: 'tool', tool: 'Grep', detail: 'TODO', ref: 'tu1' },
+    { ms: NOW - 7e3, kind: 'tool', tool: 'Read', detail: 'a.js', ref: 'tu2' },
+    { ms: NOW - 6e3, kind: 'toolDone', tool: 'Read', detail: 'a.js', ref: 'tu2' },
+    { ms: NOW - 6e3, kind: 'toolError', tool: 'Grep', detail: 'TODO', ref: 'tu1' },
+    { ms: NOW - 5e3, kind: 'tool', tool: 'mcp__github__search', detail: null, ref: 'tu3' },
+    { ms: NOW - 4e3, kind: 'tool', tool: 'shell', detail: 'ls', ref: null },
+    { ms: NOW - 3e3, kind: 'toolDone', tool: 'shell', detail: null, ref: null },
+    { ms: NOW - 2e3, kind: 'interrupt', tool: null, detail: null, ref: null },
+  ];
+  const s = session({ agents: [] });
+  s.main.file = '/work/demo/t.jsonl';
+  const steps = build(s, { detail: { key: s.key, agents: { main: { timeline: tl, result: null, files: [], errors: [] } } }, expanded: ['main'] }).detail.main.steps;
+  assert.deepStrictEqual(steps.map((x) => (x.block ? x.title + ':' + x.state : 'line')), [
+    'line', 'line',
+    i18n.t('webview.step.search') + ':error', i18n.t('webview.step.read') + ':done',
+    'github·search:stopped', i18n.t('webview.step.run') + ':done', 'line',
+  ]);
+  assert.deepStrictEqual(steps.filter((x) => x.block).map((x) => x.ref), ['tu1', 'tu2', 'tu3', null]);
+  assert.strictEqual(steps[4].icon, 'plug');
+  assert.strictEqual(steps[3].stateText, i18n.t('webview.step.state.done'));
+  // The oldest entries drop off the front: the remaining steps keep their keys
+  const later = build(s, { detail: { key: s.key, agents: { main: { timeline: tl.slice(2), result: null, files: [], errors: [] } } }, expanded: ['main'] }).detail.main.steps;
+  assert.deepStrictEqual(later.map((x) => x.key), steps.slice(2).map((x) => x.key));
+  // Without a transcript file there is no log to read
+  s.main.file = null;
+  const none = build(s, { detail: { key: s.key, agents: { main: { timeline: tl, result: null, files: [], errors: [] } } }, expanded: ['main'] }).detail.main.steps;
+  assert.ok(none.every((x) => x.ref === null));
+});
+
 test('details only for expanded rows; loaded=false when there is no detail data', () => {
   const s = session({ agents: [sub('a', NOW - 30 * MIN)] });
   const detail = { key: s.key, agents: {
@@ -151,9 +184,10 @@ test('details only for expanded rows; loaded=false when there is no detail data'
   assert.deepStrictEqual(Object.keys(vm.detail).sort(), ['a/a', 'main']);
   const d = vm.detail.main;
   assert.strictEqual(d.loaded, true);
-  assert.strictEqual(d.timeline.length, 2);
-  assert.strictEqual(d.timeline[0].tone, 'error', 'newest first');
-  assert.strictEqual(d.timeline[0].icon, 'error');
+  assert.deepStrictEqual(d.steps.map((x) => [x.block, x.title, x.text, x.state]),
+    [[true, i18n.t('webview.step.edit'), 'src/a.js', 'running'], [true, i18n.t('webview.step.run'), 'npm test', 'error']], 'oldest first');
+  assert.strictEqual(d.steps[1].tone, 'error');
+  assert.strictEqual(d.steps[1].icon, 'terminal');
   assert.deepStrictEqual(d.result, { text: 'Done.', truncated: true, ago: i18n.fmtAgo(NOW - 1000, NOW) });
   assert.deepStrictEqual(d.files.map((f) => [f.base, f.dir]), [['a.js', 'src'], ['old.js', 'src'], ['x.md', '~/notes']]);
   assert.ok(d.files[1].opText.includes('src/new/old.js') && !d.files[1].opText.includes('/work/demo'), 'move target uses a relative path');
@@ -663,6 +697,31 @@ test('provider: openFile only opens existing files listed in the details; openTr
   assert.deepStrictEqual(st.log.opened.slice(-1), [[legacy, { preview: true }]]);
   const d = AV.buildViewModel({ session: s2, i18n, now: NOW, expanded: ['main'], loaded: true }).detail.main;
   assert.strictEqual(d.canOpen, true);
+});
+
+test('provider: step reads the call log only for a call listed in the details, only from that agent\'s transcript, and posts it back', async () => {
+  const st = makeStub();
+  const p = new AV.AgentsViewProvider(st.context, { vscode: st.vscode, i18n });
+  p.resolveWebviewView(st.view);
+  const transcript = path.join(TMP, 'steps.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_s1', name: 'Bash', input: { command: 'echo hi' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_s1', content: 'hi' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_s2', name: 'Bash', input: { command: 'secret' } }] } },
+  ].map((x) => JSON.stringify(x)).join('\n') + '\n');
+  const s = session({ main: agent({ file: transcript }) });
+  const detail = { key: s.key, agents: { main: { timeline: [{ ms: NOW, kind: 'tool', tool: 'Bash', detail: 'echo hi', ref: 'toolu_s1' }], result: null, files: [], errors: [] } } };
+  p.update({ session: s, detail, now: NOW, loaded: true });
+  st.listeners.msg({ type: 'ready' });
+  const steps = () => st.log.posted.filter((m) => m.type === 'step');
+  st.listeners.msg({ type: 'step', sessionKey: s.key, rowId: 'main', ref: 'toolu_s2' });
+  st.listeners.msg({ type: 'step', sessionKey: 'claude:other', rowId: 'main', ref: 'toolu_s1' });
+  st.listeners.msg({ type: 'step', sessionKey: s.key, rowId: 'main', ref: 'toolu_s1', file: '/etc/passwd' });
+  for (let i = 0; i < 200 && !steps().length; i++) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.strictEqual(steps().length, 1, 'a call not in the details and another session are ignored');
+  const m = steps()[0];
+  assert.deepStrictEqual([m.sessionKey, m.rowId, m.ref, m.input, m.output, m.isError], [s.key, 'main', 'toolu_s1', 'echo hi', 'hi', false]);
 });
 
 test('row id → agent: main, subagent, workflow agent; workflow group rows and unknown ids give null', () => {

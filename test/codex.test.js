@@ -221,9 +221,12 @@ function scanTests() {
     });
     assert.deepStrictEqual(a.errors.map((e) => [e.tool, e.text]), [
       ['exec_command', 'error: 2 problems'], ['mcp__docs__search', 'tool not found'], ['exec', 'Error: boom']]);
-    const d12 = scanAt(120).p.detail(KEY(1)).agents[ID(1)];
-    assert.strictEqual(d12.timeline.length, 12, 'only the latest 12 entries are sent by default');
+    const d12 = scanAt(120, { limits: { timelineSent: 12 } }).p.detail(KEY(1)).agents[ID(1)];
+    assert.strictEqual(d12.timeline.length, 12, 'only the latest timelineSent entries are sent');
     assert.strictEqual(d12.timeline[11].kind, 'done');
+    // A call and its output share the call id
+    assert.deepStrictEqual([a.timeline[2].ref, a.timeline[3].ref].map(Boolean), [true, true]);
+    assert.strictEqual(a.timeline[2].ref, a.timeline[3].ref);
   });
 
   test('account-level quota: newest rate_limits across all rollouts (5h + weekly)', () => {

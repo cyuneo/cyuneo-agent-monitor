@@ -203,7 +203,9 @@ The full reference, with sources (other tools' defaults, vendor benchmarks, blog
 
 ### Details
 
-Click an agent to see its recent steps, its final result (with a copy button), the files it changed (click one to open it) and its tool errors. **Open transcript** opens the raw session record.
+Click an agent to see its steps, its final result (with a copy button), the files it changed (click one to open it) and its tool errors. **Open transcript** opens the raw session record.
+
+The steps stack from the top as the agent works. Each tool call is a gray block that shows what it does (Running command, Searching, Editing…) and whether it is still running, finished or failed; click a block to see the call's input (the command or arguments) and its output, read from the transcript. Prompts, thinking and replies appear as plain lines between the blocks.
 
 **Details** also has a **Transcript** line: where the chat is saved (with your home folder shortened to `~`), how big the transcript, its subagents and its file backups are, and **Reveal in Finder** (File Explorer on Windows) and **Copy Path** buttons.
 

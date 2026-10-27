@@ -527,16 +527,81 @@ body.short .c-cost, body.short .c-time { display: none; }
 .d-sec { min-width: 0; }
 .d-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .d-sec p { margin: 0; }
-.tl, .files, .errs { margin: 0; padding: 0; list-style: none; min-width: 0; }
-.tl {
-  display: grid;
-  grid-template-columns: max-content 16px minmax(0, 1fr);
-  column-gap: 6px;
+.steps, .files, .errs { margin: 0; padding: 0; list-style: none; min-width: 0; }
+.e-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Steps: the whole width of the details, oldest at the top. A tool call is a gray block that opens to its input and output;
+   prompts, thinking, replies and events are plain lines between the blocks */
+.d-sec.s-tl { grid-column: 1 / -1; }
+.steps { display: flex; flex-direction: column; gap: 3px; padding: 2px 0 4px; }
+.step { min-width: 0; }
+.step.line { display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+.step.line .codicon { flex: none; color: var(--c-icon); }
+.step .codicon.tone-error { color: var(--c-err-text); }
+.st-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .ago { flex: none; margin-left: auto; padding-left: 8px; }
+.step.block {
+  border: 1px solid var(--vscode-widget-border, var(--line));
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .1));
+  overflow: hidden;
 }
-.tl > li { display: contents; }
-.tl .codicon { color: var(--c-icon); align-self: center; }
-.tl .codicon.tone-error { color: var(--c-err-text); }
-.tl-text, .e-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: calc(var(--row-h) + 4px);
+  padding: 0 8px 0 4px;
+  border: 0;
+  background: none;
+  color: var(--vscode-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.st-head:hover { background: var(--vscode-list-hoverBackground); }
+.st-head[aria-disabled] { cursor: default; padding-left: 26px; }
+.st-head[aria-disabled]:hover { background: none; }
+.st-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.st-head > .codicon { flex: none; color: var(--c-icon); }
+.st-title { flex: none; font-weight: 600; }
+.st-tool { flex: none; }
+.st-state { margin-left: auto; }
+.st-state + .sr-only + .ago { margin-left: 0; }
+.s-running .st-state { color: var(--lamp-working); }
+.s-done .st-state { color: var(--vscode-testing-iconPassed, var(--lamp-doneSeen)); }
+.s-error .st-state, .s-error .st-icon { color: var(--c-err-text); }
+.s-error { border-color: var(--vscode-inputValidation-errorBorder, var(--c-err-text)); }
+.s-stopped .st-state { color: var(--lamp-idle); }
+.st-body { padding: 2px 8px 6px 26px; border-top: 1px solid var(--vscode-widget-border, var(--line)); }
+.st-body p { margin: 0; }
+.st-err { color: var(--c-err-text); overflow-wrap: anywhere; }
+.st-io + .st-io { margin-top: 4px; }
+.st-code {
+  margin: 0;
+  max-height: calc(var(--row-h) * 12);
+  overflow: auto;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: max(var(--vscode-font-size), var(--vscode-editor-font-size, 0px));
+  line-height: 1.5;
+  user-select: text;
+  color: var(--vscode-textPreformat-foreground, var(--vscode-foreground));
+  background: var(--vscode-textCodeBlock-background, var(--bg));
+  border-radius: 4px;
+}
+.st-code:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.st-io.is-error .st-code { color: var(--c-err-text); }
+/* A step that arrives while the details are open stacks in below the others */
+.step.enter { animation: step-in .24s ease-out both; }
+@keyframes step-in {
+  from { transform: translateY(-4px); clip-path: inset(0 0 100% 0); }
+  to { transform: none; clip-path: inset(0); }
+}
 .errs > li { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .errs > li > * { flex: none; }
 .errs .e-text { flex: 1 1 auto; }

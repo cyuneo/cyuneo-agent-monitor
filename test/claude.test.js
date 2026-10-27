@@ -286,7 +286,7 @@ test('session A details: timeline, results, changed files, errors; workflow agen
   assert.strictEqual(d.key, KEY.A);
   assert.deepStrictEqual(Object.keys(d.agents).sort(), ['main', 'sub1', 'w1', 'w2']);
   const m = d.agents.main;
-  assert.ok(m.timeline.length <= 12);
+  assert.ok(m.timeline.length <= 30);
   assert.deepStrictEqual(m.timeline.slice(-3).map((e) => e.kind), ['toolError', 'text', 'done']);
   assert.strictEqual(m.timeline.find((e) => e.kind === 'toolError').tool, 'Bash');
   assert.deepStrictEqual(m.result, { text: 'All done. Synthetic summary line.', truncated: false, ms: T(2, 30), source: 'lastText' });
@@ -301,8 +301,11 @@ test('session A details: timeline, results, changed files, errors; workflow agen
   assert.ok(d.agents.w1.result.text.includes('"ok": true'));
   assert.strictEqual(d.agents.sub1.result.text, 'Helper result text.');
   assert.strictEqual(d.agents.w2.result, null);
-  // The timeline holds only codes and original text snippets
-  for (const e of m.timeline) assert.deepStrictEqual(Object.keys(e).sort(), ['detail', 'kind', 'ms', 'tool']);
+  // The timeline holds only codes, original text snippets and the tool call id (a tool call and its result share it)
+  for (const e of m.timeline) assert.deepStrictEqual(Object.keys(e).sort(), ['detail', 'kind', 'ms', 'ref', 'tool']);
+  const err = m.timeline.find((e) => e.kind === 'toolError');
+  assert.ok(err.ref && m.timeline.some((e) => e.kind === 'tool' && e.ref === err.ref), 'the failed result points back to its call');
+  assert.ok(m.timeline.filter((e) => e.kind === 'text').every((e) => e.ref === null));
   assert.strictEqual(p.detail('claude:no-such'), null);
 });
 
@@ -939,7 +942,7 @@ test('normalizeConfig: fills in defaults; also accepts the legacy { root } form'
   assert.strictEqual(c.intervalMs, 2000);
   assert.strictEqual(c.approvalGuess, 'fastTools');
   assert.strictEqual(c.approvalGuessSeconds, 60);
-  assert.deepStrictEqual(c.limits, { timeline: 30, timelineSent: 12, resultChars: 4000, filesPerAgent: 200, errorsPerAgent: 10 });
+  assert.deepStrictEqual(c.limits, { timeline: 30, timelineSent: 30, resultChars: 4000, filesPerAgent: 200, errorsPerAgent: 10 });
   assert.strictEqual(c.dailyBudgetBytesPerTick, 8 * 1024 * 1024);
   const e = normalizeConfig({}, { CLAUDE_CONFIG_DIR: '/cfg', CODEX_HOME: '/cx' });
   assert.strictEqual(e.claude.projectsDir, path.join('/cfg', 'projects'));
