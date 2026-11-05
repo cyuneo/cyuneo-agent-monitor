@@ -100,6 +100,7 @@ const AUTORESUME_CMD = Object.freeze({
 const AUTORESUME_FILE = 'autoresume.json';
 const AUTORESUME_NOTICE_PREFIX = 'autoresume-plan|';
 const CLAUDE_EXT_ID = 'anthropic.claude-code'; // its bundled CLI is where auto-resume looks last, like the compact command
+const CLAUDE_OPEN_CMD = 'claude-vscode.editor.open'; // (sessionId, prompt?, …, { programmatic }): opens a chat, prefills, never sends
 const STORAGE_WAIT_MS = 120000; // the storage scan stats recursively; large dirs can take tens of seconds
 // Settings that require rebuilding the worker; other settings just recompute from the last snapshot on the main thread
 const MONITOR_KEYS = [
@@ -1553,6 +1554,13 @@ class Controller {
           t: (key, vars) => this.t(key, vars),
           fmtTime: (ms) => this.i18n.fmtClock(ms, Date.now()),
           account: () => this.autoResumeAccount(),
+          // In the original window first (§12.8): the registry under the Claude config dir, transcripts to verify, the
+          // helper's fallback folder, the setting, and the prefill of a chat open in this window
+          claudeHome: () => this.workerConfig().claude.configDir,
+          projectsDir: () => this.workerConfig().claude.projectsDir,
+          storageDir: () => (storage && storage.fsPath ? storage.fsPath : null),
+          inWindow: () => this.userSetting('autoResume.inWindow') !== false,
+          prefill: (o) => this.autoResumePrefill(o),
         });
         this.autoResume.onOutcome((o) => this.guard('autoResume', () => this.onAutoResumeOutcome(o)));
         this.autoResumeUi = {
@@ -1694,6 +1702,34 @@ class Controller {
     }).catch((err) => this.log(this.t('ext.log.failed', { what: 'autoResume', error: errText(err) })));
   }
 
+  /**
+   * Fallback of the in-window path (§12.8): the chat is a Claude Code chat open in this window but could not be sent a
+   * message; its input gets the text (claude-vscode.editor.open prefills, it never sends) and a notice says to press
+   * Enter there, with a button that brings the chat up. true when the text was put in.
+   * @param {{ sessionId: string, text: string, projectName: string|null }} o
+   */
+  async autoResumePrefill(o) {
+    if (this.stopped || !o || typeof o.sessionId !== 'string' || typeof o.text !== 'string') return false;
+    let cmds = [];
+    try { cmds = await vscode.commands.getCommands(true); } catch { cmds = []; }
+    if (!cmds.includes(CLAUDE_OPEN_CMD)) return false;
+    const opts = { programmatic: 'honor-preferred-location' }; // keeps the user's preferred Claude location
+    try {
+      await vscode.commands.executeCommand(CLAUDE_OPEN_CMD, o.sessionId, o.text, undefined, undefined, undefined, { ...opts });
+    } catch (err) {
+      this.log(this.t('ext.log.failed', { what: 'autoResume prefill', error: errText(err) }));
+      return false;
+    }
+    const focus = this.t('autoresume.btn.focus');
+    Promise.resolve(vscode.window.showInformationMessage(this.t('autoresume.toast.prefilled', { project: o.projectName || '' }), focus))
+      .then((pick) => {
+        if (pick !== focus || this.stopped) return undefined;
+        return vscode.commands.executeCommand(CLAUDE_OPEN_CMD, o.sessionId, undefined, undefined, undefined, undefined, { ...opts });
+      })
+      .catch((err) => this.log(this.t('ext.log.failed', { what: 'autoResume', error: errText(err) })));
+    return true;
+  }
+
   /** An automatic resume ran or gave up (only the window that ran it hears of it): push at once, say how it went, redraw */
   onAutoResumeOutcome(o) {
     if (this.stopped || !o || o.type !== 'autoResume') return;
@@ -1709,16 +1745,21 @@ class Controller {
   autoResumeResultToast(o) {
     if (this.stopped || !o) return;
     const code = typeof o.error === 'string' ? `autoresume.error.${o.error}` : '';
-    const vars = { project: o.projectName || '', n: o.attempt, max: o.max, reason: code && this.i18n.has(code) ? this.t(code) : '' };
+    const short = (id) => (typeof id === 'string' ? id.slice(0, 8) : '');
+    const vars = { project: o.projectName || '', copy: short(o.copySessionId), session: short(o.sessionId), n: o.attempt, max: o.max, reason: code && this.i18n.has(code) ? this.t(code) : '' };
     const w = vscode.window;
     if (o.outcome === 'resumed' || o.outcome === 'copied') {
-      Promise.resolve(w.showInformationMessage(this.t(`autoresume.toast.${o.outcome}`, vars))).catch(noop);
+      const key = o.outcome === 'resumed' && o.via === 'message' ? 'autoresume.toast.messaged'
+        : o.outcome === 'resumed' && o.via === 'prefill' ? 'autoresume.toast.prefillSent' : `autoresume.toast.${o.outcome}`;
+      Promise.resolve(w.showInformationMessage(this.t(key, vars))).catch(noop);
       return;
     }
     if (o.outcome !== 'failed' && o.outcome !== 'gaveUp') return;
     const showLog = this.t('autoresume.btn.showLog');
     const terminal = o.outcome === 'failed' && o.error === 'untrusted' ? this.t('autoresume.btn.openTerminal') : null;
-    Promise.resolve(w.showWarningMessage(this.t(`autoresume.toast.${o.outcome}`, vars), ...(terminal ? [terminal, showLog] : [showLog])))
+    // The in-window message showed up in another chat: its own, louder warning (never retried by itself)
+    const text = o.outcome === 'failed' && o.error === 'misdelivered' ? this.t('autoresume.toast.misdelivered', vars) : this.t(`autoresume.toast.${o.outcome}`, vars);
+    Promise.resolve(w.showWarningMessage(text, ...(terminal ? [terminal, showLog] : [showLog])))
       .then((pick) => {
         if (!pick || this.stopped) return;
         if (pick === terminal) this.autoResumeTrustTerminal(o);

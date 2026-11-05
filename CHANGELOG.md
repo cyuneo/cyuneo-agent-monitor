@@ -4,6 +4,17 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-11-04
+
+### Added
+
+- **Auto-resume continues in the original window.** When a stopped Claude Code chat is still open, it now gets a message in that window instead of a background copy. The message goes out only after the limit reset, or after the account switch when the account in use has room. It is sent only when exactly one idle, live process holds the chat under a unique name, and delivery is checked in the chat's own transcript. A busy chat is never interrupted. A small helper run (Haiku, low effort, only the ListAgents and SendMessage tools, hooks and tool search off) sends it; setting: `agentMonitor.autoResume.inWindow` (on by default).
+- If the message cannot be sent, a chat open in this VS Code window gets the text in its input, and you press Enter there. If nothing is sent within 10 minutes, `claude --bg --resume` runs as before.
+
+### Changed
+
+- A copy made by `--bg --resume` is kept, because it holds real work, and the notice and log now say which chat it is a copy of.
+
 ## [0.10.0] - 2026-10-27
 
 ### Changed

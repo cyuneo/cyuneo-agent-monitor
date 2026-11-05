@@ -57,7 +57,7 @@ const C = 'cccccccc-1111-2222-3333-444444444444';
 const PROJ = '/synthetic/work/demo-app';
 const KEY = core.PROJECTS_KEY;
 const PLAN_KEYS = ['key', 'sessionId', 'project', 'projectName', 'stopId', 'trigger', 'state', 'atMs', 'attempt', 'max', 'unavailable'];
-const OUTCOME_KEYS = ['type', 'outcome', 'key', 'sessionId', 'project', 'projectName', 'attempt', 'max', 'copySessionId', 'error', 'atMs', 'manual'];
+const OUTCOME_KEYS = ['type', 'outcome', 'key', 'sessionId', 'project', 'projectName', 'attempt', 'max', 'copySessionId', 'error', 'atMs', 'manual', 'via'];
 
 const status = (code, sinceMs, quota = null) => ({ code, sinceMs, quota });
 const quotaHit = (resetsAtMs, autoContinue = null) => ({ kind: 'session', model: null, resetsAtMs, resetsText: null, source: 'quotaLimits', autoContinue });
@@ -539,7 +539,7 @@ test('makeOutcome: §12.5 shape', () => {
   const p = plan(session());
   const o = core.makeOutcome(p, 'failed', { error: 'exit', atMs: NOW });
   assert.deepStrictEqual(Object.keys(o), OUTCOME_KEYS);
-  assert.deepStrictEqual(o, { type: 'autoResume', outcome: 'failed', key: `claude:${A}`, sessionId: A, project: PROJ, projectName: 'demo-app', attempt: 1, max: 3, copySessionId: null, error: 'exit', atMs: NOW, manual: false });
+  assert.deepStrictEqual(o, { type: 'autoResume', outcome: 'failed', key: `claude:${A}`, sessionId: A, project: PROJ, projectName: 'demo-app', attempt: 1, max: 3, copySessionId: null, error: 'exit', atMs: NOW, manual: false, via: null });
   assert.strictEqual(core.makeOutcome(p, 'failed', { error: 'weird' }).error, 'spawn');
   assert.strictEqual(core.makeOutcome(p, 'resumed', { error: 'exit', copySessionId: B }).error, null);
   assert.strictEqual(core.makeOutcome(p, 'resumed', { copySessionId: B }).copySessionId, null);
@@ -576,9 +576,10 @@ test('error stop: planned at sinceMs + 2 min, --help checked once, one spawn wit
   assert.strictEqual(r[0].opts.cwd, h.project);
   assert.strictEqual(r[0].opts.shell, false);
   assert.deepStrictEqual(r[0].opts.stdio, ['ignore', 'pipe', 'pipe']);
+  assert.strictEqual(r[0].opts.env, undefined);
   assert.strictEqual(h.spawn.helps().length, 1, '--help cached per path + mtime');
   assert.strictEqual(h.outcomes.length, 1);
-  assert.deepStrictEqual(h.outcomes[0], { type: 'autoResume', outcome: 'resumed', key: s.key, sessionId: A, project: h.project, projectName: 'demo-app', attempt: 1, max: 3, copySessionId: null, error: null, atMs: NOW + 90 * SEC, manual: false });
+  assert.deepStrictEqual(h.outcomes[0], { type: 'autoResume', outcome: 'resumed', key: s.key, sessionId: A, project: h.project, projectName: 'demo-app', attempt: 1, max: 3, copySessionId: null, error: null, atMs: NOW + 90 * SEC, manual: false, via: null });
   const st = h.readState();
   assert.deepStrictEqual(st.lineages[A], { attempts: 1, lastMs: NOW + 90 * SEC });
   assert.ok(stopIdOf(s) in st.executed);
@@ -609,7 +610,7 @@ test('copied ("already running in the background", stdout): the copy joins the l
   await h.clock.advance(2 * MIN);
   assert.strictEqual(h.outcomes.length, 1);
   assert.deepStrictEqual([h.outcomes[0].outcome, h.outcomes[0].copySessionId, h.outcomes[0].error], ['copied', B, null]);
-  assert.ok(h.logs.some((l) => l.includes(`"outcome":"autoresume.outcome.copied {\\"copy\\":\\"${B}\\"}"`)), h.logs.join('\n'));
+  assert.ok(h.logs.some((l) => l.includes(`"outcome":"autoresume.outcome.copied {\\"copy\\":\\"${B}\\",\\"session\\":\\"${A}\\"}"`)), h.logs.join('\n'));
   assert.strictEqual(h.readState().aliases[B], A);
   const copy = h.sess({ id: B, key: `claude:${B}`, status: status('apiError', NOW + 10 * MIN) });
   h.update([s, copy]);
@@ -697,7 +698,7 @@ test('backoff over a lineage: the 3rd attempt waits 8 min; the next stop is gave
   const g = h.plan(again.key);
   assert.deepStrictEqual([g.state, g.atMs, g.attempt, g.max], ['gaveUp', null, 3, 3]);
   assert.strictEqual(h.outcomes.length, 2);
-  assert.deepStrictEqual({ ...h.outcomes[1] }, { type: 'autoResume', outcome: 'gaveUp', key: again.key, sessionId: A, project: h.project, projectName: 'demo-app', attempt: 3, max: 3, copySessionId: null, error: null, atMs: NOW + 8 * MIN, manual: false });
+  assert.deepStrictEqual({ ...h.outcomes[1] }, { type: 'autoResume', outcome: 'gaveUp', key: again.key, sessionId: A, project: h.project, projectName: 'demo-app', attempt: 3, max: 3, copySessionId: null, error: null, atMs: NOW + 8 * MIN, manual: false, via: null });
   h.update([again]);
   h.update([again]);
   assert.strictEqual(h.outcomes.length, 2, 'gaveUp once');
@@ -877,7 +878,7 @@ test('resumeNow: no project needed, same argv, not an auto attempt; returned, no
   h.update([s]);
   assert.strictEqual(h.plan(s.key), undefined);
   const o = await h.rt.resumeNow(s.key);
-  assert.deepStrictEqual(o, { type: 'autoResume', outcome: 'resumed', key: s.key, sessionId: A, project: null, projectName: 'demo-app', attempt: 0, max: 3, copySessionId: null, error: null, atMs: NOW, manual: true });
+  assert.deepStrictEqual(o, { type: 'autoResume', outcome: 'resumed', key: s.key, sessionId: A, project: null, projectName: 'demo-app', attempt: 0, max: 3, copySessionId: null, error: null, atMs: NOW, manual: true, via: null });
   assert.deepStrictEqual(h.spawn.resumes().map((c) => [c.args, c.opts.cwd, c.opts.shell]), [[['--bg', '--resume', A, 'Continue the task you were working on.'], h.project, false]]);
   assert.strictEqual(h.outcomes.length, 0);
   const st = h.readState();
@@ -1218,7 +1219,7 @@ test('runtime: asks the account switcher while a limit plan waits (at most every
   assert.strictEqual(h.outcomes[0].outcome, 'resumed');
   h.update([s]);
   await h.clock.advance(5 * MIN);
-  assert.strictEqual(reads, 2, 'not asked once the stop has run');
+  assert.strictEqual(reads, 3, 'asked once more right before the run, not once the stop has run');
 });
 
 test('runtime: a failing or throwing account switcher changes nothing', async () => {
@@ -1284,6 +1285,143 @@ test('accountswitch: parseCswap, findCswap, the reader (fake execFile)', async (
   assert.strictEqual(await read(), null);
   assert.strictEqual(await acs.createCswapReader({ find: () => null, execFile: () => { throw new Error('never'); } })(), null, 'no cswap');
   assert.strictEqual(await acs.createCswapReader({ find: () => '/x', execFile: () => { throw new Error('spawn'); } })(), null);
+});
+
+section('in the original window (§12.8)');
+
+/** A runtime whose chat is open in a registry entry; helper(call) acts for the `claude -p` run */
+function inWindowHarness(o = {}) {
+  const dir = fs.mkdtempSync(path.join(TMP, 'iw-'));
+  const home = path.join(dir, 'claude');
+  const proj = path.join(home, 'projects', '-p');
+  fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
+  fs.mkdirSync(proj, { recursive: true });
+  const transcript = path.join(proj, `${A}.jsonl`);
+  fs.writeFileSync(transcript, '');
+  fs.writeFileSync(path.join(home, 'sessions', '100.json'), JSON.stringify({
+    sessionId: A, pid: 100, name: 'chat-a', nameSince: '1', status: o.status || 'idle', entrypoint: o.entrypoint || 'cli', statusUpdatedAt: o.updatedAt || NOW,
+  }));
+  const script = (call) => {
+    if (call.args[0] === '--help') return { stdout: HELP_BG };
+    if (call.args[0] !== '-p') return o.bg ? o.bg(call) : {};
+    const prompt = call.args[call.args.length - 1];
+    const text = prompt.slice(prompt.indexOf('BEGIN-MESSAGE\n') + 14, prompt.lastIndexOf('\nEND-MESSAGE'));
+    return {
+      stdout: JSON.stringify(o.helperResult || { subtype: 'success', result: 'SENT' }),
+      onSpawn: () => { if (o.deliver !== false) fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user', message: { content: text } })}\n`); },
+    };
+  };
+  const h = harness({
+    dir, script,
+    deps: {
+      platform: 'darwin', isAlive: (pid) => pid === 100, claudeHome: () => home, projectsDir: () => path.join(home, 'projects'),
+      storageDir: () => dir, ...(o.deps || {}),
+    },
+  });
+  h.home = home;
+  h.helpers = () => h.spawn.calls.filter((c) => c.args[0] === '-p');
+  h.chat = () => h.sess({ transcript });
+  return h;
+}
+
+test('in-window: an open idle chat gets the message; no --bg; resumed via message', async () => {
+  const h = inWindowHarness();
+  h.update([h.chat()]);
+  await h.clock.advance(2 * MIN);
+  assert.strictEqual(h.helpers().length, 1);
+  assert.strictEqual(h.spawn.resumes().length, 0);
+  assert.deepStrictEqual([h.outcomes[0].outcome, h.outcomes[0].via], ['resumed', 'message']);
+  // the helper runs with tool search off (SendMessage not deferred) on top of the inherited env; --bg gets no env of its own
+  const env = h.helpers()[0].opts.env;
+  assert.strictEqual(env.ENABLE_TOOL_SEARCH, 'false');
+  assert.strictEqual(env.PATH, process.env.PATH);
+});
+
+test('in-window off, or the chat open nowhere → --bg --resume as before, no helper', async () => {
+  const off = inWindowHarness({ deps: { inWindow: () => false } });
+  off.update([off.chat()]);
+  await off.clock.advance(2 * MIN);
+  assert.deepStrictEqual([off.helpers().length, off.spawn.resumes().length], [0, 1]);
+  const gone = inWindowHarness({ deps: { isAlive: () => false } });
+  gone.update([gone.chat()]);
+  await gone.clock.advance(2 * MIN);
+  assert.deepStrictEqual([gone.helpers().length, gone.spawn.resumes().length], [0, 1]);
+});
+
+test('in-window: a busy chat is not interrupted and not claimed; checked again, then sent once it is idle', async () => {
+  const h = inWindowHarness({ status: 'busy' });
+  h.update([h.chat()]);
+  await h.clock.advance(2 * MIN);
+  assert.strictEqual(h.spawn.calls.filter((c) => c.args[0] !== '--help').length, 0);
+  assert.strictEqual(h.outcomes.length, 0);
+  fs.writeFileSync(path.join(h.home, 'sessions', '100.json'), JSON.stringify({ sessionId: A, pid: 100, name: 'chat-a', nameSince: '1', status: 'idle', statusUpdatedAt: h.clock.now() }));
+  await h.clock.advance(MIN);
+  assert.strictEqual(h.helpers().length, 1);
+  assert.strictEqual(h.outcomes[0].via, 'message');
+});
+
+test('in-window: unsendable, not this window → the copy is labelled with the chat it copies', async () => {
+  const h = inWindowHarness({ updatedAt: NOW - 3 * 24 * 3600e3, bg: () => ({ stdout: copyNote(A, B) }) });
+  h.update([h.chat()]);
+  await h.clock.advance(2 * MIN);
+  assert.strictEqual(h.helpers().length, 0);
+  assert.strictEqual(h.outcomes[0].outcome, 'copied');
+  assert.ok(h.logs.some((l) => l.includes('autoresume.outcome.copied') && l.includes(B) && l.includes(A)), h.logs.join('\n'));
+});
+
+test('in-window: the helper errors after sending (is_error) → the chat continued, no copy on top', async () => {
+  const h = inWindowHarness({ helperResult: { is_error: true, subtype: 'error_during_execution', result: '' } });
+  h.update([h.chat()]);
+  await h.clock.advance(15 * MIN);
+  assert.strictEqual(h.helpers().length, 1);
+  assert.strictEqual(h.spawn.resumes().length, 0);
+  assert.deepStrictEqual([h.outcomes[0].outcome, h.outcomes[0].via], ['resumed', 'message']);
+});
+
+test('in-window: cancelled during the 10-minute wait → no copy starts and no outcome', async () => {
+  const h = inWindowHarness({ deliver: false });
+  const chat = h.chat();
+  h.update([chat]);
+  await h.clock.advance(5 * MIN);
+  assert.strictEqual(h.helpers().length, 1);
+  h.rt.cancel(chat.key);
+  await h.clock.advance(15 * MIN);
+  assert.strictEqual(h.spawn.resumes().length, 0);
+  assert.strictEqual(h.outcomes.length, 0);
+});
+
+test('in-window: the chat moves on while the account is being asked → nothing claimed, nothing sent', async () => {
+  const answer = { switchedAtMs: NOW - MIN, hasRoom: true, label: '#2' };
+  let reads = 0;
+  let release = null;
+  const h = inWindowHarness({ deps: { account: () => { reads++; return reads < 2 ? Promise.resolve(answer) : new Promise((r) => { release = () => r(answer); }); } } });
+  const s = h.sess({ transcript: h.chat().transcript, status: status('quota', NOW - MIN, quotaHit(NOW + 3 * HOUR)) });
+  h.update([s]);
+  await flush();
+  h.update([s]);
+  await h.clock.advance(2 * MIN);
+  assert.ok(release, 'the account was asked right before the send');
+  h.update([]);
+  release();
+  await flush();
+  await h.clock.advance(MIN);
+  assert.strictEqual(h.helpers().length, 0);
+  assert.strictEqual(h.spawn.resumes().length, 0);
+  assert.strictEqual(h.outcomes.length, 0);
+});
+
+test('in-window: after a switch the account is asked again right before the send; no room → nothing sent, not claimed', async () => {
+  const answer = { switchedAtMs: NOW - MIN, hasRoom: true, label: '#2' };
+  let reads = 0;
+  const h = inWindowHarness({ deps: { account: async () => { reads++; return reads >= 2 ? { ...answer, hasRoom: false } : answer; } } });
+  const s = h.sess({ transcript: h.chat().transcript, status: status('quota', NOW - MIN, quotaHit(NOW + 3 * HOUR)) });
+  h.update([s]);
+  await flush();
+  h.update([s]);
+  await h.clock.advance(2 * MIN);
+  assert.strictEqual(h.helpers().length, 0, 'never sent without room');
+  assert.strictEqual(h.outcomes.length, 0);
+  assert.ok(h.logs.some((l) => l.includes('no room yet')), h.logs.join('\n'));
 });
 
 // ---------- Run ----------

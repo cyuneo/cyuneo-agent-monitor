@@ -96,6 +96,7 @@
   "config.autoResume.errorDelayMinutes": "API 錯誤後等待幾分鐘再續跑。之後每多試一次，等待時間加倍。",
   "config.autoResume.afterLimit": "知道額度重置時間時，也在額度重置一分鐘後自動續跑。",
   "config.autoResume.afterAccountSwitch": "裝了 claude-swap（cswap）時：對話因額度用完停下後，cswap 一換到還有額度的帳號，約 30 秒後就續跑，不等額度重置。只讀取 cswap 的本機狀態。",
+  "config.autoResume.inWindow": "被中斷的對話還開在某個 Claude Code 視窗裡時，就在那個視窗繼續：Agent Monitor 讓 Claude Code 傳一則訊息給那個對話（一次很短的 `claude -p` Haiku 執行，約 $0.005），並確認訊息只到了那個對話；做不到時，才在本視窗把文字填進那個對話，或執行 `claude --bg --resume`（對開著的對話會複製一份）。關閉：一律用 `claude --bg --resume`。",
   "config.network.allow": "允許 Agent Monitor 發出網路請求。**預設關閉**：關閉時，擴充功能不會發出任何網路請求。目前只有推播通知（`#agentMonitor.push.enabled#`）和它的測試訊息會用到，其他功能都不連網。只從你的使用者設定裡讀取，工作區無法把它開啟。",
   "config.push.enabled": "智慧體需要你、因錯誤停止、碰到或解除使用額度時，向你的手機或團隊聊天傳送一則簡短推播。預設關閉；用 [推播通知…](command:agentMonitor.push.setup) 選擇推播到哪裡。只傳送專案資料夾名稱和狀態（開啟 `#agentMonitor.push.includeTitle#` 才會附上對話標題和子智慧體名稱）。它需要連網，所以還要開啟 `#agentMonitor.network.allow#`；連網關閉時推播會暫停。",
   "config.push.events": "推播開啟時，哪些事件會傳送推播。",
