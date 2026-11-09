@@ -92,7 +92,7 @@
   "config.cacheReminderShortTtl": "也提醒使用 5 分鐘快取的工作階段。",
   "config.closeReminder": "當你關閉一個快取仍然有效的大型 Claude Code 工作階段時，提示你壓縮它或寫一份交接筆記。",
   "config.postCompactHint": "工作階段壓縮後，提醒你檢查關鍵規則和約束是否還在。",
-  "config.autoResume.maxAttempts": "同一個對話最多可以連續自動續跑幾次，達到後就不再續跑。對話完成一輪回覆後重新計算。",
+  "config.autoResume.maxAttempts": "同一個對話最多可以連續自動續跑幾次，達到後就不再續跑。續跑的對話得到 Claude 的真實回覆後重新計算。",
   "config.autoResume.errorDelayMinutes": "API 錯誤後等待幾分鐘再續跑。之後每多試一次，等待時間加倍。",
   "config.autoResume.afterLimit": "知道額度重置時間時，也在額度重置一分鐘後自動續跑。",
   "config.autoResume.afterAccountSwitch": "裝了 claude-swap（cswap）時：對話因額度用完停下後，cswap 一換到還有額度的帳號，約 30 秒後就續跑，不等額度重置。只讀取 cswap 的本機狀態。",

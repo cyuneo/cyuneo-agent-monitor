@@ -498,6 +498,35 @@ function quotaTests() {
     const n = parse("You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.");
     assert.deepStrictEqual([n.kind, n.model, n.resetsAtMs, n.resetsText], ['model', 'Fable 5', null, null]);
     assert.strictEqual(parse("You've hit your spend limit").kind, 'spend');
+    // The real message of a monthly spend limit names the session limit too, and its record says five_hour
+    const monthly = "You've hit your monthly spend limit. Raise it in your settings to keep working now, or wait. Your session limit resets 5:01am (Asia/Seoul).";
+    assert.strictEqual(parse(monthly).kind, 'spend');
+    const line = { type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', timestamp: '2026-09-14T10:00:00Z', quotaLimits: { rateLimitType: 'five_hour', resetsAt: 1789400000 }, message: { content: [{ type: 'text', text: monthly }] } };
+    const hit = quota.parseClaudeQuota(line, {});
+    assert.deepStrictEqual([hit.kind, hit.resetsAtMs, hit.source], ['spend', 1789400000000, 'quotaLimits']);
+    assert.strictEqual(quota.parseClaudeQuota({ ...line, message: { content: [{ type: 'text', text: "You've hit your session limit" }] } }, {}).kind, 'session');
+    // Real wordings from Claude Code 2.1.318 fragments, as the record's five_hour says otherwise
+    for (const text of ["You've hit your org's monthly usage limit", "You've hit your channel's monthly usage limit", "You've hit your monthly limit",
+      "You're out of usage credits. /model to switch models.", 'Your org is out of usage · add funds to continue', "You're out of extra usage",
+      "Your group's usage limit is set to $0", "You've hit your team's shared budget. Your session limit resets 5am"]) {
+      assert.strictEqual(parse(text).kind, 'spend', text);
+      assert.strictEqual(quota.parseClaudeQuota({ ...line, message: { content: [{ type: 'text', text }] } }, {}).kind, 'spend', text);
+    }
+    // The field Claude Code itself reads for credits exhausted; others say nothing about money
+    const words = { ...line, message: { content: [{ type: 'text', text: "You've hit your session limit" }] } };
+    for (const reason of ['org_spend_cap_reached', 'org_level_disabled_until', 'out_of_credits']) {
+      assert.strictEqual(quota.parseClaudeQuota({ ...words, quotaLimits: { ...line.quotaLimits, overageDisabledReason: reason } }, {}).kind, 'spend', reason);
+    }
+    assert.strictEqual(quota.parseClaudeQuota({ ...words, quotaLimits: { ...line.quotaLimits, overageDisabledReason: 'something_else' } }, {}).kind, 'session');
+    // Billing errors are spend limits by another name, in the text or not: no timed retry, and nothing says Claude Code waits
+    const billing = { type: 'assistant', isApiErrorMessage: true, error: 'billing_error', apiErrorStatus: 400, timestamp: '2026-09-14T10:00:00Z', version: '2.1.318', message: { content: [{ type: 'text', text: 'Credit balance is too low' }] } };
+    assert.ok(quota.isClaudeQuotaLine(billing));
+    assert.deepStrictEqual((({ kind, resetsAtMs, autoContinue }) => [kind, resetsAtMs, autoContinue])(quota.parseClaudeQuota(billing, {})), ['spend', null, false]);
+    const daily = { ...billing, message: { content: [{ type: 'text', text: 'spend limit reached (daily; resets 3am (UTC))' }] } };
+    assert.strictEqual(quota.parseClaudeQuota(daily, {}).kind, 'spend');
+    assert.ok(Number.isFinite(quota.parseClaudeQuota(daily, {}).resetsAtMs), 'its reset time is used when it has one');
+    assert.ok(quota.isClaudeQuotaLine({ ...billing, error: 'unknown', message: { content: [{ type: 'text', text: 'Your credit balance is too low' }] } }), 'by its text');
+    assert.ok(!quota.isClaudeQuotaLine({ ...billing, error: 'overloaded', message: { content: [{ type: 'text', text: 'Overloaded' }] } }));
     assert.strictEqual(parse("You've hit your usage limit").kind, 'unknown');
     assert.strictEqual(parse('').kind, 'unknown');
   });

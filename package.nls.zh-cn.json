@@ -92,7 +92,7 @@
   "config.cacheReminderShortTtl": "也提醒使用 5 分钟缓存的会话。",
   "config.closeReminder": "当你关闭一个缓存仍然有效的大型 Claude Code 会话时，提示你压缩它或写一份交接笔记。",
   "config.postCompactHint": "会话压缩后，提醒你检查关键规则和约束是否还在。",
-  "config.autoResume.maxAttempts": "同一个对话最多可以连续自动续跑几次，达到后就不再续跑。对话完成一轮回复后重新计数。",
+  "config.autoResume.maxAttempts": "同一个对话最多可以连续自动续跑几次，达到后就不再续跑。续跑的对话得到 Claude 的真实回复后重新计数。",
   "config.autoResume.errorDelayMinutes": "API 出错后等待多少分钟再续跑。之后每多试一次，等待时间翻倍。",
   "config.autoResume.afterLimit": "知道额度重置时间时，也在额度重置一分钟后自动续跑。",
   "config.autoResume.afterAccountSwitch": "装了 claude-swap（cswap）时：对话因额度用完停下后，cswap 一换到还有额度的账号，约 30 秒后就续跑，不等额度重置。只读取 cswap 的本地状态。",

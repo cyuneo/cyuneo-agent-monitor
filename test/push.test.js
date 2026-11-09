@@ -1711,6 +1711,118 @@ function runtimeTests() {
     x.runtime.dispose();
   });
 
+  test('runtime auto-resume: why a plan waits is in the stop\'s push; a plan\'s brake says so instead of the count', async () => {
+    const line = (p) => push.formatPush([{ type: 'error', project: 'demo', autoResume: push.autoResumeSnapshot(p) }], en).body;
+    const base = planOf(working({ updatedMs: Date.now() }), { atMs: Date.now() + 2 * MIN });
+    const when = en.fmtClock(base.atMs, Date.now());
+    assert.deepStrictEqual(push.autoResumeSnapshot({ ...base, held: 'spend' }).held, 'spend');
+    assert.strictEqual(push.autoResumeSnapshot({ ...base, held: 'nope' }).held, undefined);
+    const held = line({ ...base, held: 'spend' });
+    assert.ok(held.includes(en.t('autoresume.push.line.scheduled', { time: when, n: 1, max: 3 })) && held.includes(en.t('autoresume.held.spend')), held);
+    assert.ok(line({ ...base, state: 'noReset', atMs: null, held: 'fastFail' }).includes(en.t('autoresume.held.fastFail')));
+    assert.ok(line({ ...base, state: 'gaveUp', held: 'brake' }).includes(en.t('autoresume.held.brake')));
+    const ev = push.autoResumeEvent({ ...outcomeOf(working({ updatedMs: Date.now() }), { outcome: 'gaveUp' }), brake: true });
+    assert.strictEqual(push.formatPush([ev], en).body, en.t('autoresume.push.body.gaveUpBrake', { project: 'demo-app' }));
+    const par = push.autoResumeEvent(outcomeOf(working({ updatedMs: Date.now() }), { outcome: 'parallel' }));
+    assert.ok(push.isUrgent(par));
+    assert.strictEqual(push.formatPush([par], en).title, en.t('autoresume.push.title.parallel'));
+  });
+
+  test('runtime auto-resume chain: a stop right after a resume is not pushed; a stop later is, in the same 10 minutes', async () => {
+    const x = arRig();
+    const now = Date.now();
+    const id = working({ updatedMs: now }).id;
+    let last = now - 30e3;
+    const opts = { chainOf: () => id, lastResumeOf: () => last };
+    const calm = [working({ updatedMs: now })];
+    x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1, ...opts });
+    const fast = [failing(now - 1000, { updatedMs: now })];
+    x.runtime.update({ sessions: fast, lamps: lampsOf(fast), seq: 2, now, ...opts });
+    await sleep(60);
+    assert.strictEqual(x.fetch.calls.length, 0, 'the resume did nothing, and that was pushed');
+    assert.ok(x.logs.some((l) => l.includes('not sent')), 'it says so in the log');
+    x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 3, ...opts });
+    last = now - 3 * MIN;
+    const later = [failing(now - 500, { updatedMs: now })];
+    x.runtime.update({ sessions: later, lamps: lampsOf(later), seq: 4, now, ...opts });
+    await sleep(60);
+    assert.strictEqual(x.fetch.calls.length, 1, 'real work before it: news');
+    x.runtime.dispose();
+  });
+
+  test('runtime auto-resume chain: a stop right after a resume whose plan now waits (until the reset, or no reset time) is pushed, with why', async () => {
+    const now = Date.now();
+    for (const [plan, sent] of [
+      [{ state: 'scheduled', atMs: now + 4 * HOUR, held: 'fastFail' }, 1],
+      [{ state: 'noReset', atMs: null, held: 'spend' }, 1],
+      [{ state: 'scheduled', atMs: now + 3 * MIN, held: 'projectCap' }, 0],
+      [{ state: 'scheduled', atMs: now + 30e3 }, 0],
+      [{ state: 'gaveUp', atMs: null }, 0],
+    ]) {
+      const x = arRig();
+      const id = working({ updatedMs: now }).id;
+      const opts = { chainOf: () => id, lastResumeOf: () => now - 3000 };
+      const calm = [working({ updatedMs: now })];
+      x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1, ...opts });
+      const fast = [failing(now - 1000, { updatedMs: now })];
+      const plans = new Map([[fast[0].key, planOf(fast[0], plan)]]);
+      x.runtime.update({ sessions: fast, lamps: lampsOf(fast), seq: 2, now, autoResume: plans, ...opts });
+      await sleep(60);
+      assert.strictEqual(x.fetch.calls.length, sent, JSON.stringify(plan));
+      if (sent && plan.held) assert.ok(x.fetch.calls[0].init.body.includes(en.t(`autoresume.held.${plan.held}`)), x.fetch.calls[0].init.body);
+      x.runtime.dispose();
+    }
+  });
+
+  test('runtime auto-resume chain: the claim is taken only by a window that really pushes (no secret here, or muted)', async () => {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-chain-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const settings = { enabled: true, delaySeconds: 600, channels: [push.splitConfig(cfg).settings] };
+    const noSecret = makeRuntime({ dir, secrets: {}, settings });
+    const quiet = makeRuntime({ dir, secrets: secretsOf(cfg), settings, mute: () => true });
+    const real = makeRuntime({ dir, secrets: secretsOf(cfg), settings });
+    const calm = [working({ updatedMs: Date.now() })];
+    for (const x of [noSecret, quiet, real]) x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    const o = outcomeOf(calm[0], { outcome: 'copied', copySessionId: 'cccccccc-1111-2222-3333-444444444444' });
+    const chainOf = () => calm[0].id;
+    noSecret.runtime.update({ autoResumeEvents: [o], chainOf });
+    await sleep(40);
+    quiet.runtime.update({ autoResumeEvents: [o], chainOf });
+    await sleep(40);
+    real.runtime.update({ autoResumeEvents: [o], chainOf });
+    await sleep(60);
+    assert.strictEqual(noSecret.fetch.calls.length + quiet.fetch.calls.length + real.fetch.calls.length, 1);
+    assert.strictEqual(real.fetch.calls.length, 1);
+    assert.ok(!real.logs.some((l) => l.includes('not sent')));
+    for (const x of [noSecret, quiet, real]) x.runtime.dispose();
+  });
+
+  test('runtime auto-resume chain: one chat and its copies push one resume per 10 minutes, across windows; failures always go out; another chain is its own', async () => {
+    const dir = fs.mkdtempSync(path.join(TMP, 'rt-chain-'));
+    const cfg = { ...CFG.ntfy, key: 'ntfy' };
+    const opts = { dir, secrets: secretsOf(cfg), settings: { enabled: true, delaySeconds: 600, channels: [push.splitConfig(cfg).settings] } };
+    const a = makeRuntime(opts);
+    const b = makeRuntime(opts);
+    const calm = [working({ updatedMs: Date.now() })];
+    for (const x of [a, b]) x.runtime.update({ sessions: calm, lamps: lampsOf(calm), seq: 1 });
+    const root = calm[0].id;
+    const chainOf = (id) => (id.startsWith('1') ? root : id);
+    const links = ['11111111', '11111112', '11111113'].map((p, i) => ({ ...outcomeOf(calm[0], { outcome: 'copied', copySessionId: `${p}-1111-2222-3333-444444444444` }), sessionId: `1111111${i}-1111-2222-3333-444444444444`, key: `claude:1111111${i}-1111-2222-3333-444444444444`, atMs: 1000 + i }));
+    a.runtime.update({ autoResumeEvents: [links[0]], chainOf });
+    b.runtime.update({ autoResumeEvents: [links[1]], chainOf });
+    a.runtime.update({ autoResumeEvents: [links[2]], chainOf });
+    await sleep(60);
+    assert.strictEqual(a.fetch.calls.length + b.fetch.calls.length, 1, 'one push for the chain');
+    a.runtime.update({ autoResumeEvents: [{ ...links[0], outcome: 'failed', error: 'exit', atMs: 2000 }], chainOf });
+    await sleep(60);
+    assert.strictEqual(a.fetch.calls.length + b.fetch.calls.length, 2, 'a failure goes out');
+    const other = { ...links[0], sessionId: 'dddddddd-1111-2222-3333-444444444444', key: 'claude:dddddddd-1111-2222-3333-444444444444', atMs: 3000 };
+    a.runtime.update({ autoResumeEvents: [other], chainOf });
+    await sleep(60);
+    assert.strictEqual(a.fetch.calls.length + b.fetch.calls.length, 3, 'another chat is another chain');
+    for (const x of [a, b]) x.runtime.dispose();
+  });
+
   test('runtime auto-resume outcomes: sent at once, claimed once across windows; the same outcome handed over again is not sent twice; outcomes alone leave the latest snapshot as it was', async () => {
     const dir = fs.mkdtempSync(path.join(TMP, 'rt-ar-'));
     const cfg = { ...CFG.ntfy, key: 'ntfy' };

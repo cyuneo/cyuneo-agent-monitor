@@ -92,7 +92,7 @@
   "config.cacheReminderShortTtl": "5분 캐시를 사용하는 세션에 대해서도 알립니다.",
   "config.closeReminder": "캐시가 아직 유효한 대형 Claude Code 세션을 닫으면 압축하거나 인수인계 메모를 작성하도록 제안합니다.",
   "config.postCompactHint": "세션이 압축된 후, 주요 규칙과 제약 사항이 여전히 남아 있는지 확인하도록 알려줍니다.",
-  "config.autoResume.maxAttempts": "자동 재개를 멈추기 전까지 한 대화를 연속으로 자동 재개할 수 있는 횟수입니다. 대화가 한 턴을 마치면 횟수를 처음부터 다시 셉니다.",
+  "config.autoResume.maxAttempts": "자동 재개를 멈추기 전까지 한 대화를 연속으로 자동 재개할 수 있는 횟수입니다. 재개한 대화에 Claude의 실제 응답이 있으면 횟수를 처음부터 다시 셉니다.",
   "config.autoResume.errorDelayMinutes": "API 오류가 난 뒤 재개하기 전까지 기다리는 시간(분)입니다. 이후 시도할 때마다 대기 시간이 두 배가 됩니다.",
   "config.autoResume.afterLimit": "초기화 시각을 알 수 있으면 사용 한도가 초기화되고 1분 뒤에도 재개합니다.",
   "config.autoResume.afterAccountSwitch": "claude-swap(cswap)가 설치된 경우: 사용 한도로 멈춘 대화를 cswap이 여유 있는 계정으로 전환한 뒤 약 30초 후에 재개합니다(초기화를 기다리지 않음). cswap의 로컬 상태만 읽습니다.",

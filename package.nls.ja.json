@@ -92,7 +92,7 @@
   "config.cacheReminderShortTtl": "5分キャッシュを使用しているセッションについても通知します。",
   "config.closeReminder": "キャッシュがまだ有効な大きなClaude Codeセッションを閉じたとき、圧縮するか引き継ぎメモを書くよう提案します。",
   "config.postCompactHint": "セッションが圧縮された後、重要なルールと制約がまだ残っているか確認するよう通知します。",
-  "config.autoResume.maxAttempts": "自動再開をあきらめるまでに、1つのチャットを続けて自動再開できる回数です。チャットが1ターンを終えると回数は数え直しになります。",
+  "config.autoResume.maxAttempts": "自動再開をあきらめるまでに、1つのチャットを続けて自動再開できる回数です。再開したチャットに Claude の実際の返答があると、回数は数え直しになります。",
   "config.autoResume.errorDelayMinutes": "API エラーの後、再開するまで待つ時間（分）です。以降は試行のたびに待ち時間が2倍になります。",
   "config.autoResume.afterLimit": "リセット時刻がわかる場合は、使用上限がリセットされた1分後にも再開します。",
   "config.autoResume.afterAccountSwitch": "claude-swap（cswap）がある場合：使用上限で止まったチャットを、cswap が余裕のあるアカウントに切り替えた約30秒後に再開します（リセットを待ちません）。cswap のローカル状態を読むだけです。",

@@ -1330,13 +1330,23 @@ function autoResumeTests() {
     const clock = probe.fmtClock(at, NOW);
     const r = fmt.formatAutoResume(arInfo({ plan: arPlan('scheduled', { atMs: at }) }), probe, NOW);
     assert.deepStrictEqual(r, {
-      available: true, state: 'scheduled', stateText: `autoresume.state.scheduled:${clock}|1|3|demo`, unavailableText: '',
+      available: true, state: 'scheduled', stateText: `autoresume.state.scheduled:${clock}|1|3|demo`, heldText: '', unavailableText: '',
       planText: `autoresume.state.scheduled:${clock}|1|3|demo`, projectOn: true, projectText: 'on:demo',
       copyNote: 'copy', claudeOnlyNote: 'claudeOnly', howNote: 'how',
     });
     const text = (plan, o) => fmt.formatAutoResume(arInfo({ plan, ...o }), probe, NOW);
     assert.strictEqual(text(arPlan('self', { atMs: NOW + HOUR })).stateText, `autoresume.state.self:${probe.fmtClock(NOW + HOUR, NOW)}|1|3|demo`, 'self: the reset time');
     assert.strictEqual(text(arPlan('noReset')).stateText, 'autoresume.state.noReset:|1|3|demo');
+    // Why it waits is on the panel, not only in the log
+    for (const held of ['spend', 'refused', 'fastFail', 'lineageCap', 'projectCap']) {
+      const r2 = text(arPlan('scheduled', { atMs: at, held }));
+      assert.ok(r2.heldText.startsWith(`autoresume.held.${held}`), r2.heldText);
+      assert.ok(r2.planText.includes(r2.stateText) && r2.planText.includes(r2.heldText), r2.planText);
+    }
+    assert.ok(text(arPlan('noReset', { held: 'spend' })).planText.includes('autoresume.held.spend'));
+    const braked = text(arPlan('gaveUp', { held: 'brake' }));
+    assert.ok(braked.stateText.startsWith('autoresume.state.gaveUpBrake') && braked.heldText.startsWith('autoresume.held.brake'), braked.planText);
+    assert.strictEqual(text(arPlan('running', { held: 'spend' })).heldText, '', 'running: no longer waiting');
     // moved up by an account switch (cswap): its own sentence, with the account
     const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
     const sw = fmt.formatAutoResume(arInfo({ plan: arPlan('scheduled', { atMs: at, via: 'switch', account: '#2' }) }), en, NOW);

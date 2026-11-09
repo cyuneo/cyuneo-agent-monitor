@@ -1224,6 +1224,8 @@ class Controller {
     if (this.push) {
       this.guard('push', () => this.push.update({
         sessions, lamps, quota: this.last.quota, seq: this.dataSeq, alerts, autoResume: this.arPlans,
+        chainOf: this.autoResume ? this.autoResume.chainOf : undefined,
+        lastResumeOf: this.autoResume ? this.autoResume.lastResumeOf : undefined,
       }));
     }
     for (const key of [...this.notifyDeferred.keys()]) if (!this.currentWait(key)) this.notifyDeferred.delete(key);
@@ -1551,6 +1553,7 @@ class Controller {
           prompt: () => this.t('resume.prompt.claude'),
           settings: () => this.autoResumeSettings(),
           log: (line) => this.log(line),
+          warn: (text) => { Promise.resolve(vscode.window.showWarningMessage(text)).catch(noop); },
           t: (key, vars) => this.t(key, vars),
           fmtTime: (ms) => this.i18n.fmtClock(ms, Date.now()),
           account: () => this.autoResumeAccount(),
@@ -1733,7 +1736,7 @@ class Controller {
   /** An automatic resume ran or gave up (only the window that ran it hears of it): push at once, say how it went, redraw */
   onAutoResumeOutcome(o) {
     if (this.stopped || !o || o.type !== 'autoResume') return;
-    if (this.push) this.guard('push', () => this.push.update({ autoResumeEvents: [o] }));
+    if (this.push) this.guard('push', () => this.push.update({ autoResumeEvents: [o], chainOf: this.autoResume ? this.autoResume.chainOf : undefined }));
     this.autoResumeResultToast(o);
     this.render();
   }
@@ -1754,11 +1757,12 @@ class Controller {
       Promise.resolve(w.showInformationMessage(this.t(key, vars))).catch(noop);
       return;
     }
-    if (o.outcome !== 'failed' && o.outcome !== 'gaveUp') return;
+    if (o.outcome !== 'failed' && o.outcome !== 'gaveUp' && o.outcome !== 'parallel') return;
     const showLog = this.t('autoresume.btn.showLog');
     const terminal = o.outcome === 'failed' && o.error === 'untrusted' ? this.t('autoresume.btn.openTerminal') : null;
     // The in-window message showed up in another chat: its own, louder warning (never retried by itself)
-    const text = o.outcome === 'failed' && o.error === 'misdelivered' ? this.t('autoresume.toast.misdelivered', vars) : this.t(`autoresume.toast.${o.outcome}`, vars);
+    const text = o.outcome === 'failed' && o.error === 'misdelivered' ? this.t('autoresume.toast.misdelivered', vars)
+      : o.outcome === 'gaveUp' && o.brake === true ? this.t('autoresume.toast.gaveUpBrake', vars) : this.t(`autoresume.toast.${o.outcome}`, vars);
     Promise.resolve(w.showWarningMessage(text, ...(terminal ? [terminal, showLog] : [showLog])))
       .then((pick) => {
         if (!pick || this.stopped) return;

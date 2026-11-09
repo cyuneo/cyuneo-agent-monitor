@@ -400,11 +400,11 @@ section('core: lineage and state');
 test('attempts count per lineage: a copy counts under its original, chains follow to the root', () => {
   let st = core.emptyState();
   st = core.recordAttempt(st, A, `${A}|apiError|1`, NOW);
-  assert.deepStrictEqual(core.lineageOf(st, A, NOW), { root: A, attempts: 1, lastMs: NOW });
+  assert.deepStrictEqual(core.lineageOf(st, A, NOW), { root: A, attempts: 1, lastMs: NOW, head: A });
   st = core.recordCopy(st, B, A);
   assert.strictEqual(core.rootOf(st, B), A);
   st = core.recordAttempt(st, B, `${B}|apiError|2`, NOW + MIN);
-  assert.deepStrictEqual(core.lineageOf(st, A, NOW + MIN), { root: A, attempts: 2, lastMs: NOW + MIN });
+  assert.deepStrictEqual(core.lineageOf(st, A, NOW + MIN), { root: A, attempts: 2, lastMs: NOW + MIN, head: B });
   st = core.recordCopy(st, C, B);
   assert.strictEqual(st.aliases[C], A, 'a copy of a copy maps straight to the root');
   assert.strictEqual(core.lineageOf(st, C, NOW + MIN).attempts, 2);
@@ -422,12 +422,14 @@ test('attempts count per lineage: a copy counts under its original, chains follo
   assert.strictEqual(JSON.stringify(st), before);
 });
 
-test('reset: done after the last resume (in any lineage session), or 24 h since the last resume', () => {
+test('reset: the head done with a real turn after the last resume, or 24 h since the last resume', () => {
   let st = core.recordAttempt(core.recordAttempt(core.emptyState(), A, null, NOW - 20 * MIN), A, null, NOW - 10 * MIN);
   st = core.recordCopy(st, B, A);
-  const done = (id, ms) => session({ id, key: `claude:${id}`, status: status('done', ms) });
-  assert.strictEqual(core.resetOnDone(st, [done(A, NOW - 11 * MIN)]).changed, false, 'done before the last resume');
-  assert.strictEqual(core.resetOnDone(st, [done(A, NOW - 10 * MIN)]).changed, false, 'not later than it');
+  const done = (id, ms) => session({ id, key: `claude:${id}`, lastRealTurnMs: ms, status: status('done', ms) });
+  assert.strictEqual(core.resetOnDone(st, [done(B, NOW - 11 * MIN)]).changed, false, 'a real turn before the last resume');
+  assert.strictEqual(core.resetOnDone(st, [done(B, NOW - 10 * MIN)]).changed, false, 'not later than it (lastRealTurnMs == lastMs)');
+  assert.strictEqual(core.resetOnDone(st, [done(A, NOW - 5 * MIN)]).changed, false, 'the parent is not who was resumed');
+  assert.strictEqual(core.resetOnDone(st, [session({ id: B, key: `claude:${B}`, status: status('done', NOW - 5 * MIN) })]).changed, false, 'done with no real turn');
   assert.strictEqual(core.resetOnDone(st, [session({ status: status('apiError', NOW) })]).changed, false);
   const r = core.resetOnDone(st, [done(B, NOW - 5 * MIN)]);
   assert.strictEqual(r.changed, true, 'the copy finished');
@@ -457,10 +459,14 @@ test('state: garbage in → clean state out; bounded; old entries pruned', () =>
   let al = core.emptyState();
   for (let i = 0; i < core.ALIASES_MAX + 5; i++) al = core.recordCopy(al, `copy${String(i).padStart(4, '0')}`, A);
   assert.strictEqual(Object.keys(al.aliases).length, core.ALIASES_MAX);
-  let old = core.addCancelled(core.recordAttempt(core.emptyState(), A, `${A}|apiError|1`, NOW - 2 * DAY), `${A}|quota|2`, NOW - 2 * DAY);
+  let old = core.addCancelled(core.recordAttempt(core.emptyState(), A, `${A}|apiError|1`, NOW - 3 * DAY), `${A}|quota|2`, NOW - 2 * DAY);
   old = core.recordAttempt(old, B, `${B}|apiError|3`, NOW);
   const pr = core.pruneState(old, NOW);
   assert.deepStrictEqual(Object.keys(pr.lineages), [B]);
+  // A count still holds the stops of the day after its last resume until they are a day old themselves
+  const counted = core.pruneState(core.recordAttempt(core.emptyState(), A, null, NOW - 2 * DAY), NOW);
+  assert.strictEqual(counted.lineages[A].attempts, 1);
+  assert.strictEqual(core.pruneState({ ...counted, lineages: { [A]: { attempts: 0, lastMs: NOW - 2 * DAY } } }, NOW).lineages[A], undefined, 'a count at 0: a day');
   assert.deepStrictEqual(Object.keys(pr.executed), [`${B}|apiError|3`]);
   assert.deepStrictEqual(pr.cancelled, {});
 });
@@ -581,7 +587,7 @@ test('error stop: planned at sinceMs + 2 min, --help checked once, one spawn wit
   assert.strictEqual(h.outcomes.length, 1);
   assert.deepStrictEqual(h.outcomes[0], { type: 'autoResume', outcome: 'resumed', key: s.key, sessionId: A, project: h.project, projectName: 'demo-app', attempt: 1, max: 3, copySessionId: null, error: null, atMs: NOW + 90 * SEC, manual: false, via: null });
   const st = h.readState();
-  assert.deepStrictEqual(st.lineages[A], { attempts: 1, lastMs: NOW + 90 * SEC });
+  assert.deepStrictEqual(st.lineages[A], { attempts: 1, lastMs: NOW + 90 * SEC, head: A, project: h.project });
   assert.ok(stopIdOf(s) in st.executed);
   assert.deepStrictEqual(fs.readdirSync(path.dirname(h.stateFile)).filter((f) => f.endsWith('.tmp')), [], 'atomic write leaves no temp file');
   assert.strictEqual(h.plan(s.key), undefined, 'a stop is resumed once');
@@ -727,15 +733,15 @@ test('gaveUp: once across windows; not for a stop that is not fresh (a restart)'
   assert.strictEqual(h3.outcomes.length, 0);
 });
 
-test('reset: a lineage session done after the last attempt, or 24 h, starts the count again', async () => {
+test('reset: a lineage session done with a real turn after the last attempt, or 24 h, starts the count again', async () => {
   const h = harness();
   h.writeState({ lineages: { [A]: { attempts: 3, lastMs: NOW - 30 * MIN } }, aliases: { [B]: A } });
-  const copyDone = h.sess({ id: B, key: `claude:${B}`, status: status('done', NOW - 40 * MIN) });
+  const copyDone = h.sess({ id: B, key: `claude:${B}`, lastRealTurnMs: NOW - 40 * MIN, status: status('done', NOW - 40 * MIN) });
   h.update([copyDone]);
   assert.strictEqual(h.readState().lineages[A].attempts, 3, 'done before the last resume');
-  const later = h.sess({ id: B, key: `claude:${B}`, status: status('done', NOW - 10 * MIN) });
+  const later = h.sess({ id: B, key: `claude:${B}`, lastRealTurnMs: NOW - 10 * MIN, status: status('done', NOW - 10 * MIN) });
   h.update([later]);
-  assert.strictEqual(h.readState().lineages[A], undefined, 'reset (and pruned)');
+  assert.deepStrictEqual(h.readState().lineages[A], { attempts: 0, lastMs: NOW - 30 * MIN }, 'reset; the time of the last resume stays');
   const s = h.sess({ status: status('apiError', NOW) });
   h.update([later, s]);
   assert.deepStrictEqual([h.plan(s.key).state, h.plan(s.key).attempt], ['scheduled', 1]);
@@ -1163,13 +1169,365 @@ test('never throws: garbage snapshots, throwing deps, a broken state file; dispo
 
 section('account switch (cswap)');
 
+test('core: a spend limit counts only a switch after the stop; a later switch still resumes promptly', () => {
+  const spend = session({ status: status('quota', NOW, { ...quotaHit(NOW + 3 * HOUR), kind: 'spend' }) });
+  const acc = (switchedAtMs) => ({ account: { switchedAtMs, hasRoom: true, label: '#8' } });
+  for (const t of [NOW - 9 * MIN, NOW - 30 * SEC, NOW]) {
+    const p = plan(spend, 0, acc(t));
+    assert.deepStrictEqual([p.atMs, p.via, p.held], [NOW + 3 * HOUR + MIN, undefined, 'spend'], String(t));
+  }
+  const q = plan(spend, 0, { ...acc(NOW + 5 * MIN), now: NOW + 5 * MIN });
+  assert.deepStrictEqual([q.atMs, q.via, q.held], [NOW + 5 * MIN + core.SWITCH_PAD_MS, 'switch', undefined]);
+  const noReset = session({ status: status('quota', NOW, { ...quotaHit(null), kind: 'spend' }) });
+  assert.deepStrictEqual([plan(noReset, 0, acc(NOW - MIN)).state, plan(noReset, 0, acc(NOW - MIN)).held], ['noReset', 'spend']);
+});
+
+test('core: other limits: a switch counts SWITCH_BEFORE_MS before the stop, for what was in flight; later the account switched to refused', () => {
+  assert.strictEqual(core.SWITCH_BEFORE_MS, 2 * MIN);
+  const lim = session({ status: status('quota', NOW, quotaHit(NOW + 3 * HOUR)) });
+  const acc = (switchedAtMs) => ({ account: { switchedAtMs, hasRoom: true, label: '#4' } });
+  assert.strictEqual(plan(lim, 0, acc(NOW - core.SWITCH_BEFORE_MS)).via, 'switch');
+  const old = plan(lim, 0, acc(NOW - core.SWITCH_BEFORE_MS - 1));
+  assert.deepStrictEqual([old.via, old.held, old.atMs], [undefined, 'refused', NOW + 3 * HOUR + MIN]);
+  const nine = plan(lim, 0, acc(NOW - 9 * MIN));
+  assert.deepStrictEqual([nine.via, nine.held], [undefined, 'refused'], 'the night of the loop: 01:16 and 01:24:56');
+  // no room claimed: nothing to explain
+  assert.strictEqual(plan(lim, 0, { account: { switchedAtMs: NOW - 9 * MIN, hasRoom: false } }).held, undefined);
+});
+
+test('core: fast-fail breaker: a stop right after the last resume needs a switch after that resume', () => {
+  const lim = session({ status: status('quota', NOW, quotaHit(NOW + 3 * HOUR)) });
+  const lin = (lastMs) => ({ attempts: 1, lastMs, root: A });
+  const acc = (switchedAtMs) => ({ account: { switchedAtMs, hasRoom: true, label: '#4' } });
+  const hit = core.planFor(lim, lin(NOW - 4 * SEC), { projects: [PROJ], now: NOW, ...acc(NOW - 40 * SEC) });
+  assert.deepStrictEqual([hit.via, hit.held, hit.atMs], [undefined, 'fastFail', NOW + 3 * HOUR + MIN]);
+  const newer = core.planFor(lim, lin(NOW - 4 * SEC), { projects: [PROJ], now: NOW, ...acc(NOW - 2 * SEC) });
+  assert.deepStrictEqual([newer.via, newer.held], ['switch', undefined], 'a new switch after that resume');
+  const after = core.planFor(lim, lin(NOW - 4 * SEC), { projects: [PROJ], now: NOW + MIN, ...acc(NOW + MIN) });
+  assert.strictEqual(after.via, 'switch', 'a switch after the stop too');
+  const worked = core.planFor(lim, lin(NOW - core.FAST_FAIL_MS - 1), { projects: [PROJ], now: NOW, ...acc(NOW - MIN) });
+  assert.strictEqual(worked.via, 'switch', 'past the window the resume did something');
+  const noReset = session({ status: status('quota', NOW, quotaHit(null)) });
+  assert.deepStrictEqual((({ state, held }) => [state, held])(core.planFor(noReset, lin(NOW - 4 * SEC), { projects: [PROJ], now: NOW, ...acc(NOW - 40 * SEC) })), ['noReset', 'fastFail']);
+  // An API error that fails as fast keeps its backoff: the count is not reset, so it grows
+  const err = session({ status: status('apiError', NOW) });
+  assert.strictEqual(core.planFor(err, { attempts: 2, lastMs: NOW - 4 * SEC, root: A }, { projects: [PROJ], now: NOW }).atMs, NOW + 8 * MIN);
+});
+
+test('core: a stop older than the last resume gets no plan (a copy showing the stop it was copied from)', () => {
+  const inherited = session({ id: B, key: `claude:${B}`, status: status('quota', NOW - 30 * SEC, quotaHit(NOW + HOUR)) });
+  assert.strictEqual(core.planFor(inherited, { attempts: 1, lastMs: NOW - 2 * SEC, root: A }, { projects: [PROJ], now: NOW }), null);
+});
+
+test('core: resetOnDone: a real turn counts however quick, a done without one however late; says what it reset, once', () => {
+  const st = core.recordAttempt(core.recordAttempt(core.emptyState(), A, null, NOW - 5 * MIN), A, null, NOW);
+  const done = (ms, real) => session({ lastRealTurnMs: real, status: status('done', ms) });
+  const noTurn = core.resetOnDone(st, [done(NOW + 150 * SEC, NOW - MIN)]);
+  assert.deepStrictEqual([noTurn.changed, noTurn.resets, noTurn.state === st], [false, [], true], 'a done from the registry, 150 s after the resume');
+  const quick = core.resetOnDone(st, [done(NOW + SEC, NOW + SEC)]);
+  assert.deepStrictEqual(quick.resets, [{ root: A, sessionId: A, attempts: 2 }], 'one second is real work too');
+  // Copies of one lineage done together: one reset (not one per session); the head is the one that counts
+  const copied = core.recordCopy(st, B, A);
+  const both = core.resetOnDone(copied, [
+    session({ id: B, key: `claude:${B}`, lastRealTurnMs: NOW + SEC, status: status('done', NOW + SEC) }),
+    session({ id: B, key: `claude:${B}-again`, lastRealTurnMs: NOW + 2 * SEC, status: status('done', NOW + 2 * SEC) }),
+  ]);
+  assert.deepStrictEqual(both.resets, [{ root: A, sessionId: B, attempts: 2 }]);
+  assert.deepStrictEqual(core.resetOnDone(quick.state, [done(NOW + 3 * MIN, NOW + 3 * MIN)]).resets, []);
+});
+
+test('core: a reset keeps the lineage entry through prune and the file: a held stop stays held, an old one stays old', () => {
+  const stop = NOW + 3 * SEC; // a copy's limit, 3 s after the resume at NOW
+  let st = core.recordCopy(core.recordAttempt(core.emptyState(), A, null, NOW, PROJ), B, A);
+  const r = core.resetOnDone(st, [session({ id: B, key: `claude:${B}`, lastRealTurnMs: NOW + SEC, status: status('done', NOW + SEC) })]);
+  st = core.normalizeState(JSON.parse(JSON.stringify(core.pruneState(r.state, NOW + 5 * MIN))));
+  assert.deepStrictEqual(st.lineages[A], { attempts: 0, lastMs: NOW, head: B, project: PROJ });
+  const L = core.lineageOf(st, B, NOW + 5 * MIN);
+  const account = { switchedAtMs: NOW - 40 * SEC, hasRoom: true };
+  const s = session({ id: B, key: `claude:${B}`, status: status('quota', stop, quotaHit(NOW + HOUR)) });
+  const p = core.planFor(s, L, { projects: [PROJ], now: NOW + 5 * MIN, account });
+  assert.deepStrictEqual([p.held, p.atMs, p.via], ['fastFail', NOW + HOUR + core.LIMIT_PAD_MS, undefined], 'not resumed at once');
+  const older = session({ id: B, key: `claude:${B}`, status: status('quota', NOW - SEC, quotaHit(NOW + HOUR)) });
+  assert.strictEqual(core.planFor(older, L, { projects: [PROJ], now: NOW + 5 * MIN }), null, 'older than the last resume');
+  assert.strictEqual(core.pruneState(st, NOW + 26 * HOUR).lineages[A], undefined, 'gone after a day and an hour');
+  assert.strictEqual(core.pruneState({ ...st, lineages: { [A]: { attempts: 0, lastMs: null } } }, NOW).lineages[A], undefined, 'nothing to keep');
+});
+
+test('core: a stop at exactly the last resume is old; a switch at exactly the last resume is not after it', () => {
+  const at = (ms) => session({ status: status('quota', ms, quotaHit(NOW + HOUR)) });
+  const L = { attempts: 1, lastMs: NOW, root: A };
+  assert.strictEqual(core.planFor(at(NOW), L, { projects: [PROJ], now: NOW + SEC }), null);
+  assert.ok(core.planFor(at(NOW + 1), L, { projects: [PROJ], now: NOW + SEC }));
+  const same = core.switchCheck(core.stopOf(at(NOW + SEC)), { switchedAtMs: NOW, hasRoom: true }, NOW);
+  assert.deepStrictEqual(same, { atMs: null, held: 'fastFail' });
+  assert.ok(core.switchCheck(core.stopOf(at(NOW + SEC)), { switchedAtMs: NOW + 1, hasRoom: true }, NOW).atMs);
+});
+
+test('core: a copy\'s stop has no plan when another session of its lineage worked later, or it is not the head; the original\'s stop still has', () => {
+  const st = core.recordCopy(core.recordAttempt(core.emptyState(), A, null, NOW, PROJ), B, A);
+  const stopped = session({ id: B, key: `claude:${B}`, status: status('quota', NOW + MIN, quotaHit(NOW + HOUR)) });
+  const o = { projects: [PROJ], now: NOW + 2 * MIN, executed: st.executed };
+  const L = core.lineageOf(st, B, NOW);
+  assert.ok(core.planFor(stopped, L, o), 'nothing else is going on');
+  assert.strictEqual(core.whyDropped(stopped, L, o), null);
+  const later = { ...o, otherWorkMs: NOW + MIN + 1 };
+  assert.strictEqual(core.planFor(stopped, L, later), null);
+  assert.strictEqual(core.whyDropped(stopped, L, later), 'active');
+  assert.ok(core.planFor(stopped, L, { ...o, otherWorkMs: NOW + MIN }), 'not newer than the stop');
+  assert.strictEqual(core.planFor(stopped, { ...L, head: A }, o), null, 'the user moved the head');
+  const orig = session({ status: status('quota', NOW + MIN, quotaHit(NOW + HOUR)) });
+  assert.ok(core.planFor(orig, core.lineageOf(st, A, NOW), later), 'the original is not a copy');
+  // lineageWork: the others' newest prompt or real turn; 0 and copied times do not count
+  const work = core.lineageWork(st, [
+    session({ id: B, key: `claude:${B}`, lastPromptMs: NOW + 5 * SEC, lastRealTurnMs: NOW + 9 * SEC }),
+    session({ lastPromptMs: NOW + 7 * SEC }),
+    session({ id: C, key: `claude:${C}`, lastPromptMs: NOW + HOUR }),
+  ]);
+  assert.strictEqual(work(B), NOW + 7 * SEC);
+  assert.strictEqual(work(A), NOW + 9 * SEC);
+  assert.strictEqual(work(C), null);
+});
+
+test('core: a user prompt in another session moves the head; the head done resets; a moved head does not reset the brake count', () => {
+  let st = core.recordCopy(core.recordAttempt(core.emptyState(), A, null, NOW, PROJ, 3), B, A);
+  const back = session({ lastPromptMs: NOW + MIN, status: status('thinking', NOW + MIN) });
+  let r = core.resetOnDone(st, [back]);
+  assert.deepStrictEqual(r.moved, [{ root: A, from: B, to: A }]);
+  assert.strictEqual(r.resets.length, 0, 'a prompt alone resets nothing');
+  st = r.state;
+  assert.strictEqual(st.lineages[A].head, A);
+  assert.strictEqual(core.resetOnDone(st, [back]).changed, false, 'once');
+  const copyTurn = session({ id: B, key: `claude:${B}`, lastPromptMs: NOW + SEC, lastRealTurnMs: NOW + 2 * MIN, status: status('done', NOW + 2 * MIN) });
+  r = core.resetOnDone(st, [copyTurn]);
+  assert.strictEqual(r.changed, false, 'the copy\'s own turn is not the user\'s, and it is not the head any more');
+  const turn = session({ lastPromptMs: NOW + MIN, lastRealTurnMs: NOW + 3 * MIN, status: status('done', NOW + 3 * MIN) });
+  r = core.resetOnDone(st, [turn]);
+  assert.deepStrictEqual(r.resets, [{ root: A, sessionId: A, attempts: 1 }]);
+  assert.strictEqual(r.state.brake.times[PROJ].length, 1, 'the user\'s work says nothing about copies');
+  // A head the resume left: its real turn starts the brake count over, even before it is done
+  const head = core.recordAttempt(core.emptyState(), A, null, NOW, PROJ, 3);
+  const working = core.resetOnDone(head, [session({ lastRealTurnMs: NOW + SEC, status: status('thinking', NOW + SEC) })]);
+  assert.strictEqual(working.state.brake.times[PROJ], undefined);
+  assert.strictEqual(working.state.lineages[A].attempts, 0, 'the API answered: the count starts over at any status (a long job is never given up)');
+});
+
+test('core: the brake: brakeLimit resumes without a real turn stop the project; it does not refill; the user clears it; a day ends it', () => {
+  const limit = core.brakeLimit(3);
+  assert.strictEqual(limit, 2 * core.PROJECT_CAP);
+  assert.strictEqual(core.brakeLimit(10), 20);
+  let st = core.emptyState();
+  const ids = Array.from({ length: limit }, (_, i) => `${String.fromCharCode(97 + i).repeat(8)}-1111-2222-3333-444444444444`);
+  ids.forEach((id, i) => { st = core.recordAttempt(st, id, null, NOW + i * 2 * MIN, PROJ, 3); });
+  assert.strictEqual(st.brake.tripped[PROJ], NOW + (limit - 1) * 2 * MIN);
+  const through = core.normalizeState(JSON.parse(JSON.stringify(core.pruneState(st, NOW + HOUR))));
+  assert.deepStrictEqual(through.brake.tripped, st.brake.tripped, 'through prune and the file');
+  const s = session({ status: status('apiError', NOW + 4 * HOUR - MIN) });
+  const when = (now) => core.planFor(s, core.lineageOf(through, A, now), { projects: [PROJ], now, brake: through.brake });
+  const p = when(NOW + 4 * HOUR);
+  assert.deepStrictEqual([p.state, p.held], ['gaveUp', 'brake'], 'long after the cap has refilled');
+  assert.strictEqual(core.brakeTripped(through.brake, PROJ, NOW + 25 * HOUR), false, 'a day ends it');
+  assert.strictEqual(core.brakeTripped(core.clearBrake(through, PROJ).brake, PROJ, NOW + HOUR), false);
+  assert.strictEqual(core.pruneState(through, NOW + 27 * HOUR).brake.tripped[PROJ], st.brake.tripped[PROJ], 'kept while it holds a stop');
+  assert.strictEqual(core.pruneState(through, NOW + 50 * HOUR).brake.tripped[PROJ], undefined);
+  // It holds a stop of the day after the trip however late that stop is looked at; a stop after that day is free
+  const trip = st.brake.tripped[PROJ];
+  const at = (sinceMs, now) => core.planFor(session({ status: status('apiError', sinceMs) }), core.lineageOf(through, A, sinceMs), { projects: [PROJ], now, brake: through.brake });
+  assert.deepStrictEqual([at(trip + 3 * MIN, trip + DAY + MIN).state, at(trip + 3 * MIN, trip + DAY + MIN).held], ['gaveUp', 'brake'], 'a dead chain\'s last stop, a day later');
+  assert.strictEqual(at(trip + DAY + MIN, trip + DAY + 2 * MIN).state, 'scheduled');
+  // Old attempts drop out of the count; without maxAttempts given it never trips
+  let spread = core.emptyState();
+  for (let i = 0; i < 2 * limit; i++) spread = core.recordAttempt(spread, A, null, NOW + i * 30 * MIN, PROJ, 3);
+  assert.strictEqual(spread.brake.tripped[PROJ], undefined, '12 in any 3 hours is not one every 30 minutes');
+  // The bounds
+  const big = core.emptyState();
+  for (let i = 0; i < 60; i++) { big.brake.tripped[`/p/${i}`] = i + 1; big.brake.times[`/p/${i}`] = [i + 1]; big.cap.projects[`/p/${i}`] = [i + 1]; }
+  for (let i = 0; i < 300; i++) big.cap.lineages[`a${i}`] = [i + 1];
+  const small = core.normalizeState(big);
+  assert.deepStrictEqual([Object.keys(small.brake.tripped).length, Object.keys(small.brake.times).length, Object.keys(small.cap.projects).length, Object.keys(small.cap.lineages).length], [50, 50, 50, 200]);
+  assert.strictEqual(small.cap.lineages.a299[0], 300, 'the newest stay');
+  const long = core.normalizeState({ cap: { lineages: { [A]: Array.from({ length: 50 }, (_, i) => i + 1) } } });
+  assert.deepStrictEqual([long.cap.lineages[A].length, long.cap.lineages[A][0]], [32, 19], 'times: the newest 32');
+});
+
+test('core: both caps full: the later slot wins, and each counts from its newest allowed slot', () => {
+  const cap = {
+    lineages: { [A]: [NOW - 9 * MIN, NOW - 8 * MIN, NOW - 7 * MIN, NOW - 6 * MIN] },
+    projects: { [PROJ]: [NOW - 9 * MIN, NOW - 8 * MIN, NOW - 7 * MIN, NOW - 6 * MIN, NOW - 5 * MIN, NOW - 4 * MIN, NOW - 3 * MIN] },
+  };
+  // Lineage: 3 allowed → the 3rd newest is 8 min ago; project: 6 allowed → the 6th newest is 8 min ago too
+  assert.deepStrictEqual(core.capHold(cap, A, PROJ, 3, NOW), { atMs: NOW - 8 * MIN + core.CAP_WINDOW_MS, held: 'lineageCap' });
+  const later = { ...cap, projects: { [PROJ]: cap.projects[PROJ].slice(1) } }; // the 6th newest: 8 min ago → project first full at -8
+  assert.strictEqual(core.capHold(later, A, PROJ, 3, NOW).atMs, NOW - 8 * MIN + core.CAP_WINDOW_MS);
+  const proj = { lineages: cap.lineages, projects: { [PROJ]: cap.projects[PROJ].concat([NOW - 2 * MIN]) } };
+  assert.deepStrictEqual(core.capHold(proj, A, PROJ, 3, NOW), { atMs: NOW - 7 * MIN + core.CAP_WINDOW_MS, held: 'projectCap' }, 'the project is the later one');
+  // A chain's copy is held under its root, not its own id
+  const s = session({ id: B, key: `claude:${B}`, status: status('quota', NOW, quotaHit(NOW)) });
+  const p = core.planFor(s, { attempts: 0, lastMs: null, root: A }, { projects: [PROJ], now: NOW, cap: { lineages: cap.lineages } });
+  assert.strictEqual(p.held, 'lineageCap');
+});
+
+test('core: times later than now are taken as now: nothing lost, nothing held until the clock catches up', () => {
+  const raw = {
+    lineages: { [A]: { attempts: 1, lastMs: NOW + 6 * HOUR, headMs: NOW + HOUR, head: A } },
+    cap: { lineages: { [A]: [NOW + 30 * HOUR, NOW - MIN] }, projects: { [PROJ]: [NOW + 30 * HOUR] } },
+    brake: { times: { [PROJ]: [NOW + HOUR] }, tripped: { [PROJ]: NOW + HOUR } },
+    lostBefore: NOW + HOUR,
+  };
+  const st = core.normalizeState(raw, NOW);
+  assert.deepStrictEqual(st.lineages[A], { attempts: 1, lastMs: NOW, headMs: NOW, head: A });
+  assert.deepStrictEqual([st.cap.lineages[A], st.cap.projects[PROJ], st.brake.times[PROJ], st.brake.tripped[PROJ], st.lostBefore], [[NOW - MIN, NOW], [NOW], [NOW], NOW, NOW]);
+  // A count with a future time is not stuck: a real turn after the read resets it, and a day later it expires
+  const spent = core.normalizeState({ lineages: { [A]: { attempts: 3, lastMs: NOW + HOUR, head: A, project: PROJ } } }, NOW);
+  const r = core.resetOnDone(spent, [session({ lastRealTurnMs: NOW + MIN, status: status('done', NOW + MIN) })]);
+  assert.deepStrictEqual(r.resets, [{ root: A, sessionId: A, attempts: 3 }]);
+  assert.strictEqual(core.lineageOf(spent, A, NOW + DAY + MIN).attempts, 0);
+  // Without the normalize too (memory, a plan in between)
+  assert.strictEqual(core.capHold({ lineages: { [A]: [NOW + 30 * HOUR, NOW + 30 * HOUR, NOW + 30 * HOUR] } }, A, PROJ, 3, NOW), null);
+  assert.strictEqual(core.brakeTripped({ tripped: { [PROJ]: NOW + HOUR } }, PROJ, NOW), false);
+  assert.ok(core.normalizeState({ lineages: { [A]: { attempts: 1, lastMs: NOW + 30e3 } } }, NOW).lineages[A].lastMs, 'a small clock difference is fine');
+});
+
+test('core: mergeStates: the side that resumes less, nothing mutated', () => {
+  const a = core.recordAttempt(core.recordAttempt(core.emptyState(), A, 's1', NOW, PROJ), A, 's2', NOW + MIN, PROJ);
+  const b = core.addCancelled(core.recordCopy(core.recordAttempt(core.emptyState(), A, 's3', NOW + 2 * MIN, PROJ), B, A), 'c1', NOW);
+  const before = JSON.stringify(b);
+  const m = core.mergeStates(a, b);
+  assert.deepStrictEqual(m.lineages[A], { attempts: 2, lastMs: NOW + 2 * MIN, head: B, project: PROJ });
+  assert.deepStrictEqual(Object.keys(m.executed).sort(), ['s1', 's2', 's3']);
+  assert.strictEqual(m.cancelled.c1, NOW);
+  assert.strictEqual(m.aliases[B], A);
+  assert.deepStrictEqual(m.cap.projects[PROJ], [NOW, NOW + MIN, NOW + 2 * MIN]);
+  assert.deepStrictEqual(m.brake.times[PROJ], [NOW, NOW + MIN, NOW + 2 * MIN]);
+  assert.strictEqual(JSON.stringify(b), before);
+  assert.strictEqual(core.mergeStates(a, { ...core.emptyState(), lostBefore: NOW }).lostBefore, NOW);
+  m.lineages[A].attempts = 99;
+  assert.strictEqual(a.lineages[A].attempts, 2);
+  // copyState is deep for what it holds
+  const copied = core.recordCopy(a, C, A);
+  copied.cap.projects[PROJ].push(1);
+  assert.strictEqual(a.cap.projects[PROJ].length, 2);
+});
+
+test('core: a real turn takes only its own lineage\'s resumes out of the brake count; a trip they all leave is lifted', () => {
+  const ids = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'd', 'e', 'f'].map((d) => `${d.repeat(8)}-1111-2222-3333-444444444444`);
+  // The original resumed in place (no copy id), then copies nothing ties to it, each its own lineage
+  let st = core.recordAttempt(core.emptyState(), A, null, NOW, PROJ, 3);
+  ids.slice(0, 10).forEach((id, i) => { st = core.recordAttempt(st, id, null, NOW + (i + 1) * MIN, PROJ, 3); });
+  const user = session({ lastPromptMs: NOW + 11 * MIN, lastRealTurnMs: NOW + 11 * MIN + 20 * SEC, status: status('done', NOW + 11 * MIN + 20 * SEC) });
+  const r = core.resetOnDone(st, [user]);
+  assert.strictEqual(r.state.brake.times[PROJ].length, 10, 'only the original\'s own resume left the count');
+  st = core.recordAttempt(r.state, ids[10], null, NOW + 12 * MIN, PROJ, 3);
+  st = core.recordAttempt(st, ids[11], null, NOW + 13 * MIN, PROJ, 3);
+  assert.ok(st.brake.tripped[PROJ], 'the lost copies still trip it');
+  assert.ok(core.resetOnDone(st, [{ ...user, lastRealTurnMs: NOW + 20 * MIN }]).state.brake.tripped[PROJ], 'and the user\'s work does not lift it');
+  // An outage: four chats resumed three times each, every one in place; all four answer again later: lifted
+  let out = core.emptyState();
+  for (let k = 0; k < 3; k++) ids.slice(0, 4).forEach((id, i) => { out = core.recordAttempt(out, id, null, NOW + (k * 4 + i) * MIN, PROJ, 3); });
+  assert.ok(out.brake.tripped[PROJ]);
+  const answers = (n) => ids.slice(0, n).map((id) => session({ id, key: `claude:${id}`, lastRealTurnMs: NOW + HOUR, status: status('done', NOW + HOUR) }));
+  assert.ok(core.resetOnDone(out, answers(3)).state.brake.tripped[PROJ], 'one chat has not answered yet');
+  const all = core.resetOnDone(out, answers(4)).state;
+  assert.deepStrictEqual([all.brake.tripped[PROJ], all.brake.times[PROJ]], [undefined, undefined]);
+  const fifth = core.planFor(session({ id: C, key: `claude:${C}`, status: status('quota', NOW + 6 * HOUR, quotaHit(NOW + 7 * HOUR)) }), core.lineageOf(all, C, NOW + 6 * HOUR), { projects: [PROJ], now: NOW + 6 * HOUR, brake: all.brake });
+  assert.strictEqual(fifth.state, 'scheduled');
+});
+
+test('core: a long job that hits the limit after hours of real work is resumed every time, never given up', () => {
+  let st = core.emptyState();
+  let t = NOW;
+  const seen = [];
+  for (let cycle = 0; cycle < 5; cycle++) {
+    const s = session({ status: status('quota', t, quotaHit(t + 30 * MIN)) });
+    const p = core.planFor(s, core.lineageOf(st, A, t), { projects: [PROJ], now: t, cap: st.cap, brake: st.brake });
+    seen.push(`${p.state}#${p.attempt}`);
+    st = core.recordAttempt(st, A, p.stopId, p.atMs, PROJ, 3);
+    const work = p.atMs + 4.5 * HOUR; // still running, no done in between
+    st = core.resetOnDone(st, [session({ lastPromptMs: p.atMs, lastRealTurnMs: work, status: status('thinking', work) })]).state;
+    t = work + MIN;
+  }
+  assert.deepStrictEqual(seen, Array(5).fill('scheduled#1'));
+  // A stop of the day after the last resume is counted on, also when it runs more than a day after that resume
+  const one = core.recordAttempt(core.emptyState(), A, `${A}|quota|${NOW - SEC}`, NOW, PROJ, 3);
+  assert.strictEqual(core.recordAttempt(one, A, `${A}|quota|${NOW + 23 * HOUR}`, NOW + 28 * HOUR, PROJ, 3).lineages[A].attempts, 2);
+  assert.strictEqual(core.recordAttempt(one, A, `${A}|quota|${NOW + 25 * HOUR}`, NOW + 28 * HOUR, PROJ, 3).lineages[A].attempts, 1);
+});
+
+test('core: mergeStates takes the head from the side that moved it last, never mixed', () => {
+  // Memory: the copy recorded (its write failed); the file: another window then saw the user back in the original
+  const mem = core.recordCopy(core.recordAttempt(core.emptyState(), A, `${A}|quota|${NOW - SEC}`, NOW, PROJ, 3), 'bbbbbbbb', A);
+  const file = core.resetOnDone(mem, [session({ lastPromptMs: NOW + MIN, status: status('thinking', NOW + MIN) })]).state;
+  assert.deepStrictEqual([file.lineages[A].head, file.lineages[A].headMs], [A, NOW + MIN]);
+  for (const m of [core.mergeStates(mem, file), core.mergeStates(file, mem)]) {
+    assert.deepStrictEqual([m.lineages[A].head, m.lineages[A].headMs], [A, NOW + MIN]);
+  }
+  const copyStop = session({ id: B, key: `claude:${B}`, status: status('quota', NOW + 4 * MIN, quotaHit(NOW + HOUR)) });
+  const m = core.mergeStates(mem, file);
+  const o = { projects: [PROJ], now: NOW + 5 * MIN, account: { switchedAtMs: NOW + 4 * MIN + SEC, hasRoom: true } };
+  assert.strictEqual(core.planFor(copyStop, core.lineageOf(m, B, NOW + 4 * MIN), o), null, 'no copy next to the user');
+  // A newer resume on the other side wins over an older move, and keeps the larger time
+  const later = core.recordAttempt(mem, A, `${A}|quota|${NOW + 2 * MIN}`, NOW + 3 * MIN, PROJ, 3);
+  const both = core.mergeStates(file, later);
+  assert.deepStrictEqual([both.lineages[A].head, both.lineages[A].headMs, both.lineages[A].lastMs], [A, undefined, NOW + 3 * MIN]);
+  // A tie: a move at the very millisecond of the other side's resume is the newer information
+  const resumed = { ...core.emptyState(), lineages: { [A]: { attempts: 1, lastMs: NOW, head: 'bbbbbbbb' } } };
+  const movedBack = { ...core.emptyState(), lineages: { [A]: { attempts: 1, lastMs: NOW - MIN, head: A, headMs: NOW } } };
+  for (const t of [core.mergeStates(resumed, movedBack), core.mergeStates(movedBack, resumed)]) {
+    assert.deepStrictEqual([t.lineages[A].head, t.lineages[A].headMs, t.lineages[A].lastMs], [A, NOW, NOW], 'the move wins a tie');
+  }
+  // A tripped brake on either side survives the merge
+  const tripped = { ...core.emptyState(), brake: { times: {}, tripped: { [PROJ]: NOW } } };
+  assert.strictEqual(core.mergeStates(core.emptyState(), tripped).brake.tripped[PROJ], NOW);
+  assert.strictEqual(core.mergeStates(tripped, core.emptyState()).brake.tripped[PROJ], NOW);
+});
+
+test('core: openingOf: the first record ids of complete lines; nothing until there is one', () => {
+  const r = (o) => JSON.stringify(o);
+  assert.strictEqual(core.openingOf(`${r({ type: 'mode' })}\n${r({ uuid: 'u1' })}\nnot json\n${r({ uuid: 'u2' })}\n${r({ uuid: 'u3' })}\n${r({ uuid: 'u4' })}\n`), 'u1,u2,u3');
+  assert.strictEqual(core.openingOf(`${r({ uuid: 'u1' })}\n{"uuid":"cut`), 'u1', 'a cut last line is left out');
+  assert.strictEqual(core.openingOf(r({ uuid: 'u1' })), '', 'nor is a line with no end yet');
+  assert.strictEqual(core.openingOf(''), '');
+});
+
+test('core: hard cap: kept by normalize, copy and prune; old state files load; the plan waits; per lineage and per project', () => {
+  const old = core.normalizeState({ v: 1, lineages: { [A]: { attempts: 1, lastMs: NOW } } });
+  assert.deepStrictEqual(old.cap, { lineages: {}, projects: {} }, 'a state file from 0.11.0');
+  let st = core.emptyState();
+  for (const m of [9, 7, 5]) st = core.recordAttempt(st, A, null, NOW - m * MIN, PROJ);
+  assert.deepStrictEqual(st.cap.lineages[A], [NOW - 9 * MIN, NOW - 7 * MIN, NOW - 5 * MIN]);
+  assert.deepStrictEqual(st.cap.projects[PROJ], st.cap.lineages[A]);
+  assert.deepStrictEqual(core.normalizeState(JSON.parse(JSON.stringify(st))).cap, st.cap, 'through the file');
+  const zeroed = { ...st, lineages: { [A]: { attempts: 0, lastMs: NOW - 5 * MIN } } };
+  const pruned = core.pruneState(zeroed, NOW);
+  assert.strictEqual(pruned.lineages[A].attempts, 0, 'the count is gone, its time is not');
+  assert.strictEqual(pruned.cap.lineages[A].length, 3, 'the cap is not');
+  assert.deepStrictEqual(core.pruneState(st, NOW + 11 * MIN).cap, { lineages: st.cap.lineages, projects: {} }, 'past the window (a lineage\'s times stay for the brake)');
+  assert.deepStrictEqual(core.pruneState(st, NOW + 3 * HOUR).cap, { lineages: {}, projects: {} }, 'past the brake\'s window');
+  // garbage and prototype keys
+  const junk = core.normalizeState(JSON.parse(`{"cap":{"lineages":{"__proto__":[1],"bad id!":[1],"${A}":["x",2,null]},"projects":{"__proto__":[1],"${PROJ}":"no"}}}`));
+  assert.deepStrictEqual(junk.cap, { lineages: { [A]: [2] }, projects: {} });
+  const s = session({ status: status('quota', NOW, quotaHit(NOW - MIN)) });
+  const p = core.planFor(s, { attempts: 0, lastMs: null, root: A }, { projects: [PROJ], now: NOW, cap: st.cap });
+  assert.deepStrictEqual([p.state, p.held, p.atMs], ['scheduled', 'lineageCap', NOW + MIN]);
+  // Separate chats share the project cap, which is well above one chat's
+  let many = core.emptyState();
+  const ids = ['1', '2', '3', '4', '5', '6'].map((d) => `${d.repeat(8)}-1111-2222-3333-444444444444`);
+  for (const [i, id] of ids.entries()) many = core.recordAttempt(many, id, null, NOW - 6 * MIN + i * SEC, PROJ);
+  const seventh = core.planFor(session(), { attempts: 0, lastMs: null, root: A }, { projects: [PROJ], now: NOW + 2 * MIN, cap: many.cap });
+  assert.deepStrictEqual([seventh.held, seventh.atMs], ['projectCap', NOW - 6 * MIN + core.CAP_WINDOW_MS]);
+  const fifth = core.planFor(session(), { attempts: 0, lastMs: null, root: A }, { projects: ['/synthetic/other', PROJ], now: NOW + 2 * MIN, cap: { projects: { [PROJ]: many.cap.projects[PROJ].slice(0, 5) } } });
+  assert.strictEqual(fifth.held, undefined, 'five chats after one switch are fine');
+  // maxAttempts above it is respected
+  const high = core.planFor(session(), { attempts: 0, lastMs: null, root: A }, { projects: [PROJ], now: NOW + 2 * MIN, cap: many.cap, settings: { maxAttempts: 8 } });
+  assert.strictEqual(high.held, undefined);
+});
+
 test('core: a limit stop resumes 30 s after a switch to an account with room; otherwise the reset time stands', () => {
   const lim = session({ status: status('quota', NOW, quotaHit(NOW + 3 * HOUR)) });
   const acc = (switchedAtMs, hasRoom = true) => ({ account: { switchedAtMs, hasRoom, label: '#3' } });
   const p = plan(lim, 0, { ...acc(NOW + 2 * MIN), now: NOW + 2 * MIN });
   assert.deepStrictEqual([p.state, p.atMs, p.via, p.account, p.trigger], ['scheduled', NOW + 2 * MIN + core.SWITCH_PAD_MS, 'switch', '#3', 'limit']);
   // a switch shortly before the stop counts (the chat kept the old login); counted from the stop
-  assert.strictEqual(plan(lim, 0, acc(NOW - 10 * MIN)).atMs, NOW + core.SWITCH_PAD_MS);
+  assert.strictEqual(plan(lim, 0, acc(NOW - 90 * SEC)).atMs, NOW + core.SWITCH_PAD_MS);
   // too long before the stop, no room, unknown time, no account → the reset
   for (const o of [acc(NOW - 20 * MIN), acc(NOW + MIN, false), acc(null), { account: null }, {}]) {
     const q = plan(lim, 0, o);

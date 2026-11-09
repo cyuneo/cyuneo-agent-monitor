@@ -4,6 +4,30 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-11-06
+
+### Fixed
+
+- **Auto-resume could loop on a limit, starting a new copy of a chat about every 34 seconds.** A chat stopped by a limit is now resumed early only when a switch can have helped:
+  - A monthly spend limit needs a switch after the stop. These messages were read as a session limit before; they now show as a spend limit. So do the other wordings of Claude Code 2.1.318 (monthly limits, usage credits, shared budgets), and billing errors, which used to be retried every few minutes.
+  - For other limits, a switch counts up to 2 minutes before the stop (it was 15). A later stop came from the account switched to.
+  - A stop within 2 minutes of the last resume needs a new switch after that resume. Otherwise the chat waits for the reset. A later switch to another account still resumes it about 30 seconds after the switch.
+- **The attempt count no longer resets without real work.** It resets only when the resumed chat has a real reply from Claude since the resume, however quick that was. It no longer has to finish its turn first, so a long job that runs into the limit again after hours of work is resumed again rather than given up. Each reset now writes one line to the log. A chat the user goes back to no longer resets the count of its copies.
+- **A chat given up on is not resumed again a day later.** A stop that came within 24 hours of the last try stays counted, however late it is looked at; before, the last copy's stop was resumed again once the 24 hours were up, every day.
+- **Copies are no longer resumed next to you.** After you go back to a chat, its stopped copies get no further resumes. A copy already running can't be recalled, so a log line, a notice and a push say both are running.
+- **Copies that can't be tied to their chat no longer run on.** A new session that opens like the chat resumed now counts as its copy, also when `--bg` printed no id, failed or timed out.
+- **Several windows no longer count alone.** An automatic resume that can't write its count or its claim waits, says so once in a notice and the log, and its Details say why. A count that can't be written right after the claim no longer uses up the stop: it is tried again. A window whose writes fail still reads what the others record, such as a Cancel, and takes the latest place of each chat when the two disagree.
+- **A lost state file no longer replays old stops.** One that can't be parsed at startup, or is missing though one was written in the last day, is set aside. Chats stopped before that aren't resumed automatically, and a warning says so. A file that merely can't be read for a moment (another program has it open) is read again, not set aside.
+- Why a plan waits used to be only in the log, and a stop could lose its plan with no trace: now the Details and the stop's push say why, and the log says why a stop gets no plan.
+- Times later than now in the state file, such as after the clock was corrected, are taken as now: they no longer hold a chat or hide a stop, and a window whose clock is behind no longer drops the others' cap and brake. A window whose clock was set back corrects what it recorded.
+
+### Added
+
+- **A hard cap no reset can clear:** at most `maxAttempts` automatic resumes per chat and its copies, and 6 per project (or `maxAttempts` if higher), in any 10 minutes. A chat over the cap waits, and the log says why, once. The manual **Continue in Background Now** is never held.
+- **A limit that doesn't refill:** 12 resumes in a project (or twice `maxAttempts` if higher) within 3 hours with no real reply stop auto-resume there, with one push, for 24 hours, or until you use **Continue in Background Now** in that project or turn the project off and on. A real reply takes only that chat's own resumes out of the count: your work in a chat doesn't clear the count of copies nothing ties to it. Once every chat it counted has a real reply, it comes back by itself.
+- **Push notifications:** a chat and its copies push one "continued" per 10 minutes, and a stop within 2 minutes of a resume isn't pushed, unless the chat now waits for the reset or another switch: then it is, with why. Failures, giving up, and two copies running side by side always go out.
+- A window on this version warns when a window still on an older one has dropped the cap from the shared state, and keeps the cap in force for itself. **That older window has no cap: reload every window after updating.**
+
 ## [0.11.0] - 2026-11-04
 
 ### Added

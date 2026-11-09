@@ -3678,6 +3678,12 @@ async function autoResumeTests() {
       await runDue([...fixtures(), failed(FOX, 'Foxtrot chat', 7 * MIN)]);
       assert.ok(log.info.includes(i18n.t('autoresume.toast.copied', { project: ws, copy: COPY.slice(0, 8), session: FOX.slice(0, 8) })));
       assert.strictEqual(last(pushedOutcomes()).copySessionId, COPY);
+      // The push runtime gets the chain from the auto-resume runtime on both paths, so a chain's next copy is one chain
+      const withOutcome = pushInputs.filter((x) => x.autoResumeEvents).pop();
+      assert.strictEqual(withOutcome.chainOf(COPY), FOX);
+      const withSessions = pushInputs.filter((x) => x.sessions).pop();
+      assert.strictEqual(withSessions.chainOf(COPY), FOX);
+      assert.ok(Number.isFinite(withSessions.lastResumeOf(COPY)), 'and when it was last resumed');
       const GOLF = '77777777-7777-4777-8777-777777777777';
       arFake.out = 'Error: something went wrong\n';
       arFake.code = 1;
@@ -4099,7 +4105,7 @@ async function manifestTests() {
 
   await test('publishing fields: name, version, preview, license, publisher, repository, icon, categories', () => {
     assert.strictEqual(pkg.name, 'cyuneo-agent-monitor');
-    assert.strictEqual(pkg.version, '0.11.0');
+    assert.strictEqual(pkg.version, '0.11.1');
     assert.strictEqual(pkg.preview, true);
     assert.strictEqual(pkg.publisher, 'cyuneo');
     assert.strictEqual(pkg.license, 'PolyForm-Noncommercial-1.0.0');

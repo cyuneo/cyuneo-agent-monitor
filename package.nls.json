@@ -92,7 +92,7 @@
   "config.cacheReminderShortTtl": "Also remind about sessions that use the 5-minute cache.",
   "config.closeReminder": "When you close a large Claude Code session while its cache is still warm, offer to compact it or write a handoff note.",
   "config.postCompactHint": "After a session is compacted, remind you to check that its key rules and constraints are still there.",
-  "config.autoResume.maxAttempts": "How many times in a row a chat may be resumed automatically before auto-resume gives up. The count starts again once the chat finishes a turn.",
+  "config.autoResume.maxAttempts": "How many times in a row a chat may be resumed automatically before auto-resume gives up. The count starts again once the resumed chat gets a real reply from Claude.",
   "config.autoResume.errorDelayMinutes": "Minutes to wait after an API error before resuming. Each further attempt waits twice as long.",
   "config.autoResume.afterLimit": "Also resume a minute after a usage limit resets, when the reset time is known.",
   "config.autoResume.afterAccountSwitch": "With claude-swap (cswap) installed: resume a chat stopped on a usage limit about 30 seconds after cswap switches to an account with room, instead of waiting for the reset. Reads cswap's local state only.",
