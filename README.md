@@ -22,6 +22,7 @@ Claude Code and Codex now run several agents at once: subagents, background agen
 ## What it does for you
 
 - **Every chat at a glance.** A panel next to the terminal lists every open and recent chat with a status light. Click one to see its agents, the step each one is on, and its tokens and cost.
+- **Follow progress in the side bar.** The **Progress** view has a card for each chat: what it is doing now and how far it has got (its plan, its workflow's phase or its subagents). Click a card to follow the current turn's steps right there.
 - **Jump straight to it.** Click **Go to** or double-click a chat, and Agent Monitor brings up where it is running: the chat in the Claude Code or Codex extension or in Copilot Chat, or the VS Code terminal it runs in, even in another VS Code window (on macOS, also a Terminal.app or iTerm2 tab).
 - **Know when you're needed.** A chat waiting for your approval or answer gets a magenta light. Finished and failed chats have their own colors, in the status bar too.
 - **Get notified, even away from your desk.** When a chat starts waiting for you, VS Code or your system tells you, with a sound if you like. A short message can also go to your phone or team chat (ntfy, Bark, ServerChan, PushPlus, Feishu, DingTalk, WeCom, Telegram, Discord or Slack), for errors and usage limits too. Set quiet hours, and it all stays silent at night.

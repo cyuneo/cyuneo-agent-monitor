@@ -17,11 +17,21 @@
 - **The agents.** Click a chat to see what's running inside it: the main conversation on top, then subagents and background agents, with workflow agents grouped under their workflow.
 - **The chat's header takes two lines**, so the agents stay in view even in a short panel. The first line is the title, with how full the context is ("41% context") next to **Go to** and **Compact…**. The second has the status, the context against the auto-compact point, hints, the cache countdown and this chat's cost. Everything else (the context bar, the auto-compact setting, today's total, notices, resume prompts and the Transcript line) is under **Details ▸**. Urgent problems, such as a usage limit, an API error or a compaction loop, get one extra line. The table's column headings stay at the top as you scroll, and when the panel is under 400 px tall the cost and time columns are hidden.
 - When you switch to a Claude Code or Codex chat tab, that chat is selected in the list. This only happens when you switch tabs, never on a refresh, so your selection stays put.
-- There is also an **Overview** tree in the side bar, a status bar light with counts, and a badge showing how many chats need a look.
+- In the side bar, the **Progress** view shows how far each chat has got (see [Progress in the side bar](#progress-in-the-side-bar)), with the **Overview** tree below it. There is also a status bar light with counts, and a badge showing how many chats need a look.
+
+### Progress in the side bar
+
+The **Agent Monitor** side bar opens on the **Progress** view. It answers "how far has each chat got, and what is it doing now?"; the details and the actions stay in the panel. The **Overview** tree is still there, below it and collapsed: click its header to open it.
+
+- **One card per chat**, in the same order and scope as the panel's list. A card has the status light, the title, what the chat is doing now (or what it is waiting for), and one progress line: its to-do list or plan ("Tasks 3/7 done"), its workflow's phase ("Phase 2/3: Review · 8 started, 5 done"), its subagents ("Subagents 2/5 done"), or this turn's tool calls. Finished chats take a single line.
+- **Click a card** to select the chat and open it in place. The selection is shared: a chat selected in the Progress view, the panel's list or the Overview is selected in all three.
+- **The open card** shows the workflow's phases (done, in progress, not started), the plan with the item in progress first and finished items folded, and the main conversation's current turn. Your prompt comes first, then the tool calls, folded into groups such as "Ran tools: 5 · now Running command", with a count of each kind of call (reading, searching, editing…). The group still running stays open; click any group to open or close it. Earlier turns take one line each. An Agent or Workflow block shows what its subagent or run is doing now, and any block opens to its input and output, as in the panel. **Show in panel** and **Open transcript** are at the bottom.
+- **Right-click a card** for the same menu as a chat in the panel's list. The title bar has the scope switch, **Refresh**, **Show Agent Monitor** (the panel) and **Show Overview in Side Bar**.
+- Up, Down, Home and End move between cards, and Enter or Space opens one. In a narrow side bar, extras such as the count of each kind of call are hidden. If your system is set to reduce motion, the view doesn't animate.
 
 ### Status lights
 
-The same six lights are used everywhere: in the chat list, the Agents table, the Overview, the status bar and the terminal version.
+The same six lights are used everywhere: in the chat list, the Agents table, the Progress view, the Overview, the status bar and the terminal version.
 
 | Light | Meaning |
 | --- | --- |
@@ -205,7 +215,7 @@ The full reference, with sources (other tools' defaults, vendor benchmarks, blog
 
 Click an agent to see its steps, its final result (with a copy button), the files it changed (click one to open it) and its tool errors. **Open transcript** opens the raw session record.
 
-The steps stack from the top as the agent works. Each tool call is a gray block that shows what it does (Running command, Searching, Editing…) and whether it is still running, finished or failed; click a block to see the call's input (the command or arguments) and its output, read from the transcript. Prompts, thinking and replies appear as plain lines between the blocks.
+The steps stack from the top as the agent works. Each tool call is a gray block that shows what it does (Running command, Searching, Editing…) and whether it is still running, finished or failed; click a block to see the call's input (the command or arguments) and its output, read from the transcript. Prompts, thinking and replies appear as plain lines between the blocks. Finished calls show how long they took (calls under a second show no time). The main conversation keeps its last 80 steps; subagents and workflow agents keep their last 30.
 
 **Details** also has a **Transcript** line: where the chat is saved (with your home folder shortened to `~`), how big the transcript, its subagents and its file backups are, and **Reveal in Finder** (File Explorer on Windows) and **Copy Path** buttons.
 
@@ -401,15 +411,15 @@ The [usage history](#usage-history) page keeps a cache in the extension's storag
 
 ## Commands
 
-All commands are in the **Agent Monitor** category, and the table shows where you find each one. Commands that act on one chat work from its row; when run from the Command Palette, they ask which chat (the selected one is listed first).
+All commands are in the **Agent Monitor** category, and the table shows where you find each one. Commands that act on one chat work from its row; when run from the Command Palette, they ask which chat (the selected one is listed first). In the Progress view, right-clicking a card gives the same menu as "Chat right-click" below.
 
 | Command | Where | What it does |
 | --- | --- | --- |
-| **Show Agent Monitor** | Status bar light, Command Palette | Opens the Agent Monitor panel |
-| **Show Overview in Side Bar** | Command Palette | Opens the Overview tree in the side bar |
-| **Refresh** | Panel title bar, Overview title bar, Command Palette | Re-reads the records now |
+| **Show Agent Monitor** | Status bar light, Progress title bar, Command Palette | Opens the Agent Monitor panel |
+| **Show Overview in Side Bar** | Progress title bar, Command Palette | Opens the Overview tree in the side bar |
+| **Refresh** | Panel title bar, Progress title bar, Overview title bar, Command Palette | Re-reads the records now |
 | **Open Settings** | **…** menu of the panel title bar, Overview title bar, Command Palette | Opens Agent Monitor's settings |
-| **Show All Sessions** / **Show Only This Workspace's Sessions** | Panel title bar, Overview title bar, Command Palette | Switches the scope |
+| **Show All Sessions** / **Show Only This Workspace's Sessions** | Panel title bar, Progress title bar, Overview title bar, Command Palette | Switches the scope |
 | **Mark as Seen** / **Mark All as Seen** | Chat right-click or **…** / Panel title bar, Command Palette | Turns "Done (new)" into "Done" |
 | **Hide Completed Agents** / **Show Completed Agents** | Panel title bar, Overview title bar, Command Palette | Hides or shows finished agents |
 | **Go to Chat** | **Go to** in the chat's header, double-clicking a chat or agent, chat right-click or **…**, Overview right-click and chat rows, Command Palette | Brings up where the chat is running; see [Go to where a chat is running](#go-to-where-a-chat-is-running) |
@@ -433,7 +443,7 @@ All commands are in the **Agent Monitor** category, and the table shows where yo
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `agentMonitor.scope` | `all` | Which chats the chat list, Overview, status bar and badges include: `all`, or only this `workspace` |
+| `agentMonitor.scope` | `all` | Which chats the chat list, Progress view, Overview, status bar and badges include: `all`, or only this `workspace` |
 | `agentMonitor.followActiveChat` | `true` | Select the matching chat when you switch to a Claude Code or Codex chat tab |
 | `agentMonitor.hideCompleted` | `false` | Hide finished subagents, workflow agents and completed workflows (the main agent is always shown) |
 | `agentMonitor.showStatusBar` | `true` | Show the overall status light in the status bar |
@@ -507,6 +517,8 @@ These tips come from a review of published research and the official documentati
 
 - **Record formats can change.** The record formats of all three tools are internal and can change with any update. Lines the extension can't read are skipped.
 - **Steps can lag.** Records are written after each model call, so during a long stretch of thinking the step shown is the last one written.
+- **Only recent steps are kept.** The main conversation keeps its last 80 steps, subagents and workflow agents their last 30. When the current turn's earlier tool calls have fallen off, the Progress view counts them ("Tool calls earlier in this turn: 9 (no longer kept)") instead of showing them.
+- **Progress lines show only what the records say.** Plans come from Claude Code's to-do list (TodoWrite) and Codex's plan; Claude Code's task tools and GitHub Copilot Chat's to-do lists aren't read yet. A workflow's phases appear only when its script or state file names them, and "8 started" counts only the agents started so far, not the ones still to come.
 - **"Needs you" is exact only when the app reports its state.** That means Claude Code versions that report live state in `~/.claude/sessions`, and GitHub Copilot Chat. Older Claude Code versions and Codex rely on the guess described above, and Codex writes very little about approvals and errors to disk.
 - **GitHub Copilot Chat can be up to about a minute behind.** VS Code saves chats to disk about once a minute, so a new step, a finished answer or a prompt waiting for you can show up to a minute late.
 - **Costs are estimates.** They use list prices as of the date shown in the tooltip, so prices can change. Some models, such as Codex's review model, have no public price. GitHub Copilot Chat shows Copilot credits, not a cost.

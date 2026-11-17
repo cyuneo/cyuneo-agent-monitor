@@ -4,6 +4,22 @@ All notable changes to CYUNEO Agent Monitor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-11-17
+
+### Added
+
+- **A Progress view in the side bar.** The Agent Monitor side bar now opens on one card per chat, in the same order and scope as the panel's list: its status light, what it is doing now, and one progress line (its to-do list or plan, "Phase 2/3: Review · 8 started, 5 done", "Subagents 2/5 done", or this turn's tool calls). Finished chats take a single line.
+  - Click a card to open it in place: the workflow's phases (done, in progress, not started), the plan with the item in progress first, and the main conversation's current turn, with its tool calls folded into groups such as "Ran tools: 5 · now Running command" that you can open. Earlier turns take one line each. Agent and Workflow blocks show what their subagent or run is doing now, and blocks open to their input and output, as in the panel.
+  - The selection is shared: clicking a card, a chat in the panel's list or a chat in the Overview selects it in all three.
+  - Cards have the same right-click menu as the panel's list. The title bar has the scope switch, **Refresh**, **Show Agent Monitor** and **Show Overview in Side Bar**. The keyboard moves between cards, narrow side bars hide extras, and reduced motion is respected.
+- Plans are read from Claude Code's to-do list (TodoWrite) and Codex's plan, and workflows show the phases they declare. Copilot Chat has none for now.
+
+### Changed
+
+- **The Overview tree now sits below the Progress view and starts collapsed.** Click its header to open it.
+- The main conversation keeps its last 80 steps (it was 30); subagents and workflow agents keep 30.
+- A finished call's step block shows how long it took, in the panel too.
+
 ## [0.11.1] - 2026-11-06
 
 ### Fixed
