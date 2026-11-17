@@ -161,6 +161,13 @@ test('steps: a call and its result are one block; ids open the log only with a t
   assert.strictEqual(steps[3].stateText, i18n.t('webview.step.state.done'));
   // How long each call took: its result's time minus its own; null while it runs or when it never got a result
   assert.deepStrictEqual(steps.filter((x) => x.block).map((x) => [x.durMs, x.endMs]), [[1e3, NOW - 6e3], [1e3, NOW - 6e3], [null, null], [1e3, NOW - 3e3]]);
+  // ... and that time for the block's head, from the same duration format as the table
+  assert.deepStrictEqual(steps.filter((x) => x.block).map((x) => x.durText), [i18n.fmtDur(1e3), i18n.fmtDur(1e3), '', i18n.fmtDur(1e3)]);
+  const quick = build(s, { detail: { key: s.key, agents: { main: { timeline: [
+    { ms: NOW - 2e3, kind: 'tool', tool: 'Read', detail: 'a.js', ref: 'q1' }, { ms: NOW - 1600, kind: 'toolDone', tool: 'Read', detail: 'a.js', ref: 'q1' },
+    { ms: NOW - 1500, kind: 'tool', tool: 'Bash', detail: 'npm test', ref: 'q2' }, { ms: NOW - 1500 + 125e3, kind: 'toolDone', tool: 'Bash', detail: 'npm test', ref: 'q2' },
+  ], result: null, files: [], errors: [] } } }, expanded: ['main'] }).detail.main.steps;
+  assert.deepStrictEqual(quick.map((x) => [x.durMs, x.durText]), [[400, ''], [125e3, i18n.fmtDur(125e3)]], 'under a second says nothing rather than "0s"');
   assert.ok(steps.every((x) => !('startMs' in x)), 'the call time stays inside the view model builder');
   // The oldest entries drop off the front: the remaining steps keep their keys
   const later = build(s, { detail: { key: s.key, agents: { main: { timeline: tl.slice(2), result: null, files: [], errors: [] } } }, expanded: ['main'] }).detail.main.steps;
@@ -427,7 +434,11 @@ test('webviewHtml: CSP allows only cspSource and the nonce, lang uses the Intl l
   assert.strictEqual(csp, "default-src 'none'; style-src vscode-webview://x; font-src vscode-webview://x; script-src 'nonce-N0NCE'");
   assert.ok(html.includes('<html lang="ko-KR">'));
   const scripts = html.match(/<script\b[^>]*>/g);
-  assert.deepStrictEqual(scripts, ['<script type="application/json" id="l10n">', '<script nonce="N0NCE" src="https://asset/session-list.js">', '<script nonce="N0NCE" src="https://asset/agents.js">']);
+  assert.deepStrictEqual(scripts, ['<script type="application/json" id="l10n">', '<script nonce="N0NCE" src="https://asset/session-list.js">',
+    '<script nonce="N0NCE" src="https://asset/steps.js">', '<script nonce="N0NCE" src="https://asset/agents.js">']);
+  // the shared step blocks load before the panel's own sheet, so agents.css can still set the tokens they use
+  assert.deepStrictEqual(html.match(/<link rel="stylesheet" href="[^"]*">/g), ['https://asset/codicons/codicon.css', 'https://asset/steps.css', 'https://asset/agents.css']
+    .map((u) => `<link rel="stylesheet" href="${u}">`));
   const json = html.slice(html.indexOf('id="l10n">') + 10, html.indexOf('</script>'));
   assert.ok(!json.includes('<'), 'no < in the data block');
   assert.strictEqual(JSON.parse(json).dict['webview.title'], 'A</script><script>alert(1)</script>');
@@ -459,8 +470,8 @@ test('media/agents.js: token cell is in the second-line group; new buttons send 
   assert.ok(/grid-template-columns: minmax\(0, 1fr\) clamp\(9em, 50%, 14\.5em\)/.test(narrow), 'narrow content area: name / status columns are redistributed');
 });
 
-test('every string used by media/agents.js is under an injected prefix and in the English dictionary', () => {
-  const js = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
+test('every string used by media/agents.js and media/steps.js is under an injected prefix and in the English dictionary', () => {
+  const js = ['agents.js', 'steps.js'].map((f) => fs.readFileSync(path.join(ROOT, 'media', f), 'utf8')).join('\n');
   const keys = [...new Set([...js.matchAll(/\bt\('([\w.]+)'/g)].map((m) => m[1]))];
   const dyn = [...js.matchAll(/'(webview\.[\w.]+)'/g)].map((m) => m[1]); // the t(cond ? 'a' : 'b') form
   const all = [...new Set([...keys, ...dyn])];
@@ -474,7 +485,7 @@ test('every string used by media/agents.js is under an injected prefix and in th
 
 test('every webview.* string used by lib/agents-view.js and lib/webview-html.js is in webview.en.json', () => {
   const en = JSON.parse(fs.readFileSync(path.join(ROOT, 'l10n', 'webview.en.json'), 'utf8'));
-  for (const f of ['lib/agents-view.js', 'lib/webview-html.js', 'media/agents.js']) {
+  for (const f of ['lib/agents-view.js', 'lib/webview-html.js', 'media/agents.js', 'media/steps.js']) {
     const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
     for (const m of src.matchAll(/'(webview\.[\w.]+)'/g)) {
       if (m[1].endsWith('.')) continue; // a prefix that gets concatenated, e.g. 'webview.zone.' + zone
@@ -482,6 +493,166 @@ test('every webview.* string used by lib/agents-view.js and lib/webview-html.js 
     }
   }
   for (const z of ['consider', 'act']) for (const suf of ['', '.tip']) assert.ok(('webview.zone.' + z + suf) in en);
+});
+
+test('pageShell: the document frame of webviewHtml (CSP, sheets and scripts in order, dictionary block, body)', () => {
+  const { pageShell } = require('../lib/webview-html');
+  const html = pageShell({ lang: 'ja-JP', cspSource: 'c:', nonce: 'N', title: 'T&amp;', styles: ['a/x.css', 'a/y.css'], scripts: ['a/1.js', 'a/2.js'], l10nJson: '{}', body: '<main></main>' });
+  assert.strictEqual(html, `<!DOCTYPE html>
+<html lang="ja-JP">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; style-src c:; font-src c:; script-src &#39;nonce-N&#39;">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="a/x.css">
+<link rel="stylesheet" href="a/y.css">
+<title>T&amp;</title>
+<script type="application/json" id="l10n">{}</script>
+</head>
+<body>
+<main></main>
+<script nonce="N" src="a/1.js"></script>
+<script nonce="N" src="a/2.js"></script>
+</body>
+</html>`);
+  // the panel page is that frame around its own markup
+  const page = webviewHtml({ cspSource: 'c:', asset: (p) => 'a/' + p, nonce: 'N', version: '0.3.0', i18n });
+  assert.ok(page.startsWith('<!DOCTYPE html>\n<html lang="en') && page.endsWith('<script nonce="N" src="a/agents.js"></script>\n</body>\n</html>'));
+  assert.ok(page.includes('</title>\n<script type="application/json" id="l10n">') && page.includes('<body>\n<div id="app" class="app list-right">'));
+});
+
+// A small stand-in for the DOM: enough for media/steps.js and session-list.js syncKeyed
+function fakeDom() {
+  class Node {
+    constructor(tag, text) {
+      this.tagName = tag; this.kids = []; this.parentNode = null; this.attrs = new Map(); this.hidden = false; this._text = text || '';
+      this.style = {}; this.className = '';
+      const el = this;
+      const list = () => el.className.split(/\s+/).filter(Boolean);
+      this.classList = {
+        contains: (c) => list().includes(c),
+        add: (c) => { if (!list().includes(c)) el.className = [...list(), c].join(' '); },
+        remove: (c) => { el.className = list().filter((x) => x !== c).join(' '); },
+        toggle: (c, on) => { if (on === undefined) on = !list().includes(c); if (on) el.classList.add(c); else el.classList.remove(c); return on; },
+      };
+    }
+    get children() { return this.kids.filter((k) => k.tagName !== '#text'); }
+    get firstChild() { return this.kids[0] || null; }
+    get nextSibling() { const p = this.parentNode; return p ? p.kids[p.kids.indexOf(this) + 1] || null : null; }
+    get textContent() { return this.tagName === '#text' ? this._text : this.kids.map((k) => k.textContent).join(''); }
+    set textContent(v) { for (const k of this.kids) k.parentNode = null; this.kids = v ? [new Node('#text', String(v))] : []; }
+    setAttribute(k, v) { if (k === 'class') this.className = String(v); else if (k === 'hidden') this.hidden = true; else this.attrs.set(k, String(v)); }
+    getAttribute(k) { return k === 'class' ? this.className : this.attrs.has(k) ? this.attrs.get(k) : null; }
+    hasAttribute(k) { return k === 'hidden' ? this.hidden : this.attrs.has(k); }
+    removeAttribute(k) { if (k === 'hidden') this.hidden = false; else this.attrs.delete(k); }
+    appendChild(c) { return this.insertBefore(c, null); }
+    insertBefore(c, ref) {
+      if (c.parentNode) c.remove();
+      const i = ref ? this.kids.indexOf(ref) : -1;
+      if (i < 0) this.kids.push(c); else this.kids.splice(i, 0, c);
+      c.parentNode = this;
+      return c;
+    }
+    remove() { if (this.parentNode) this.parentNode.kids.splice(this.parentNode.kids.indexOf(this), 1); this.parentNode = null; }
+    addEventListener() {}
+    querySelectorAll(sel) {
+      const want = sel.split('.').filter(Boolean);
+      const out = [];
+      const walk = (n) => { for (const k of n.children) { if (want.every((c) => k.classList.contains(c))) out.push(k); walk(k); } };
+      walk(this);
+      return out;
+    }
+  }
+  function h(tag, attrs, kids) {
+    const el = new Node(tag);
+    if (attrs) for (const k of Object.keys(attrs)) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
+    if (kids) for (const c of kids) if (c != null) el.appendChild(typeof c === 'string' ? new Node('#text', c) : c);
+    return el;
+  }
+  return { h, root: () => new Node('ol') };
+}
+
+test('media/steps.js: blocks open to their log once per call (again while running); replies fill only that session\'s open block; the duration shows when the view model has one', () => {
+  const { createSteps } = require('../media/steps');
+  const dom = fakeDom();
+  const posted = [];
+  let key = 'claude:a';
+  const Steps = createSteps({ post: (m) => posted.push(m), t: (k) => k, h: dom.h, getSessionKey: () => key, syncKeyed: LS.syncKeyed });
+  const blk = (o) => ({ key: 'r:' + o.ref, block: true, icon: 'search', tone: '', title: 'Search', tool: 'Grep', text: 'TODO', state: 'done',
+    stateText: 'Done', ago: '1m', error: '', durMs: 2000, durText: '2s', endMs: 0, ...o });
+  const list = dom.root();
+  const items = [{ key: 'prompt:1', block: false, ref: null, icon: 'comment', tone: '', title: '', text: 'Fix it', state: '', stateText: '', ago: '2m' },
+    blk({ ref: 'tu1' }), blk({ ref: 'tu2', state: 'running', stateText: 'Running', durMs: null, durText: '' }), blk({ ref: null, key: 'tool:5', durText: '' })];
+  Steps.sync(list, items, 'main', false);
+  const [line, done, running, nolog] = list.children;
+  assert.ok(line.classList.contains('line') && !line.classList.contains('enter'), 'first fill does not animate');
+  assert.strictEqual(line.children[1].textContent, 'Fix it');
+  const head = (li) => li.children[0];
+  const part = (li, cls) => head(li).children.find((c) => c.classList.contains(cls));
+  assert.strictEqual(part(done, 'st-dur').textContent, '2s');
+  assert.strictEqual(part(done, 'st-dur').hidden, false);
+  assert.strictEqual(part(running, 'st-dur').hidden, true, 'no duration while it runs');
+  assert.ok(part(running, 'st-state').className.includes('codicon-modifier-spin'));
+  assert.strictEqual(head(done).getAttribute('title'), 'Search · Grep · TODO · 2s · Done');
+  assert.strictEqual(head(nolog).getAttribute('aria-disabled'), 'true');
+  assert.ok(nolog.classList.contains('no-log'));
+
+  // a block without a log or an error does not open
+  Steps.toggleStep(nolog);
+  assert.strictEqual(posted.length, 0);
+  // opening asks once; closing and opening again uses the kept reply
+  Steps.toggleStep(done);
+  assert.deepStrictEqual(posted, [{ type: 'step', sessionKey: 'claude:a', rowId: 'main', ref: 'tu1' }]);
+  assert.strictEqual(head(done).getAttribute('aria-expanded'), 'true');
+  const [, inBox, outBox, msg] = done.children[1].children;
+  assert.strictEqual(msg.textContent, 'webview.step.loading');
+  Steps.onStepLog({ type: 'step', sessionKey: 'claude:other', rowId: 'main', ref: 'tu1', found: true, input: 'evil', output: 'evil' }, list);
+  assert.strictEqual(inBox.hidden, true, 'another session\'s reply is ignored');
+  Steps.onStepLog({ type: 'step', sessionKey: 'claude:a', rowId: 'main', ref: 'tu1', found: true, input: '{"pattern":"TODO"}', output: 'a.js:1', outputTruncated: true }, list);
+  assert.strictEqual(inBox.children[1].textContent, '{"pattern":"TODO"}');
+  assert.strictEqual(outBox.children[1].textContent, 'a.js:1');
+  assert.strictEqual(outBox.children[2].hidden, false, 'truncation note');
+  assert.strictEqual(msg.hidden, true);
+  Steps.toggleStep(done);
+  Steps.toggleStep(done);
+  assert.strictEqual(posted.length, 1, 'kept reply, no second request');
+  // a running block asks every time it opens, and once more when its result arrives while open
+  Steps.toggleStep(running);
+  assert.strictEqual(posted.length, 2);
+  Steps.sync(list, [items[0], items[1], blk({ ref: 'tu2' }), items[3]], 'main', false);
+  assert.deepStrictEqual(posted[2], { type: 'step', sessionKey: 'claude:a', rowId: 'main', ref: 'tu2' });
+  assert.strictEqual(list.children[2], running, 'same element for the same step');
+  // steps that arrive later slide in; a new session's reply only reaches its own blocks
+  Steps.sync(list, [...items, blk({ ref: 'tu9' })], 'main', true);
+  assert.ok(list.children[4].classList.contains('enter') && list.children[4].style.animationDelay === '0ms');
+  key = 'claude:b';
+  Steps.onStepLog({ type: 'step', sessionKey: 'claude:a', rowId: 'main', ref: 'tu1', found: false }, list);
+  assert.strictEqual(outBox.children[1].textContent, 'a.js:1', 'a reply for a session no longer shown changes nothing');
+});
+
+test('media/steps.js and steps.css: DOM from text only, no network; the panel uses them; no opacity, no width media queries, reduced motion', () => {
+  const js = fs.readFileSync(path.join(ROOT, 'media', 'steps.js'), 'utf8');
+  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function|setAttribute\('style'|fetch\(/.test(js), 'DOM built from text only');
+  assert.ok(/\(root\)\.AgentMonitorSteps = api/.test(js) && /module\.exports = api/.test(js), 'UMD: window.AgentMonitorSteps in the page, module.exports in Node');
+  assert.strictEqual(typeof require('../media/steps').createSteps, 'function');
+  const panel = fs.readFileSync(path.join(ROOT, 'media', 'agents.js'), 'utf8');
+  assert.ok(/window\.AgentMonitorSteps\.createSteps\(/.test(panel), 'the panel builds its step blocks with steps.js');
+  assert.ok(!/function (makeStep|updateStep|toggleStep|fillStep|onStepLog)\b/.test(panel), 'no second copy of the block code in agents.js');
+  assert.ok(/Steps\.onStepLog\(m, E\.rows\)/.test(panel) && /Steps\.toggleStep\(btn\.closest\('\.step'\)\)/.test(panel));
+  const css = fs.readFileSync(path.join(ROOT, 'media', 'steps.css'), 'utf8');
+  assert.ok(!/opacity\s*:/.test(css), 'no opacity dimming');
+  assert.ok(!/@media[^{]*width/.test(css), 'no viewport-width rules');
+  assert.ok(/@media \(prefers-reduced-motion: reduce\) \{[^}]*animation: none !important;/.test(css), 'reduced motion');
+  assert.ok(/\.step\.block \{[^}]*border-radius: 6px;/.test(css) && /\.st-code \{[^}]*font-size: max\(var\(--vscode-font-size\)/.test(css));
+  assert.ok(/\.st-dur:not\(\[hidden\]\) \+ \.st-state \{ margin-left: 0; \}/.test(css), 'the duration sits right before the state icon');
+  const panelCss = fs.readFileSync(path.join(ROOT, 'media', 'agents.css'), 'utf8');
+  assert.ok(!/\.st-head|\.step\.block|@keyframes step-in/.test(panelCss), 'block rules live only in steps.css');
+  // the tokens steps.css sets match the panel's, so the order of the two sheets changes nothing in the panel
+  const tokens = (src) => Object.fromEntries([...src.slice(src.indexOf(':root {'), src.indexOf('}', src.indexOf(':root {'))).matchAll(/(--[\w-]+): ([^;]+);/g)].map((m) => [m[1], m[2]]));
+  const mine = tokens(css);
+  const theirs = tokens(panelCss);
+  assert.ok(Object.keys(mine).length >= 8);
+  for (const [k, v] of Object.entries(mine)) assert.strictEqual(v, theirs[k], k);
 });
 
 test('l10n/webview.en.json: every key starts with webview., values are strings, no CJK characters', () => {

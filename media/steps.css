@@ -1,0 +1,93 @@
+/* Step blocks, shared by the webview pages that show an agent's steps (loaded before the page's own sheet).
+   A tool call is a gray block that opens to its input and output; prompts, thinking, replies and events are plain lines between
+   the blocks. Legibility rules as in agents.css: font size follows the UI, no opacity for dimming text, codicon icons, outlines in
+   high-contrast themes. The page provides .muted, .sr-only, [hidden] and the codicon font. */
+
+/* Tokens these rules use, with the panel's values; a page's own sheet (agents.css) loads later and may set them again */
+:root {
+  --row-h: 22px;
+  --bg: var(--vscode-panel-background, var(--vscode-editor-background));
+  --line: var(--vscode-tree-tableColumnsBorder, var(--vscode-panel-border, rgba(128, 128, 128, .35)));
+  --c-icon: var(--vscode-icon-foreground, var(--vscode-foreground));
+  --c-err-text: var(--vscode-list-errorForeground, var(--vscode-errorForeground));
+  --lamp-working: var(--vscode-agentMonitor-lampWorking, #00AFFF);
+  --lamp-doneSeen: var(--vscode-agentMonitor-lampDoneSeen, #008700);
+  --lamp-idle: var(--vscode-agentMonitor-lampIdle, #808080);
+}
+
+.steps { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 2px 0 4px; list-style: none; min-width: 0; }
+.step { min-width: 0; }
+.step.line { display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+.step.line .codicon { flex: none; color: var(--c-icon); }
+.step .codicon.tone-error { color: var(--c-err-text); }
+.st-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .ago { flex: none; margin-left: auto; padding-left: 8px; }
+.step.block {
+  border: 1px solid var(--vscode-widget-border, var(--line));
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .1));
+  overflow: hidden;
+}
+.st-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: calc(var(--row-h) + 4px);
+  padding: 0 8px 0 4px;
+  border: 0;
+  background: none;
+  color: var(--vscode-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.st-head:hover { background: var(--vscode-list-hoverBackground); }
+.st-head[aria-disabled] { cursor: default; padding-left: 26px; }
+.st-head[aria-disabled]:hover { background: none; }
+.st-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.st-head > .codicon { flex: none; color: var(--c-icon); }
+.st-title { flex: none; font-weight: 600; }
+.st-tool { flex: none; }
+/* How long the call took sits right before the state icon; without it the state icon takes the free space */
+.st-dur { flex: none; margin-left: auto; }
+.st-state { margin-left: auto; }
+.st-dur:not([hidden]) + .st-state { margin-left: 0; }
+.st-state + .sr-only + .ago { margin-left: 0; }
+.s-running .st-state { color: var(--lamp-working); }
+.s-done .st-state { color: var(--vscode-testing-iconPassed, var(--lamp-doneSeen)); }
+.s-error .st-state, .s-error .st-icon { color: var(--c-err-text); }
+.s-error { border-color: var(--vscode-inputValidation-errorBorder, var(--c-err-text)); }
+.s-stopped .st-state { color: var(--lamp-idle); }
+.st-body { padding: 2px 8px 6px 26px; border-top: 1px solid var(--vscode-widget-border, var(--line)); }
+.st-body p { margin: 0; }
+.st-err { color: var(--c-err-text); overflow-wrap: anywhere; }
+.st-io + .st-io { margin-top: 4px; }
+.st-code {
+  margin: 0;
+  max-height: calc(var(--row-h) * 12);
+  overflow: auto;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: max(var(--vscode-font-size), var(--vscode-editor-font-size, 0px));
+  line-height: 1.5;
+  user-select: text;
+  color: var(--vscode-textPreformat-foreground, var(--vscode-foreground));
+  background: var(--vscode-textCodeBlock-background, var(--bg));
+  border-radius: 4px;
+}
+.st-code:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.st-io.is-error .st-code { color: var(--c-err-text); }
+/* A step that arrives while the details are open stacks in below the others */
+.step.enter { animation: step-in .24s ease-out both; }
+@keyframes step-in {
+  from { transform: translateY(-4px); clip-path: inset(0 0 100% 0); }
+  to { transform: none; clip-path: inset(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .steps *, .steps *::before { transition: none !important; animation: none !important; }
+}

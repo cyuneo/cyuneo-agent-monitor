@@ -8,6 +8,7 @@
 //   new rows are inserted at the position given by the view model; expanded state, focus and scroll position are all kept. The whole table is replaced only when the content area switches sessions.
 // - Every action (select, compact, copy, open file) only posts the session key / row id / index; the extension looks up the data again and performs it.
 // - Pure functions for width snapping, keyboard navigation, type-to-jump and incremental sync live in media/session-list.js (unit-tested directly).
+// - The step blocks in the details (a gray block per tool call that opens to its input and output) come from media/steps.js.
 (function () {
   const vscode = acquireVsCodeApi();
   const LS = window.AgentMonitorList;
@@ -103,6 +104,10 @@
   let shownKey = null;     // session currently shown
   let seq = 0;             // for detail panel ids
   const units = new Map(); // row id -> unit (row + detail panel)
+  // Step blocks in the details (media/steps.js): opening one asks the extension for its input and output
+  const Steps = window.AgentMonitorSteps.createSteps({
+    post: (m) => vscode.postMessage(m), t, h, getSessionKey: () => shownKey, syncKeyed,
+  });
 
   const lampClass = (x) => `lamp codicon codicon-${x.shape || 'circle-large-outline'} lamp-${x.lamp || 'idle'}`;
 
@@ -427,17 +432,7 @@
     if (!dv || !dv.loaded) return;
 
     // Steps that arrive after the first fill slide in one after another; the first fill appears at once
-    let fresh = 0;
-    syncKeyed(d.tl, dv.steps, (x) => x.key, (x) => {
-      const li = x.block ? makeStep() : makeLine();
-      if (d.filled) {
-        li.classList.add('enter');
-        li.style.animationDelay = Math.min(fresh++, 8) * 70 + 'ms';
-        // once only: an animation would play again whenever the details are hidden and shown
-        li.addEventListener('animationend', () => { li.classList.remove('enter'); li.style.animationDelay = ''; }, { once: true });
-      }
-      return li;
-    }, (li, x) => (x.block ? updateStep(u, li, x) : updateLine(li, x)));
+    Steps.sync(d.tl, dv.steps, u.id, !!d.filled);
     d.filled = true;
     show(d.tl, dv.steps.length > 0);
     show(d.tlEmpty, dv.steps.length === 0);
@@ -477,115 +472,6 @@
       at(li.children[3], 'title', x.text);
     });
     show(d.secErrs, dv.errors.length > 0);
-  }
-
-  // ---------- Step blocks (in the details): one tool call each; opening one asks the extension for its input and output ----------
-  const stepLogs = new Map(); // rowId + ref -> the reply of the extension (kept while the page is open)
-  const stepKey = (rowId, ref) => rowId + '\n' + ref;
-
-  function makeLine() {
-    return h('li', { class: 'step line' }, [
-      h('i', { class: 'codicon', 'aria-hidden': 'true' }), h('span', { class: 'st-text' }), h('span', { class: 'ago muted' }),
-    ]);
-  }
-  function updateLine(li, x) {
-    cn(li.children[0], 'codicon codicon-' + x.icon + (x.tone ? ' tone-' + x.tone : ''));
-    txt(li.children[1], x.text);
-    at(li.children[1], 'title', x.text);
-    txt(li.children[2], x.ago);
-  }
-
-  function makeStep() {
-    const bodyId = 'st' + (++seq);
-    const head = h('button', { type: 'button', class: 'st-head', 'data-act': 'step', 'aria-expanded': 'false', 'aria-controls': bodyId }, [
-      h('i', { class: 'st-chev codicon codicon-chevron-right', 'aria-hidden': 'true' }),
-      h('i', { class: 'st-icon codicon', 'aria-hidden': 'true' }),
-      h('span', { class: 'st-title' }),
-      h('span', { class: 'st-text muted' }),
-      h('span', { class: 'st-tool muted' }),
-      h('i', { class: 'st-state codicon', 'aria-hidden': 'true' }),
-      h('span', { class: 'sr-only st-statetext' }),
-      h('span', { class: 'ago muted' }),
-    ]);
-    const io = (label) => h('div', { class: 'st-io' }, [h('div', { class: 'st-label muted' }, [label]), h('pre', { class: 'st-code', tabindex: '0' }), h('p', { class: 'muted trunc' }, [t('webview.step.truncated')])]);
-    const body = h('div', { class: 'st-body', id: bodyId, hidden: '' }, [
-      h('p', { class: 'st-err' }),
-      io(t('webview.step.input')), io(t('webview.step.output')),
-      h('p', { class: 'muted st-msg' }),
-    ]);
-    const li = h('li', { class: 'step block' }, [head, body]);
-    li._s = { head, body, open: false };
-    return li;
-  }
-  function updateStep(u, li, x) {
-    const S = li._s;
-    // A step that was running when it was opened has its output now: ask again
-    const ended = S.open && S.data && S.data.state === 'running' && x.state !== 'running' && x.ref;
-    S.data = x;
-    S.rowId = u.id;
-    if (ended) vscode.postMessage({ type: 'step', sessionKey: shownKey, rowId: u.id, ref: x.ref });
-    const [chev, icon, title, text, tool, state, stateText, ago] = S.head.children;
-    cn(li, 'step block' + (x.state ? ' s-' + x.state : '') + (x.ref ? '' : ' no-log') + (li.classList.contains('enter') ? ' enter' : ''));
-    cn(icon, 'st-icon codicon codicon-' + x.icon);
-    txt(title, x.title);
-    txt(text, x.text);
-    show(text, !!x.text);
-    txt(tool, x.tool);
-    show(tool, !!x.tool);
-    const stateIcon = { running: 'loading codicon-modifier-spin', done: 'check', error: 'error', stopped: 'debug-stop' }[x.state] || 'circle-small';
-    cn(state, 'st-state codicon codicon-' + stateIcon);
-    txt(stateText, x.stateText);
-    txt(ago, x.ago);
-    at(S.head, 'title', [x.title, x.tool, x.text, x.stateText].filter(Boolean).join(' · '));
-    at(S.head, 'aria-disabled', x.ref || x.error ? null : 'true');
-    show(chev, !!(x.ref || x.error));
-    if (S.open) fillStep(li);
-  }
-  function toggleStep(li) {
-    const S = li._s;
-    if (!S || !S.data || !(S.data.ref || S.data.error)) return;
-    S.open = !S.open;
-    at(S.head, 'aria-expanded', String(S.open));
-    cn(S.head.children[0], 'st-chev codicon codicon-chevron-' + (S.open ? 'down' : 'right'));
-    show(S.body, S.open);
-    if (!S.open) return;
-    const ref = S.data.ref;
-    // Ask again while a step is still running: its output arrives later
-    if (ref && (!stepLogs.has(stepKey(S.rowId, ref)) || S.data.state === 'running')) {
-      if (!stepLogs.has(stepKey(S.rowId, ref))) stepLogs.set(stepKey(S.rowId, ref), null);
-      vscode.postMessage({ type: 'step', sessionKey: shownKey, rowId: S.rowId, ref });
-    }
-    fillStep(li);
-  }
-  function fillStep(li) {
-    const S = li._s;
-    const [err, inBox, outBox, msg] = S.body.children;
-    txt(err, S.data.error || '');
-    show(err, !!S.data.error);
-    const r = S.data.ref ? stepLogs.get(stepKey(S.rowId, S.data.ref)) : undefined;
-    const put = (box, text, cut) => {
-      show(box, text != null && text !== '');
-      if (text != null) txt(box.children[1], text);
-      show(box.children[2], !!cut);
-    };
-    put(inBox, r ? r.input : null, r && r.inputTruncated);
-    put(outBox, r ? r.output : null, r && r.outputTruncated);
-    outBox.classList.toggle('is-error', !!(r && r.isError));
-    let note = '';
-    if (S.data.ref && r === null) note = t('webview.step.loading');
-    else if (r && r.failed) note = t('webview.step.failed');
-    else if (r && !r.found) note = t('webview.step.notFound');
-    else if (r && r.output == null && S.data.state === 'running') note = t('webview.step.waiting');
-    txt(msg, note);
-    show(msg, !!note);
-  }
-  function onStepLog(m) {
-    if (m.sessionKey !== shownKey) return;
-    stepLogs.set(stepKey(m.rowId, m.ref), m);
-    if (stepLogs.size > 200) stepLogs.delete(stepLogs.keys().next().value);
-    for (const li of E.rows.querySelectorAll('.step.block')) {
-      if (li._s && li._s.open && li._s.rowId === m.rowId && li._s.data && li._s.data.ref === m.ref) fillStep(li);
-    }
   }
 
   // ---------- Rendering the whole content area ----------
@@ -925,7 +811,7 @@
     if (srow && srow._data) { choose(srow._data.key); return; }
     if (act === 'emptyAction') { if (vm && vm.emptyAction) vscode.postMessage({ type: vm.emptyAction.act }); return; }
     if (act === 'toggle') { toggle(unitOf(btn)); return; }
-    if (act === 'step') { toggleStep(btn.closest('.step')); return; }
+    if (act === 'step') { Steps.toggleStep(btn.closest('.step')); return; }
     if (act === 'toggleDetails') { setDetails(!(shownKey && state.details[shownKey])); return; }
     if (act === 'showResume') { setDetails(true); revealResume(); return; }
     if (act === 'compact' || btn === E.compact) { if (key) vscode.postMessage({ type: 'compact', sessionKey: key }); return; }
@@ -994,7 +880,7 @@
     if (!m) return;
     if (m.type === 'render') render(m);
     else if (m.type === 'list') renderList(m);
-    else if (m.type === 'step') onStepLog(m);
+    else if (m.type === 'step') Steps.onStepLog(m, E.rows);
   });
   applyWidth(); // before the first list message arrives, lay out with the remembered width (or the default 200) to avoid a jump
   const ready = { type: 'ready', expanded: state.expanded };
