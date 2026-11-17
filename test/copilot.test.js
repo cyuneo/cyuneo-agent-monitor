@@ -198,6 +198,21 @@ function replayTests() {
     assert.strictEqual(st.badOps, 0);
   });
 
+  test('turns: each request starts one; tool parts and failed ones counted; the main agent keeps 80 steps, a sub-agent 30; this turn\'s calls that fell off are counted', () => {
+    const many = (prefix, n, o = {}) => Array.from({ length: n }, (_, i) => tool(prefix + i, i === n - 1 ? { extra: { resultError: 'boom' }, ...o } : o));
+    const subParts = Array.from({ length: 40 }, (_, i) => nested('n' + i, 'sa'));
+    const a = copilot.analyze(root('t', [
+      req(1, { parts: many('a', 3) }),
+      req(2, { parts: [...many('b', 90), subTool('sa'), ...subParts] }),
+    ]));
+    assert.strictEqual(a.main.timeline.length, 80);
+    // request 2: prompt, 91 tool parts (one is the sub-agent call), done → 93 events; 80 kept → the prompt and 12 calls fell off
+    assert.deepStrictEqual([a.main.turn.sinceMs, a.main.turn.tools, a.main.turn.errors, a.main.turn.dropped.tools], [S(20), 91, 1, 12]);
+    const sub = a.subagents[0].log;
+    assert.strictEqual(sub.timeline.length, 30);
+    assert.deepStrictEqual([sub.turn.tools, sub.turn.dropped.tools], [40, 10]);
+  });
+
   test('replay: an initial line mid-stream replaces the whole state', () => {
     const st = fresh(root('a', [req(1), req(2)]));
     applyEntry(st, init(root('a', [req(7, { text: 'after rewrite' })])));

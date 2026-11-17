@@ -221,8 +221,8 @@ function scanTests() {
     });
     assert.deepStrictEqual(a.errors.map((e) => [e.tool, e.text]), [
       ['exec_command', 'error: 2 problems'], ['mcp__docs__search', 'tool not found'], ['exec', 'Error: boom']]);
-    const d12 = scanAt(120, { limits: { timelineSent: 12 } }).p.detail(KEY(1)).agents[ID(1)];
-    assert.strictEqual(d12.timeline.length, 12, 'only the latest timelineSent entries are sent');
+    const d12 = scanAt(120, { limits: { timelineMainSent: 12 } }).p.detail(KEY(1)).agents[ID(1)];
+    assert.strictEqual(d12.timeline.length, 12, 'only the latest timelineMainSent entries are sent for the main thread');
     assert.strictEqual(d12.timeline[11].kind, 'done');
     // A call and its output share the call id
     assert.deepStrictEqual([a.timeline[2].ref, a.timeline[3].ref].map(Boolean), [true, true]);
@@ -589,6 +589,74 @@ function statusTests() {
       ingestCodex(s, ev(i, 'event_msg', { type: 'item_completed', item: { type: 'CommandExecution', status: 'failed', stderr: `err ${i}\nmore`, exit_code: 2 } }));
     }
     assert.deepStrictEqual([s.toolErrors, s.errors.map((e) => e.text)], [5, ['err 3', 'err 4']]);
+  });
+
+  const meta = (sec, extra = {}) => ev(sec, 'session_meta', { id: 'm', session_id: 'm', timestamp: iso(sec), cwd: '/w', ...extra });
+  const call = (sec, name, args, id) => ev(sec, 'response_item', { type: 'function_call', name, arguments: typeof args === 'string' ? args : JSON.stringify(args), call_id: id });
+  const out = (sec, id, text = 'ok') => ev(sec, 'response_item', { type: 'function_call_output', call_id: id, output: text });
+
+  test('update_plan: the plan and its summary (unknown statuses left out), the explanation as the step detail; a later plan replaces it; arguments in another shape keep it', () => {
+    const s = feed([
+      meta(0),
+      ev(1, 'event_msg', { type: 'task_started', turn_id: 't1' }),
+      call(2, 'update_plan', { explanation: 'Fix the  parser\nthen test', plan: [
+        { step: 'Read the code', status: 'completed' }, { step: 'Fix the bug', status: 'in_progress' },
+        { step: 'Run tests', status: 'pending' }, { step: 'Blocked thing', status: 'blocked' }, 'nope'] }, 'p1'),
+      out(3, 'p1', 'Plan updated'),
+    ]);
+    assert.deepStrictEqual(s.plan, { ms: S(2), source: 'plan', items: [
+      { text: 'Read the code', active: null, status: 'completed' }, { text: 'Fix the bug', active: null, status: 'in_progress' },
+      { text: 'Run tests', active: null, status: 'pending' }] });
+    const tool = s.timeline.find((e) => e.kind === 'tool');
+    assert.deepStrictEqual([tool.tool, tool.detail], ['update_plan', 'Fix the parser then test']);
+    for (const bad of ['{"plan":"nope"}', 'not json', '{"plan":[{"step":"x","status":"weird"}]}']) {
+      ingestCodex(s, call(4, 'update_plan', bad, 'bad'));
+      assert.strictEqual(s.plan.items.length, 3, 'unchanged after ' + bad);
+    }
+    ingestCodex(s, call(5, 'update_plan', { plan: [{ step: 'Ship', status: 'completed' }] }, 'p2'));
+    assert.deepStrictEqual(s.plan, { ms: S(5), source: 'plan', items: [{ text: 'Ship', active: null, status: 'completed' }] });
+  });
+
+  test('provider: Agent.todo / turn and detail plan / turn from the rollout (update_plan in a real file)', () => {
+    const home = path.join(TMP, 'plan-home');
+    const id = ID(0x91);
+    const dir = path.join(home, 'sessions', '2026', '09', '20');
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, `rollout-2026-09-20T10-00-00-${id}.jsonl`);
+    fs.writeFileSync(f, [
+      ev(0, 'session_meta', { id, session_id: id, timestamp: iso(0), cwd: '/w', originator: 'codex_vscode', source: 'vscode' }),
+      ev(1, 'event_msg', { type: 'task_started', turn_id: 't1' }),
+      call(2, 'update_plan', { plan: [{ step: 'Read', status: 'completed' }, { step: 'Edit', status: 'in_progress' }] }, 'p1'),
+      out(3, 'p1'),
+      call(4, 'shell', { command: ['false'] }, 'c1'),
+      ev(5, 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'Script failed\nboom' }),
+    ].map(line).join(''));
+    fs.utimesSync(f, S(5) / 1000, S(5) / 1000);
+    const p = new CodexProvider({ home, activeWindowMinutes: 100000 });
+    const s = p.scan(S(6)).find((x) => x.key === KEY(0x91));
+    assert.deepStrictEqual(s.main.todo, { done: 1, total: 2, active: 'Edit' });
+    assert.deepStrictEqual(s.main.turn, { sinceMs: S(1), tools: 2, errors: s.main.toolErrors });
+    const d = p.detail(KEY(0x91)).agents[id];
+    assert.deepStrictEqual(d.plan.items.map((x) => x.status), ['completed', 'in_progress']);
+    assert.deepStrictEqual(d.turn.dropped, { tools: 0 });
+  });
+
+  test('turns: task_started starts a new one; tool calls and failures counted; the main thread keeps 80 steps, a child thread 30, and this turn\'s calls that fell off are counted', () => {
+    const lines = (child) => {
+      const out1 = [meta(0, child ? { id: 'c', session_id: 'm', parent_thread_id: 'm' } : {}), ev(1, 'event_msg', { type: 'task_started', turn_id: 't1' })];
+      for (let i = 0; i < 3; i++) out1.push(call(2, 'shell', { command: ['ls'] }, 'a' + i), out(2, 'a' + i));
+      out1.push(ev(3, 'event_msg', { type: 'task_complete', turn_id: 't1' }), ev(4, 'event_msg', { type: 'task_started', turn_id: 't2' }));
+      for (let i = 0; i < 50; i++) out1.push(call(5 + i, 'shell', { command: ['ls'] }, 'b' + i), out(5 + i, 'b' + i));
+      return out1;
+    };
+    const m = feed(lines(false));
+    assert.strictEqual(m.timeline.length, 80);
+    assert.deepStrictEqual([m.turn.sinceMs, m.turn.tools, m.turn.errors], [S(4), 50, 0]);
+    // turn 2 = prompt + 100 events; 80 kept → the prompt and 10 of its calls (20 events) fell off, 21 events in all
+    assert.strictEqual(m.turn.dropped.tools, 10);
+    const c = feed(lines(true));
+    assert.strictEqual(c.timeline.length, 30);
+    assert.strictEqual(c.turn.dropped.tools, 35);
   });
 }
 

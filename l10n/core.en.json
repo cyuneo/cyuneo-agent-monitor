@@ -176,6 +176,9 @@
   "workflow.stale": "No activity",
   "workflow.progress": "{done}/{total} done",
   "workflow.phase": "Phase {phase}",
+  "workflow.phaseOf": "Phase {index}/{count}: {title}",
+  "workflow.started": "{total} started, {done} done",
+  "plan.progress": "{done}/{total} done",
 
   "entry.vscode": "VS Code",
   "entry.cli": "Terminal",

@@ -176,6 +176,9 @@
   "workflow.stale": "無活動",
   "workflow.progress": "{done}/{total} 已完成",
   "workflow.phase": "階段 {phase}",
+  "workflow.phaseOf": "階段 {index}/{count}：{title}",
+  "workflow.started": "已啟動 {total} 個，{done} 個完成",
+  "plan.progress": "{done}/{total} 已完成",
 
   "entry.vscode": "VS Code",
   "entry.cli": "終端機",

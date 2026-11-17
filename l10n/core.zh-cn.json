@@ -176,6 +176,9 @@
   "workflow.stale": "无活动",
   "workflow.progress": "{done}/{total} 已完成",
   "workflow.phase": "阶段 {phase}",
+  "workflow.phaseOf": "阶段 {index}/{count}：{title}",
+  "workflow.started": "已启动 {total} 个，{done} 个完成",
+  "plan.progress": "{done}/{total} 已完成",
 
   "entry.vscode": "VS Code",
   "entry.cli": "终端",

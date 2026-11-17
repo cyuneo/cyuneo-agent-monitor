@@ -159,6 +159,9 @@ test('steps: a call and its result are one block; ids open the log only with a t
   assert.deepStrictEqual(steps.filter((x) => x.block).map((x) => x.ref), ['tu1', 'tu2', 'tu3', null]);
   assert.strictEqual(steps[4].icon, 'plug');
   assert.strictEqual(steps[3].stateText, i18n.t('webview.step.state.done'));
+  // How long each call took: its result's time minus its own; null while it runs or when it never got a result
+  assert.deepStrictEqual(steps.filter((x) => x.block).map((x) => [x.durMs, x.endMs]), [[1e3, NOW - 6e3], [1e3, NOW - 6e3], [null, null], [1e3, NOW - 3e3]]);
+  assert.ok(steps.every((x) => !('startMs' in x)), 'the call time stays inside the view model builder');
   // The oldest entries drop off the front: the remaining steps keep their keys
   const later = build(s, { detail: { key: s.key, agents: { main: { timeline: tl.slice(2), result: null, files: [], errors: [] } } }, expanded: ['main'] }).detail.main.steps;
   assert.deepStrictEqual(later.map((x) => x.key), steps.slice(2).map((x) => x.key));
@@ -722,6 +725,28 @@ test('provider: step reads the call log only for a call listed in the details, o
   assert.strictEqual(steps().length, 1, 'a call not in the details and another session are ignored');
   const m = steps()[0];
   assert.deepStrictEqual([m.sessionKey, m.rowId, m.ref, m.input, m.output, m.isError], [s.key, 'main', 'toolu_s1', 'echo hi', 'hi', false]);
+});
+
+test('serveStep (shared with the side bar): a call listed in that agent\'s details of this same session, from its own transcript only; stepsVm and STEP_TOOL are exported unchanged', async () => {
+  const { serveStep, stepsVm, STEP_TOOL } = AV._internal;
+  assert.strictEqual(typeof stepsVm, 'function');
+  assert.ok(Array.isArray(STEP_TOOL) && STEP_TOOL.some(([re, k]) => k === 'plan' && re.test('TodoWrite') && re.test('update_plan')));
+  const transcript = path.join(TMP, 'serve-step.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_v1', name: 'Bash', input: { command: 'echo hi' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_v1', content: 'hi' }] } },
+  ].map((x) => JSON.stringify(x)).join('\n') + '\n');
+  const s = session({ main: agent({ file: transcript }) });
+  const detail = { key: s.key, agents: { main: { timeline: [{ ms: NOW, kind: 'tool', tool: 'Bash', detail: 'echo hi', ref: 'toolu_v1' }], result: null, files: [], errors: [] } } };
+  const got = await serveStep(s, detail, 'main', 'toolu_v1');
+  assert.deepStrictEqual([got.input, got.output, got.isError], ['echo hi', 'hi', false]);
+  assert.strictEqual(serveStep(s, detail, 'main', 'toolu_other'), null, 'a call not in the details');
+  assert.strictEqual(serveStep(s, { ...detail, key: 'claude:other' }, 'main', 'toolu_v1'), null, 'details of another session');
+  assert.strictEqual(serveStep(s, detail, 'a/nope', 'toolu_v1'), null, 'an unknown row');
+  assert.strictEqual(serveStep(s, detail, 'main', 42), null);
+  assert.strictEqual(serveStep(s, null, 'main', 'toolu_v1'), null);
+  const relative = session({ main: agent({ file: 'rel/t.jsonl' }) });
+  assert.strictEqual(serveStep(relative, { ...detail, key: relative.key }, 'main', 'toolu_v1'), null, 'not an absolute transcript path');
 });
 
 test('row id → agent: main, subagent, workflow agent; workflow group rows and unknown ids give null', () => {

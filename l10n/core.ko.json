@@ -176,6 +176,9 @@
   "workflow.stale": "활동 없음",
   "workflow.progress": "{done}/{total} 완료",
   "workflow.phase": "단계 {phase}",
+  "workflow.phaseOf": "단계 {index}/{count}: {title}",
+  "workflow.started": "{total}개 시작, {done}개 완료",
+  "plan.progress": "{done}/{total} 완료",
 
   "entry.vscode": "VS Code",
   "entry.cli": "터미널",

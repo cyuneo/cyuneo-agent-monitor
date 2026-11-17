@@ -815,6 +815,19 @@ function renderAll(i18n, now, snap) {
     add(`ctx.compactShort ${s.key}`, src.compactShort, true);
     add(`session.cost ${s.key}`, fmt.formatSessionCost(s, i18n).text, true);
     for (const w of s.workflows) for (const [k, v] of Object.entries(fmt.formatWorkflow(w, i18n))) add(`wf.${k}`, v, k === 'phaseText');
+    for (const w of s.workflows) {
+      const withPhases = { ...w, phaseList: ['Plan', 'Build'], phaseStates: [{ title: 'Plan', state: 'done', done: 1, started: 1 }, { title: 'Build', state: 'current', done: 0, started: 1 }] };
+      for (const x of [w, withPhases]) {
+        const f = fmt.formatPhase(x, i18n);
+        add(`wf.phaseOf ${w.id}`, f.phaseText, x === w);
+        add(`wf.started ${w.id}`, f.agentsText);
+      }
+    }
+    for (const todo of [{ done: 1, total: 3, active: 'Fixing it' }, null]) {
+      const f = fmt.formatPlan(todo, i18n);
+      add('plan.progress', f.progressText, !todo);
+      add('plan.active', f.activeText, true);
+    }
     add(`cache ${s.key}`, fmt.formatCacheLeft(s.cacheExpiresMs, i18n, now), s.provider !== 'claude');
     add(`cost.note ${s.key}`, fmt.formatCostNote(i18n, s.provider));
     add(`provider.note ${s.key}`, fmt.formatProviderNote(s.provider, i18n), s.provider !== 'copilot');
@@ -899,6 +912,25 @@ function formatTests() {
       assert.deepStrictEqual(missing, [], `${locale} missing entries`);
       assert.strictEqual(base.locale, locale);
     }
+  });
+
+  test('plan and workflow phase lines: "3/7 done" with what runs now; "Phase 2/3: Build" from the declared phases and "5 started, 3 done" from the agents; nothing to say without them', () => {
+    const en = i18nLib.createI18n('en', { timeZone: 'UTC' });
+    assert.deepStrictEqual(fmt.formatPlan({ done: 3, total: 7, active: 'Editing a.js' }, en), { progressText: '3/7 done', activeText: 'Editing a.js', ratio: 3 / 7 });
+    assert.deepStrictEqual(fmt.formatPlan({ done: 0, total: 0, active: null }, en), { progressText: '', activeText: '', ratio: null });
+    assert.deepStrictEqual(fmt.formatPlan(null, en).progressText, '');
+    const states = (...xs) => xs.map(([title, state]) => ({ title, state, done: 0, started: 0 }));
+    const w = { state: 'running', done: 3, total: 5, phaseList: ['Plan', 'Build', 'Ship'], phaseStates: states(['Plan', 'done'], ['Build', 'current'], ['Ship', 'pending']) };
+    assert.deepStrictEqual(fmt.formatPhase(w, en), { phaseText: 'Phase 2/3: Build', agentsText: '5 started, 3 done', index: 2, count: 3, title: 'Build', ratio: 1 / 3 });
+    // Between phases (nothing running): the first phase not done yet
+    assert.strictEqual(fmt.formatPhase({ ...w, phaseStates: states(['Plan', 'done'], ['Build', 'pending'], ['Ship', 'pending']) }, en).phaseText, 'Phase 2/3: Build');
+    assert.strictEqual(fmt.formatPhase({ ...w, state: 'completed', phaseStates: states(['Plan', 'done'], ['Build', 'done'], ['Ship', 'done']) }, en).phaseText, 'Phase 3/3: Ship');
+    // No declared phases: only the agent count (the total is a lower bound, so the wording says "started")
+    assert.deepStrictEqual(fmt.formatPhase({ state: 'running', done: 1, total: 4, phaseList: [], phaseStates: [] }, en),
+      { phaseText: '', agentsText: '4 started, 1 done', index: 0, count: 0, title: '', ratio: 0.25 });
+    assert.strictEqual(fmt.formatPhase({ state: 'running', done: 0, total: 0, phases: [] }, en).ratio, null, 'older data without the new fields');
+    const zh = i18nLib.createI18n('zh-cn', { timeZone: 'UTC' });
+    assert.strictEqual(fmt.formatPhase(w, zh).phaseText, '阶段 2/3：Build');
   });
 
   test('English text for definite vs. guessed "waiting for your approval"; the stable left-side version has no duration', () => {

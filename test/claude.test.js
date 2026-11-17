@@ -286,7 +286,7 @@ test('session A details: timeline, results, changed files, errors; workflow agen
   assert.strictEqual(d.key, KEY.A);
   assert.deepStrictEqual(Object.keys(d.agents).sort(), ['main', 'sub1', 'w1', 'w2']);
   const m = d.agents.main;
-  assert.ok(m.timeline.length <= 30);
+  assert.ok(m.timeline.length <= 80);
   assert.deepStrictEqual(m.timeline.slice(-3).map((e) => e.kind), ['toolError', 'text', 'done']);
   assert.strictEqual(m.timeline.find((e) => e.kind === 'toolError').tool, 'Bash');
   assert.deepStrictEqual(m.result, { text: 'All done. Synthetic summary line.', truncated: false, ms: T(2, 30), source: 'lastText' });
@@ -637,6 +637,178 @@ test('legacy isSidechain rows in the session directory do not affect the main ag
   assert.strictEqual(s.lastRole, 'user');
 });
 
+// ---------- Plans, turns, phases (0.12.0) ----------
+
+const LIM = { timeline: 30, timelineSent: 30, timelineMain: 80, timelineMainSent: 80, resultChars: 100, filesPerAgent: 10, errorsPerAgent: 5 };
+const at = (ms) => new Date(ms).toISOString();
+const askLine = (ms, id, content, stop = 'tool_use', extra = {}) => ({ type: 'assistant', timestamp: at(ms), ...extra,
+  message: { id, model: 'claude-opus-5', content, stop_reason: stop, usage: { input_tokens: 1 } } });
+const userLine = (ms, content, extra = {}) => ({ type: 'user', timestamp: at(ms), ...extra, message: { role: 'user', content } });
+const resultLine = (ms, toolId, text = 'ok', isError = false, extra = {}) => userLine(ms, [{ type: 'tool_result', tool_use_id: toolId, content: text, is_error: isError }], extra);
+const todos = (...xs) => xs.map(([content, status, activeForm]) => ({ content, status, activeForm }));
+
+test('TodoWrite: the list becomes the plan (Agent.todo counts it); the next write replaces it; the result\'s newTodos win; a list in another shape keeps the plan; sidechain lines do not touch it', () => {
+  const s = _internal.newState(LIM, true);
+  _internal.ingest(s, userLine(T(0), 'go'));
+  assert.strictEqual(s.plan, null);
+  _internal.ingest(s, askLine(T(0, 1), 'm1', [{ type: 'tool_use', id: 'td1', name: 'TodoWrite', input: { todos: todos(
+    ['Read the code', 'completed', 'Reading the code'], ['Fix the  bug', 'in_progress', 'Fixing the bug'], ['Run tests', 'pending', 'Running tests'],
+    ['Odd one', 'blocked', 'x'], ['', 'pending', 'empty']) } }]));
+  assert.deepStrictEqual(s.plan, { ms: T(0, 1), source: 'todo', items: [
+    { text: 'Read the code', active: 'Reading the code', status: 'completed' },
+    { text: 'Fix the bug', active: 'Fixing the bug', status: 'in_progress' },
+    { text: 'Run tests', active: 'Running tests', status: 'pending' }] });
+  assert.deepStrictEqual(S.todoOf(s.plan), { done: 1, total: 3, active: 'Fixing the bug' });
+  // The tool result carries the list Claude Code stored: it wins over the input
+  _internal.ingest(s, resultLine(T(0, 2), 'td1', 'Todos have been modified', false, { toolUseResult: { oldTodos: [], newTodos: todos(['Stored', 'in_progress', null]) } }));
+  assert.deepStrictEqual(s.plan.items, [{ text: 'Stored', active: null, status: 'in_progress' }]);
+  assert.deepStrictEqual(S.todoOf(s.plan), { done: 0, total: 1, active: 'Stored' }, 'no activeForm: the text');
+  // A later write replaces the whole list
+  _internal.ingest(s, askLine(T(0, 3), 'm2', [{ type: 'tool_use', id: 'td2', name: 'TodoWrite', input: { todos: todos(['A', 'completed', 'a'], ['B', 'completed', 'b']) } }]));
+  assert.deepStrictEqual([s.plan.ms, s.plan.items.map((x) => x.text), S.todoOf(s.plan)], [T(0, 3), ['A', 'B'], { done: 2, total: 2, active: null }]);
+  // Another shape: not an array, or no usable item → unchanged
+  _internal.ingest(s, askLine(T(0, 4), 'm3', [{ type: 'tool_use', id: 'td3', name: 'TodoWrite', input: { todos: 'nope' } }]));
+  _internal.ingest(s, askLine(T(0, 5), 'm4', [{ type: 'tool_use', id: 'td4', name: 'TodoWrite', input: { todos: [{ content: 'x', status: 'later' }] } }]));
+  _internal.ingest(s, resultLine(T(0, 6), 'td4', 'ok', false, { toolUseResult: { newTodos: { not: 'a list' } } }));
+  // An older version's sidechain line in the main transcript is skipped
+  _internal.ingest(s, askLine(T(0, 7), 'm5', [{ type: 'tool_use', id: 'td5', name: 'TodoWrite', input: { todos: todos(['Side', 'pending', 's']) } }], 'tool_use', { isSidechain: true }));
+  assert.deepStrictEqual(s.plan.items.map((x) => x.text), ['A', 'B']);
+  // The step summary stays empty for TodoWrite
+  assert.strictEqual(s.timeline.filter((e) => e.tool === 'TodoWrite').every((e) => e.detail === null), true);
+  // 50 items at most, each text at most 120 characters
+  _internal.ingest(s, askLine(T(0, 8), 'm6', [{ type: 'tool_use', id: 'td6', name: 'TodoWrite', input: { todos: Array.from({ length: 60 }, (_, i) => ({ content: 'x'.repeat(200) + i, status: 'pending' })) } }]));
+  assert.deepStrictEqual([s.plan.items.length, s.plan.items[0].text.length], [50, 120]);
+});
+
+test('turns: a real prompt starts one, a tool result does not; calls and failures counted; the main transcript keeps 80 steps and a subagent 30; this turn\'s calls that fell off are counted', () => {
+  const run = (isMain) => {
+    const s = _internal.newState(LIM, isMain);
+    _internal.ingest(s, userLine(T(0), 'first'));
+    for (let i = 0; i < 3; i++) {
+      _internal.ingest(s, askLine(T(0, 1 + i), 'a' + i, [{ type: 'tool_use', id: 'a' + i, name: 'Bash', input: { command: 'ls' } }]));
+      _internal.ingest(s, resultLine(T(0, 1 + i), 'a' + i));
+    }
+    assert.deepStrictEqual([s.turn.sinceMs, s.turn.tools, s.turn.errors], [T(0), 3, 0], 'tool results do not start a turn');
+    _internal.ingest(s, askLine(T(0, 10), 'end1', [{ type: 'text', text: 'done' }], 'end_turn'));
+    _internal.ingest(s, userLine(T(1), 'second'));
+    for (let i = 0; i < 50; i++) {
+      _internal.ingest(s, askLine(T(1, 1 + i), 'b' + i, [{ type: 'tool_use', id: 'b' + i, name: 'Read', input: { file_path: '/w/a.js' } }]));
+      _internal.ingest(s, resultLine(T(1, 1 + i), 'b' + i, i === 49 ? 'boom' : 'ok', i === 49));
+    }
+    return s;
+  };
+  const m = run(true);
+  assert.strictEqual(m.timeline.length, 80);
+  assert.deepStrictEqual([m.turn.sinceMs, m.turn.tools, m.turn.errors], [T(1), 50, 1]);
+  // turn 2 = prompt + 100 events; 80 kept → the prompt and 10 of its calls fell off (turn 1's calls do not count)
+  assert.strictEqual(m.turn.dropped.tools, 10);
+  assert.deepStrictEqual(S.turnOf(m.turn, false), { sinceMs: T(1), tools: 50, errors: 1 });
+  assert.deepStrictEqual(S.turnOf(m.turn, true), { sinceMs: T(1), tools: 50, errors: 1, dropped: { tools: 10 } });
+  const sub = run(false);
+  assert.strictEqual(sub.timeline.length, 30);
+  assert.strictEqual(sub.turn.dropped.tools, 35);
+});
+
+test('declared workflow phases: literal titles only (quotes, quoted keys, brackets inside strings); a computed title or none gives []; 12 titles of 40 characters at most', () => {
+  const { declaredPhasesOf } = require('../lib/providers/claude');
+  const script = `export const meta = {
+    name: 'synth-flow',
+    description: "Has [brackets] and title: 'nothing' inside a string",
+    phases: [
+      { title: 'Implement', detail: 'build it [carefully]' },
+      { "title": "Review", detail: \`look at it\` },
+      { title: \`Ship\` },
+    ],
+  };
+  const later = { title: 'Not a phase' };`;
+  assert.deepStrictEqual(declaredPhasesOf(script), ['Implement', 'Review', 'Ship']);
+  assert.deepStrictEqual(declaredPhasesOf("meta = { phases: [{ title: 'It\\'s done' }] }"), ["It's done"]);
+  assert.deepStrictEqual(declaredPhasesOf("meta = { phases: [{ title: 'A' }, { title: name }] }"), [], 'a computed title: no list at all');
+  assert.deepStrictEqual(declaredPhasesOf('meta = { phases: [{ title: `Step ${n}` }] }'), []);
+  assert.deepStrictEqual(declaredPhasesOf('meta = { phases: PHASES.map((t) => ({ title: t })) }'), []);
+  assert.deepStrictEqual(declaredPhasesOf("meta = { name: 'x' }"), []);
+  assert.deepStrictEqual(declaredPhasesOf(null), []);
+  const many = 'meta = { phases: [' + Array.from({ length: 15 }, (_, i) => `{ title: '${'P'.repeat(50)}${i}' }`).join(', ') + '] }';
+  const got = declaredPhasesOf(many);
+  assert.deepStrictEqual([got.length, got[0].length], [12, 40]);
+});
+
+test('workflow phase states: current while one of its agents runs; done when its agents are all done and a later phase started (or the run completed); pending otherwise', () => {
+  const a = (phase, code) => ({ phase, status: { code } });
+  const st = (list, agents, wf = 'running') => _internal.phaseStatesOf(list, agents, wf).map((p) => `${p.title}:${p.state}:${p.done}/${p.started}`);
+  const list = ['Plan', 'Build', 'Check'];
+  assert.deepStrictEqual(st(list, [a('Plan', 'done'), a('Build', 'tool'), a('Build', 'done')]), ['Plan:done:1/1', 'Build:current:1/2', 'Check:pending:0/0']);
+  assert.deepStrictEqual(st(list, [a('Plan', 'done')]), ['Plan:pending:1/1', 'Build:pending:0/0', 'Check:pending:0/0'], 'no later phase yet: not done');
+  assert.deepStrictEqual(st(list, [a('Plan', 'done'), a('Build', 'done'), a('Check', 'done')], 'completed'), ['Plan:done:1/1', 'Build:done:1/1', 'Check:done:1/1']);
+  assert.deepStrictEqual(st(list, [a('Plan', 'apiError'), a('Build', 'thinking')]), ['Plan:pending:0/1', 'Build:current:0/1', 'Check:pending:0/0'], 'a failed agent keeps its phase from done');
+  assert.deepStrictEqual(st([], [a('Plan', 'tool')]), []);
+});
+
+test('provider: subagent parentRef is the parent\'s Agent call; the workflow carries its Workflow call (ref) and declared phases; Agent.todo / turn; detail plan / turn; main details keep timelineMainSent, others timelineSent', () => {
+  const h = makeHome();
+  const p = provider(h, { approvalGuess: 'off', limits: { timelineMainSent: 4, timelineSent: 2 } });
+  const a = byId(scanAll(p, T(5)), SID.A);
+  assert.strictEqual(a.agents[0].parentRef, 'toolu_agent1');
+  assert.strictEqual(a.main.parentRef, null);
+  assert.ok(a.workflows[0].agents.every((x) => x.parentRef === null));
+  const wf = a.workflows[0];
+  assert.deepStrictEqual([wf.ref, wf.phaseList, wf.phaseStates], ['toolu_wf1', [], []], 'launched by scriptPath only: no titles to read');
+  assert.strictEqual(a.main.todo, null);
+  assert.deepStrictEqual(a.main.turn, { sinceMs: T(0), tools: 5, errors: 1 });
+  const d = p.detail(KEY.A);
+  assert.deepStrictEqual([d.agents.main.timeline.length, d.agents.sub1.timeline.length, d.agents.w1.timeline.length], [4, 2, 2]);
+  assert.deepStrictEqual([d.agents.main.plan, d.agents.main.turn], [null, { sinceMs: T(0), tools: 5, errors: 1, dropped: { tools: 0 } }]);
+
+  // A session that launches a workflow from a script with declared phases, and keeps a todo list
+  const sid = 'abababab-0000-4000-8000-0000000000c1';
+  const run = 'wf_0123abcd-0001';
+  const main = path.join(h.dir, sid + '.jsonl');
+  const script = "export const meta = { name: 'phased', phases: [{ title: 'Implement' }, { title: 'Review' }, { title: 'Ship' }] };";
+  const base = { sessionId: sid, cwd: '/tmp/am-fixture', version: '2.1.280' };
+  fs.writeFileSync(main, [
+    userLine(T(20), 'start', base),
+    askLine(T(20, 1), 'n1', [{ type: 'tool_use', id: 'toolu_td', name: 'TodoWrite', input: { todos: todos(['Launch', 'in_progress', 'Launching'], ['Report', 'pending', 'Reporting']) } }], 'tool_use', base),
+    resultLine(T(20, 2), 'toolu_td', 'ok', false, base),
+    askLine(T(20, 3), 'n2', [{ type: 'tool_use', id: 'toolu_wfp', name: 'Workflow', input: { script } }], 'tool_use', base),
+    resultLine(T(20, 4), 'toolu_wfp', 'Workflow launched in background: ' + run, false, base),
+  ].map((x) => JSON.stringify(x) + '\n').join(''));
+  setMtime(main, T(20, 4));
+  const wfDir = path.join(h.dir, sid, 'subagents', 'workflows', run);
+  fs.mkdirSync(wfDir, { recursive: true });
+  fs.writeFileSync(path.join(wfDir, 'journal.jsonl'), [
+    { type: 'started', key: 'k1', agentId: 'p1', label: 'Build it', phase: 'Implement' },
+    { type: 'started', key: 'k2', agentId: 'p2', label: 'Look at it', phase: 'Review' },
+    { type: 'result', key: 'k1', agentId: 'p1', result: { ok: true } },
+  ].map((x) => JSON.stringify(x) + '\n').join(''));
+  setMtime(path.join(wfDir, 'journal.jsonl'), T(20, 30));
+  const side = { ...base, isSidechain: true };
+  fs.writeFileSync(path.join(wfDir, 'agent-p1.jsonl'), JSON.stringify(userLine(T(20, 5), 'build', { ...side, agentId: 'p1' })) + '\n');
+  fs.writeFileSync(path.join(wfDir, 'agent-p2.jsonl'), [userLine(T(20, 6), 'review', { ...side, agentId: 'p2' }),
+    askLine(T(20, 30), 'r1', [{ type: 'tool_use', id: 'toolu_r', name: 'Bash', input: { command: 'sleep 100' } }], 'tool_use', { ...side, agentId: 'p2' })]
+    .map((x) => JSON.stringify(x) + '\n').join(''));
+  setMtime(path.join(wfDir, 'agent-p1.jsonl'), T(20, 5));
+  setMtime(path.join(wfDir, 'agent-p2.jsonl'), T(20, 30));
+  for (const [id, phase] of [['p1', 'Implement'], ['p2', 'Review']]) {
+    fs.writeFileSync(path.join(wfDir, `agent-${id}.meta.json`), JSON.stringify({ agentType: 'workflow-agent', description: id, workflowPhase: phase }));
+  }
+  const s = byId(scanAll(p, T(20, 40)), sid);
+  const w = s.workflows[0];
+  assert.deepStrictEqual([w.ref, w.phaseList], ['toolu_wfp', ['Implement', 'Review', 'Ship']]);
+  assert.deepStrictEqual(w.phaseStates, [
+    { title: 'Implement', state: 'done', done: 1, started: 1 },
+    { title: 'Review', state: 'current', done: 0, started: 1 },
+    { title: 'Ship', state: 'pending', done: 0, started: 0 }]);
+  assert.deepStrictEqual(s.main.todo, { done: 0, total: 2, active: 'Launching' });
+  const dd = p.detail('claude:' + sid);
+  assert.deepStrictEqual(dd.agents.main.plan.items.map((x) => x.text), ['Launch', 'Report']);
+  // The run's state file, once written, gives the phases
+  const stateFile = path.join(h.dir, sid, 'workflows', run + '.json');
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({ status: 'completed', workflowName: 'phased', phases: [{ title: 'Plan' }, { title: 'Build', detail: 'x' }, { nope: 1 }] }));
+  setMtime(stateFile, T(20, 50));
+  assert.deepStrictEqual(byId(scanAll(p, T(21)), sid).workflows[0].phaseList, ['Plan', 'Build']);
+});
+
 // ---------- Today's totals ----------
 
 const DAY0 = Date.parse('2026-09-20T00:00:00Z');
@@ -942,7 +1114,7 @@ test('normalizeConfig: fills in defaults; also accepts the legacy { root } form'
   assert.strictEqual(c.intervalMs, 2000);
   assert.strictEqual(c.approvalGuess, 'fastTools');
   assert.strictEqual(c.approvalGuessSeconds, 60);
-  assert.deepStrictEqual(c.limits, { timeline: 30, timelineSent: 30, resultChars: 4000, filesPerAgent: 200, errorsPerAgent: 10 });
+  assert.deepStrictEqual(c.limits, { timeline: 30, timelineSent: 30, timelineMain: 80, timelineMainSent: 80, resultChars: 4000, filesPerAgent: 200, errorsPerAgent: 10 });
   assert.strictEqual(c.dailyBudgetBytesPerTick, 8 * 1024 * 1024);
   const e = normalizeConfig({}, { CLAUDE_CONFIG_DIR: '/cfg', CODEX_HOME: '/cx' });
   assert.strictEqual(e.claude.projectsDir, path.join('/cfg', 'projects'));

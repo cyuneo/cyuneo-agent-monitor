@@ -176,6 +176,9 @@
   "workflow.stale": "活動なし",
   "workflow.progress": "{done}/{total} 完了",
   "workflow.phase": "フェーズ{phase}",
+  "workflow.phaseOf": "フェーズ{index}/{count}：{title}",
+  "workflow.started": "{total} 件開始、{done} 件完了",
+  "plan.progress": "{done}/{total} 完了",
 
   "entry.vscode": "VS Code",
   "entry.cli": "ターミナル",
