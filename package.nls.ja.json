@@ -6,6 +6,7 @@
   "container.title": "エージェントモニター",
   "view.overview": "概要",
   "view.agents": "エージェント",
+  "view.progress": "進捗",
   "category": "エージェントモニター",
 
   "welcome.loading": "ローカルのエージェントのセッション記録を読み込み中…",

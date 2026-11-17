@@ -127,6 +127,7 @@
   "ext.log.learnedCompact": "已实测 {model}（{window} 窗口）的自动压缩点：{tokens}",
   "ext.compactUnavailable": "目前无法压缩，详情见“智能体监视器”输出面板。",
   "ext.agentsUnavailable": "智能体视图加载失败，详情见“智能体监视器”输出面板。",
+  "ext.progressUnavailable": "进度视图加载失败，详情见“智能体监视器”输出面板。",
   "ext.log.failed": "{what} 失败：{error}",
   "ext.log.moduleFailed": "无法加载 {module}：{error}",
   "ext.log.source": "{source}：{message}",

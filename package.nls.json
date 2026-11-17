@@ -6,6 +6,7 @@
   "container.title": "Agent Monitor",
   "view.overview": "Overview",
   "view.agents": "Agents",
+  "view.progress": "Progress",
   "category": "Agent Monitor",
 
   "welcome.loading": "Reading local agent session logs…",

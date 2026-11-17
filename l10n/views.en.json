@@ -127,6 +127,7 @@
   "ext.log.learnedCompact": "Measured auto-compact point for {model} ({window} window): {tokens}",
   "ext.compactUnavailable": "Compacting isn't available right now. See the Agent Monitor output for details.",
   "ext.agentsUnavailable": "The Agents view couldn't be loaded. See the Agent Monitor output for details.",
+  "ext.progressUnavailable": "The Progress view couldn't be loaded. See the Agent Monitor output for details.",
   "ext.log.failed": "{what} failed: {error}",
   "ext.log.moduleFailed": "Couldn't load {module}: {error}",
   "ext.log.source": "{source}: {message}",

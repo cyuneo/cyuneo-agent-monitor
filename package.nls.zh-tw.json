@@ -6,6 +6,7 @@
   "container.title": "智慧體監視器",
   "view.overview": "總覽",
   "view.agents": "智慧體",
+  "view.progress": "進度",
   "category": "智慧體監視器",
 
   "welcome.loading": "正在讀取本機的智慧體工作階段記錄…",

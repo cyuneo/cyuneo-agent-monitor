@@ -6,6 +6,7 @@
   "container.title": "智能体监视器",
   "view.overview": "总览",
   "view.agents": "智能体",
+  "view.progress": "进度",
   "category": "智能体监视器",
 
   "welcome.loading": "正在读取本机的智能体会话记录…",

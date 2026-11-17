@@ -6,6 +6,7 @@
   "container.title": "에이전트 모니터",
   "view.overview": "개요",
   "view.agents": "에이전트",
+  "view.progress": "진행 상황",
   "category": "에이전트 모니터",
 
   "welcome.loading": "로컬 에이전트 세션 기록을 읽는 중…",

@@ -1117,10 +1117,14 @@ test('position: sessionListPosition = left / right is used as is; auto follows t
   assert.strictEqual(r('bogus', 'bogus'), 'right');
 });
 
-test('session menu: SESSION_MENU matches webview/context in package.json one to one (command, order, group, when); filtered by flags', () => {
+test('session menu: SESSION_MENU matches webview/context in package.json one to one (command, order, group, when); filtered by flags; the side-bar Progress view has the same menu', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  const menu = pkg.contributes.menus['webview/context'];
+  const all = pkg.contributes.menus['webview/context'];
   const base = "webviewId == 'agentMonitor.agents' && webviewSection == 'session'";
+  const menu = all.filter((m) => m.when.startsWith("webviewId == 'agentMonitor.agents' "));
+  const side = all.filter((m) => m.when.startsWith("webviewId == 'agentMonitor.progress' "));
+  assert.strictEqual(menu.length + side.length, all.length);
+  assert.deepStrictEqual(side, menu.map((m) => ({ ...m, when: m.when.replace("'agentMonitor.agents'", "'agentMonitor.progress'") })), 'the cards carry the same session menu');
   assert.deepStrictEqual(menu.map((m) => m.command), AV.SESSION_MENU.map((m) => m.command));
   menu.forEach((m, i) => {
     const d = AV.SESSION_MENU[i];

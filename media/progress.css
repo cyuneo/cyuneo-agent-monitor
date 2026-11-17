@@ -1,0 +1,228 @@
+/* Side-bar Progress view: one card per session, the selected one open in place (workflow phases, plan, step stream).
+   Legibility rules as in agents.css: font size follows the UI, no opacity for dimming text, codicon icons, colors only from
+   --vscode-* variables, outlines in high-contrast themes. Narrow side bars hide extras through a container query on the body
+   (no viewport-width media rules). Step blocks come from steps.css, which loads first. */
+
+:root {
+  --row-h: 22px;
+  --bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --line: var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border, rgba(128, 128, 128, .35)));
+  --c-icon: var(--vscode-icon-foreground, var(--vscode-foreground));
+  --c-err-text: var(--vscode-list-errorForeground, var(--vscode-errorForeground));
+  --hc-border: var(--vscode-contrastBorder, transparent);
+  --lamp-working: var(--vscode-agentMonitor-lampWorking, #00AFFF);
+  --lamp-needsYou: var(--vscode-agentMonitor-lampNeedsYou, #EE2B7B);
+  --lamp-doneUnseen: var(--vscode-agentMonitor-lampDoneUnseen, #5FFF00);
+  --lamp-doneSeen: var(--vscode-agentMonitor-lampDoneSeen, #008700);
+  --lamp-error: var(--vscode-agentMonitor-lampError, #FF0000);
+  --lamp-idle: var(--vscode-agentMonitor-lampIdle, #808080);
+}
+
+body {
+  margin: 0;
+  padding: 0 0 8px;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  font-weight: var(--vscode-font-weight, normal);
+  line-height: var(--row-h);
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  overflow-x: hidden;
+  container-type: inline-size;
+  container-name: progress;
+}
+
+.muted { color: var(--vscode-descriptionForeground); }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+[hidden] { display: none !important; }
+
+.lamp-working { --lamp: var(--lamp-working); }
+.lamp-needsYou { --lamp: var(--lamp-needsYou); }
+.lamp-doneUnseen { --lamp: var(--lamp-doneUnseen); }
+.lamp-doneSeen { --lamp: var(--lamp-doneSeen); }
+.lamp-error { --lamp: var(--lamp-error); }
+.lamp-idle { --lamp: var(--lamp-idle); }
+i.lamp { color: var(--lamp, var(--c-icon)); flex: none; }
+.codicon { color: var(--c-icon); }
+
+.empty { margin: 0; padding: 4px 20px; }
+
+/* ---------- Cards ---------- */
+
+.cards { display: flex; flex-direction: column; }
+.card { border-bottom: 1px solid var(--vscode-tree-indentGuidesStroke, var(--line)); min-width: 0; }
+.card:last-child { border-bottom: 0; }
+.c-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: var(--row-h);
+  margin: 0;
+  padding: 0 8px 0 12px;
+  border: 0;
+  outline-offset: -1px;
+  background: none;
+  color: var(--vscode-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.c-head:hover { background: var(--vscode-list-hoverBackground); }
+.c-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.card.selected > .c-head {
+  background: var(--vscode-list-inactiveSelectionBackground);
+  color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground));
+  outline: 1px dotted var(--vscode-contrastActiveBorder, transparent);
+}
+.c-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.card.compact .c-title { font-weight: normal; }
+.c-cost, .c-ago { flex: none; white-space: nowrap; }
+.c-cost { margin-left: auto; }
+.c-ago { margin-left: auto; }
+.c-cost:not([hidden]) + .c-ago { margin-left: 8px; }
+.c-line { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px 0 34px; }
+.c-line > .codicon { flex: none; margin-left: -22px; width: 16px; }
+.c-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-prog .c-text { color: var(--vscode-descriptionForeground); }
+.c-prog .bar { flex: 1 0 40px; max-width: 120px; margin-left: auto; }
+
+/* Native <progress>, colored like VS Code's progress bar */
+progress.bar {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, .2));
+  outline: 1px solid var(--hc-border);
+  overflow: hidden;
+}
+progress.bar::-webkit-progress-bar { background: var(--vscode-input-background, rgba(128, 128, 128, .2)); border-radius: 2px; }
+progress.bar::-webkit-progress-value { background: var(--vscode-progressBar-background); border-radius: 2px; }
+
+/* ---------- The open card ---------- */
+
+.c-body { padding: 2px 8px 6px 12px; min-width: 0; }
+.c-loading { margin: 0; padding: 0 8px; }
+.c-wfs, .plan { margin: 2px 0 4px; padding: 2px 8px; border-left: 2px solid var(--vscode-tree-indentGuidesStroke, var(--line)); }
+.wf + .wf { margin-top: 4px; }
+.wf-head, .plan-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wf-name, .plan-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.wf-state, .plan-prog { flex: none; }
+.plan-head .bar { flex: 1 0 40px; max-width: 120px; margin-left: auto; }
+/* Phase bar: one segment per declared phase; the one-line text replaces it in a narrow side bar */
+.phases { display: flex; flex-wrap: wrap; gap: 2px 4px; margin: 0; padding: 0; list-style: none; }
+.ph { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 0 6px; border-radius: 4px; border: 1px solid var(--vscode-widget-border, var(--line)); }
+.ph-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-done > .codicon { color: var(--vscode-testing-iconPassed, var(--lamp-doneSeen)); }
+.ph-current { border-color: var(--vscode-focusBorder); }
+.ph-current > .codicon { color: var(--lamp-working); }
+.ph-current .ph-title { font-weight: 600; }
+.ph-pending .ph-title { color: var(--vscode-descriptionForeground); }
+.wf.has-phases > .wf-line { display: none; }
+.wf-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-items { margin: 0; padding: 0; list-style: none; }
+.pi { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 2px; }
+.pi > .codicon { flex: none; }
+.pi-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-completed > .codicon { color: var(--vscode-testing-iconPassed, var(--lamp-doneSeen)); }
+.pi-completed .pi-text { color: var(--vscode-descriptionForeground); }
+.pi-in_progress > .codicon { color: var(--lamp-working); }
+.pi-in_progress .pi-text { font-weight: 600; }
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+.link .codicon { color: inherit; }
+.link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); text-decoration: underline; }
+.link:focus-visible, .f-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.c-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 8px; padding-top: 2px; }
+
+/* ---------- Step stream: groups of calls, earlier turns, the quoted prompt ---------- */
+
+.c-stream { padding-top: 4px; }
+.step.quote .st-text { font-style: italic; }
+.step.note { color: var(--vscode-descriptionForeground); }
+.step.group {
+  border: 1px solid var(--vscode-widget-border, var(--line));
+  border-radius: 6px;
+  overflow: hidden;
+}
+.step.group.s-error { border-color: var(--vscode-inputValidation-errorBorder, var(--c-err-text)); }
+.f-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: calc(var(--row-h) + 4px);
+  padding: 0 8px 0 4px;
+  border: 0;
+  background: none;
+  color: var(--vscode-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.f-head:hover { background: var(--vscode-list-hoverBackground); }
+.f-head > .codicon { flex: none; color: var(--c-icon); }
+.f-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.f-title, .f-cats { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f-cats { line-height: 1.3; padding-bottom: 3px; }
+.step.turn .f-title { color: var(--vscode-descriptionForeground); }
+.f-items { padding: 2px 4px 4px 8px; }
+/* Blocks in a side bar: the raw tool name is in the tooltip, and the title gives way before the state icon does */
+.c-stream .st-tool { display: none; }
+.c-stream .st-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step.group > .f-items { border-top: 1px solid var(--vscode-widget-border, var(--line)); }
+/* What runs now: a 2px bar on the left */
+.step.group.current, .step.block.current { box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
+/* The subagent or workflow run an Agent / Workflow block started */
+.st-nest { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px 2px 26px; }
+.st-nest::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: -8px;
+  border-left: 1px solid var(--vscode-tree-indentGuidesStroke, var(--line));
+  border-bottom: 1px solid var(--vscode-tree-indentGuidesStroke, var(--line));
+}
+
+/* ---------- Narrow side bar ---------- */
+
+@container progress (max-width: 280px) {
+  .c-cost, .f-cats, .c-stream .step .ago { display: none; }
+  .wf.has-phases > .phases { display: none !important; }
+  .wf.has-phases > .wf-line { display: block; }
+  .c-line { padding-left: 28px; }
+  .c-prog .bar { max-width: 60px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

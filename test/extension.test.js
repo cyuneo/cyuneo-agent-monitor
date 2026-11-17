@@ -277,7 +277,7 @@ const autoWrap = realAuto && {
   },
 };
 // simulate a missing module: when set to {}, the extension should register placeholder commands
-const modOverride = { autocompact: null, storage: null, history: null, autoresume: null };
+const modOverride = { autocompact: null, storage: null, history: null, autoresume: null, progress: null };
 // storage page: only records the deps passed when it opens (the page itself is covered by the storage tests)
 const storageWrap = {
   openStorageView(context, deps) { log.storageOpens.push(deps); return { reveal() {} }; },
@@ -498,6 +498,7 @@ Module._load = function (request, parent) {
   if (fromExt && request === './lib/autocompact' && autoWrap) return autoWrap;
   if (fromExt && request === './lib/storage-view') return modOverride.storage || storageWrap;
   if (fromExt && request === './lib/history-view') return modOverride.history || historyWrap;
+  if (fromExt && request === './lib/progress-view' && modOverride.progress) return modOverride.progress;
   if (fromExt && request === './lib/alerts') return alertsWrap;
   if (fromExt && request === './lib/notify') return notifyWrap;
   if (fromExt && request === './lib/shared-scan') return sharedWrap;
@@ -686,6 +687,7 @@ async function extensionTests() {
     assert.strictEqual(tv.opts.showCollapseAll, true);
     assert.ok(log.webviews['agentMonitor.agents'], 'webview not registered');
     assert.ok(log.webviews['agentMonitor.agents'].provider instanceof RecordingAgentsView);
+    assert.ok(log.webviews['agentMonitor.progress'], 'the side-bar Progress view is registered');
     assert.strictEqual(w0.file, path.join(ROOT, 'lib', 'worker.js'));
     const cfg = w0.opts.workerData;
     assert.deepStrictEqual(Object.keys(cfg).sort(), ['activeWindowMinutes', 'approvalGuess', 'approvalGuessSeconds', 'cfgGen', 'claude', 'codex', 'copilot', 'historyCacheFile', 'intervalMs', 'observedCompact', 'paused', 'staleMinutes']);
@@ -1525,6 +1527,137 @@ function waiting(s, sinceMs) {
 
 // A Claude Code chat editor tab with this title
 const chatTab = (label) => ({ label, input: new TabInputWebview('mainThreadWebview-claudeVSCodePanel') });
+
+// Resolves a webview view provider onto a fake view and records what it posts; msg() sends a message from the page
+function openWebview(provider) {
+  const posted = [];
+  let onMsg = null;
+  const vis = new EventEmitter();
+  const view = {
+    visible: true, badge: undefined, description: undefined,
+    webview: {
+      options: null, html: '', cspSource: 'vscode-resource:',
+      asWebviewUri: (u) => ({ toString: () => 'webview:' + u.fsPath }),
+      onDidReceiveMessage: (fn) => { onMsg = fn; return { dispose() {} }; },
+      postMessage: async (msg) => { posted.push(JSON.parse(JSON.stringify(msg))); return true; },
+    },
+    onDidChangeVisibility: vis.event,
+    onDidDispose: () => ({ dispose() {} }),
+  };
+  provider.resolveWebviewView(view);
+  return {
+    view, posted,
+    msg: (m) => onMsg && onMsg(m),
+    lastOf: (type) => last(posted.filter((m) => m.type === type)),
+    setVisible: (v) => { view.visible = v; vis.fire(); },
+  };
+}
+
+async function progressTests() {
+  const PV = require(path.join(ROOT, 'lib', 'progress-view'));
+  const win = activateWindow('win-progress');
+  const ctl = win.ctl;
+  try {
+    const reg = log.webviews['agentMonitor.progress'];
+    const panel = openWebview(log.webviews['agentMonitor.agents'].provider);
+    panel.msg({ type: 'ready', expanded: {} });
+    const pg = openWebview(reg.provider);
+
+    await test('the side-bar Progress view is registered with the real provider; before the first snapshot its cards say loading', () => {
+      assert.ok(reg.provider instanceof PV.ProgressViewProvider);
+      assert.strictEqual(ctl.progressView, reg.provider);
+      assert.ok(/Content-Security-Policy/.test(pg.view.webview.html) && /progress\.js/.test(pg.view.webview.html));
+      assert.deepStrictEqual(pg.posted, [], 'nothing before ready');
+      pg.msg({ type: 'ready', closed: [] });
+      const c = pg.lastOf('cards');
+      assert.deepStrictEqual([c.loaded, c.items.length, c.emptyText], [false, 0, i18n.t('session.loading')]);
+    });
+
+    await test('cards follow the panel list (same sessions, same order); the shown session opens in place', async () => {
+      win.send(fixtures(), { details: { [ALPHA]: { key: ALPHA, agents: { main: { timeline: [{ kind: 'prompt', ms: NOW - 1000, detail: 'Go' }], result: null, files: [], errors: [] } } } } });
+      await tick();
+      const c = pg.lastOf('cards');
+      assert.deepStrictEqual(c.items.map((x) => x.key), ctl.leftKeys);
+      assert.strictEqual(c.shownKey, ctl.shownKey);
+      assert.deepStrictEqual(c.items.filter((x) => x.expanded).map((x) => x.key), [ctl.shownKey]);
+      assert.strictEqual(pg.lastOf('expanded').key, ctl.shownKey);
+    });
+
+    await test('select from a card is the shared selection: the panel follows; unknown keys are ignored; toggle folds without changing it', async () => {
+      pg.msg({ type: 'select', sessionKey: ALPHA });
+      await tick();
+      assert.strictEqual(ctl.selectedKey, ALPHA);
+      assert.strictEqual(ctl.shownKey, ALPHA);
+      assert.strictEqual(pg.lastOf('cards').shownKey, ALPHA);
+      const ex = pg.lastOf('expanded');
+      assert.deepStrictEqual([ex.key, ex.loading, ex.stream.map((x) => x.type)], [ALPHA, false, ['quote']]);
+      assert.ok(log.agentInputs.length && last(log.agentInputs).session.key === ALPHA, 'the panel shows the same session');
+      pg.msg({ type: 'select', sessionKey: 'claude:nope' });
+      await tick();
+      assert.strictEqual(ctl.selectedKey, ALPHA);
+      // looking at it: visible with its card open (counts for the 1.5 s dwell and for notifications)
+      assert.strictEqual(ctl.progressLooking(ALPHA), true);
+      pg.msg({ type: 'toggle', sessionKey: ALPHA, open: false });
+      assert.strictEqual(ctl.progressLooking(ALPHA), false);
+      assert.strictEqual(ctl.selectedKey, ALPHA);
+      pg.msg({ type: 'toggle', sessionKey: ALPHA, open: true });
+      assert.strictEqual(ctl.progressLooking(ALPHA), true);
+      pg.setVisible(false);
+      assert.strictEqual(ctl.progressLooking(ALPHA), false);
+      pg.setVisible(true);
+      pg.msg({ type: 'ready', closed: [] });
+    });
+
+    await test('picking a session (or one of its agents) in the overview tree selects it in the Progress view and the panel', async () => {
+      const tv = log.treeViews['agentMonitor.tree'];
+      const roots = tv.opts.treeDataProvider.getChildren();
+      tv.userSelect(roots.find((n) => n.key === DELTA));
+      await tick();
+      assert.strictEqual(ctl.selectedKey, DELTA);
+      assert.strictEqual(pg.lastOf('cards').shownKey, DELTA);
+      const beta = roots.find((n) => n.key === BETA);
+      const kid = tv.opts.treeDataProvider.getChildren(beta)[0];
+      assert.ok(kid && !kid.key, 'an agent node');
+      log.treeViews['agentMonitor.cswapOverview'].userSelect(kid);
+      await tick();
+      assert.strictEqual(ctl.selectedKey, BETA);
+    });
+
+    await test('card buttons: Show in panel runs agentMonitor.show; Open transcript runs the command with a listed key only; the refresh spinner turns in the Progress view when only it is on screen', async () => {
+      const n = log.executed.length;
+      pg.msg({ type: 'show' });
+      pg.msg({ type: 'openTranscript', sessionKey: BETA });
+      pg.msg({ type: 'openTranscript', sessionKey: 'claude:nope' });
+      await tick();
+      assert.deepStrictEqual(log.executed.slice(n), [['agentMonitor.show'], ['agentMonitor.openTranscript', BETA]]);
+      panel.setVisible(false);
+      registered.get('agentMonitor.refresh')();
+      assert.deepStrictEqual(last(log.progress), { location: { viewId: 'agentMonitor.progress' } });
+      panel.setVisible(true);
+      win.send(fixtures());
+      await tick();
+    });
+  } finally {
+    win.close();
+  }
+
+  await test('the progress-view module fails to load: a placeholder page explains it and everything else still works', async () => {
+    modOverride.progress = {};
+    const w2 = activateWindow('win-progress-missing');
+    try {
+      assert.strictEqual(w2.ctl.progressView, null);
+      const pv = openWebview(log.webviews['agentMonitor.progress'].provider);
+      assert.strictEqual(pv.view.webview.options.enableScripts, false);
+      assert.ok(pv.view.webview.html.includes(i18n.t('ext.progressUnavailable').replace(/'/g, '&#39;')));
+      w2.send(fixtures());
+      await tick();
+      assert.ok(w2.ctl.shownKey, 'render ran');
+    } finally {
+      modOverride.progress = null;
+      w2.close();
+    }
+  });
+}
 
 async function notifyTests() {
   const win = activateWindow('win-notify');
@@ -4176,6 +4309,13 @@ async function manifestTests() {
     assert.strictEqual(views.get('agentMonitor.agents').contextualTitle, '%container.title%');
     assert.ok(!c.viewsWelcome.some((w) => w.view === 'agentMonitor.sessions'));
     assert.strictEqual(views.get('agentMonitor.tree').container, 'agentMonitorSidebar');
+    // the side bar: the Progress view (cards) first, the overview tree below it, collapsed until the user opens it
+    assert.deepStrictEqual(c.views.agentMonitorSidebar.map((v) => v.id), ['agentMonitor.progress', 'agentMonitor.tree']);
+    assert.strictEqual(views.get('agentMonitor.progress').type, 'webview');
+    assert.strictEqual(views.get('agentMonitor.progress').name, '%view.progress%');
+    assert.strictEqual(views.get('agentMonitor.progress').contextualTitle, '%container.title%');
+    assert.strictEqual(views.get('agentMonitor.tree').visibility, 'collapsed');
+    assert.ok(!c.views.cswap.some((v) => v.id === 'agentMonitor.progress'), 'not in cswap\'s side bar');
     assert.ok(!views.has('agentMonitor.view'), 'old table view must be removed');
     assert.ok(c.viewsContainers.panel.some((p) => p.id === 'agentMonitor'));
     for (const x of [...c.viewsContainers.activitybar, ...c.viewsContainers.panel, ...views.values()]) {
@@ -4185,7 +4325,7 @@ async function manifestTests() {
 
   await test('command table: commands and icons match; no pin / unpin / conversation / pinned', () => {
     const want = {
-      show: undefined, showTree: '$(list-tree)', refresh: '$(refresh)', openSettings: '$(gear)',
+      show: '$(layout-panel)', showTree: '$(list-tree)', refresh: '$(refresh)', openSettings: '$(gear)',
       'scope.all': '$(globe)', 'scope.workspace': '$(root-folder)', markSeen: '$(check)', markAllSeen: '$(check-all)',
       hideCompleted: '$(eye)', showCompleted: '$(eye-closed)', openTranscript: '$(go-to-file)',
       revealTranscript: '$(folder-opened)', copyTranscriptPath: '$(copy)', copyResume: '$(copy)',
@@ -4245,6 +4385,14 @@ async function manifestTests() {
     assert.ok(scope[0].when.includes("config.agentMonitor.scope != 'workspace'") && scope[1].when.includes("config.agentMonitor.scope == 'workspace'"));
   });
 
+  await test('Progress view title bar: scope switch, refresh, show the panel, show the overview (existing commands only)', () => {
+    const items = c.menus['view/title'].filter((m) => /view == agentMonitor\.progress\b|\|progress\|/.test(m.when));
+    assert.deepStrictEqual(items.map((m) => `${m.group} ${m.command || m.submenu}`), [
+      'navigation@1 agentMonitor.scopeMenu.all', 'navigation@1 agentMonitor.scopeMenu.workspace',
+      'navigation@2 agentMonitor.refresh', 'navigation@3 agentMonitor.show', 'navigation@4 agentMonitor.showTree',
+    ]);
+  });
+
   await test('each submenu is contributed at most once per menu (VS Code drops repeats with a warning, which hid the scope switch on the trees)', () => {
     for (const [menu, list] of Object.entries(c.menus)) {
       const subs = list.filter((m) => m.submenu).map((m) => m.submenu);
@@ -4252,13 +4400,16 @@ async function manifestTests() {
     }
     // the one scope entry per submenu covers the panel and both trees
     for (const m of c.menus['view/title'].filter((x) => x.submenu)) {
-      for (const v of ['agents', 'tree', 'panelOverview', 'cswapOverview']) assert.ok(new RegExp(m.when.match(/\/(.*)\//)[1]).test('agentMonitor.' + v), `${m.submenu} shows on ${v}`);
+      for (const v of ['agents', 'progress', 'tree', 'panelOverview', 'cswapOverview']) assert.ok(new RegExp(m.when.match(/\/(.*)\//)[1]).test('agentMonitor.' + v), `${m.submenu} shows on ${v}`);
     }
   });
 
   await test('webview context menu: when = webviewId + webviewSection + compactable / resumable / handoff / autoCompact; evaluated against the data-vscode-context of the row', () => {
-    const menu = c.menus['webview/context'];
-    assert.ok(Array.isArray(menu) && menu.length === 11);
+    const all = c.menus['webview/context'];
+    assert.ok(Array.isArray(all) && all.length === 22);
+    // the side-bar Progress view's cards have the same session menu as the panel's list
+    const menu = all.slice(0, 11);
+    assert.deepStrictEqual(all.slice(11), menu.map((m) => ({ ...m, when: m.when.replace("webviewId == 'agentMonitor.agents'", "webviewId == 'agentMonitor.progress'") })));
     // minimal when evaluator: only supports key == 'v' / key / !key joined by && (all that is used here)
     const evalWhen = (when, ctx) => when.split('&&').map((x) => x.trim()).every((cl) => {
       let m = /^(\w+) == '([^']*)'$/.exec(cl);
@@ -4622,7 +4773,7 @@ async function providerTests() {
     results.push(false);
     console.log('  FAIL  (extension tests aborted)', err && err.stack);
   }
-  for (const [title, fn] of [['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Auto-resume', autoResumeTests], ['Network access', networkTests], ['Copilot', providerTests]]) {
+  for (const [title, fn] of [['Progress view (side bar)', progressTests], ['"Needs you" notifications', notifyTests], ['Shared scan across windows', sharedScanTests], ['Shared scan: robustness', sharedScanRobustnessTests], ['Go to Chat', jumpTests], ['Background slowdown', backgroundTests], ['Usage history', historyTests], ['Threshold alerts, sounds and quiet hours', alertTests], ['Remote push', pushTests], ['Auto-resume', autoResumeTests], ['Network access', networkTests], ['Copilot', providerTests]]) {
     console.log(`\n${title}`);
     try {
       await fn();

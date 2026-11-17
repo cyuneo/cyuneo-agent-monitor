@@ -67,6 +67,8 @@ const VERSION = PKG.version;
 const EXT_ID = 'cyuneo.cyuneo-agent-monitor';
 const AGENTS_VIEW = 'agentMonitor.agents';
 const TREE_VIEW = 'agentMonitor.tree';
+// Side-bar Progress view (0.12.0): a card per session above the overview tree; the selected card opens in place
+const PROGRESS_VIEW = 'agentMonitor.progress';
 // Hidden overview tree in the bottom panel. Tree views exist from activation (webview views only after first shown),
 // so its badge is what puts the count on the panel tab even before the panel has been opened.
 const PANEL_TREE_VIEW = 'agentMonitor.panelOverview';
@@ -175,6 +177,7 @@ class Controller {
     this.observedAt = {};
     this.agentsView = null;
     this.agentsMod = null;
+    this.progressView = null;
     this.chrome = { contexts: {}, sBadge: null, tBadge: null, sDesc: null, tDesc: null, barSig: null };
     this.tabTypes = { TabInputWebview: vscode.TabInputWebview, TabInputCustom: vscode.TabInputCustom };
     this.shared = null;          // lib/shared-scan.js while windows share one scan; null = this window scans alone
@@ -263,11 +266,22 @@ class Controller {
     sub(this.panelTree);
     this.cswapTree = vscode.window.createTreeView(CSWAP_TREE_VIEW, { treeDataProvider: this.overview, showCollapseAll: true });
     sub(this.cswapTree);
+    // Picking a session (or one of its agents) in an overview tree selects it everywhere: Progress view and bottom panel
+    const onTreeSelect = (e) => {
+      const node = e && Array.isArray(e.selection) ? e.selection[0] : null;
+      const key = node ? this.keyOf(node) : null;
+      if (key && key !== this.selectedKey) this.guard('select', () => this.userSelect(key));
+    };
+    for (const tv of [this.treeView, this.cswapTree]) {
+      if (tv && typeof tv.onDidChangeSelection === 'function') sub(tv.onDidChangeSelection(onTreeSelect));
+    }
     this.updateCswapSidebar();
     if (vscode.extensions && typeof vscode.extensions.onDidChange === 'function') sub(vscode.extensions.onDidChange(() => this.updateCswapSidebar()));
 
     // Bottom panel: session list + agents (one webview)
     this.setupAgentsView();
+    // Side bar: Progress view (cards), sharing the panel's selection
+    this.setupProgressView();
 
     // Status-bar overall lamp
     this.statusItem = vscode.window.createStatusBarItem('agentMonitor.status', vscode.StatusBarAlignment.Left, 50);
@@ -289,6 +303,7 @@ class Controller {
 
     this.updateChrome();
     this.updateAgents(Date.now());
+    this.guard('progress', () => this.updateProgress(Date.now()));
     this.introFocus();
     // With a shared scan the worker starts paused and resumes once this window leads (or scans alone)
     this.shared = this.createShared();
@@ -340,6 +355,33 @@ class Controller {
     const provider = this.agentsView || fallbackAgentsView(this.t('ext.agentsUnavailable'));
     this.context.subscriptions.push(vscode.window.registerWebviewViewProvider(AGENTS_VIEW, provider));
     if (this.agentsView && typeof this.agentsView.dispose === 'function') this.context.subscriptions.push(this.agentsView);
+  }
+
+  setupProgressView() {
+    let Provider = null;
+    try {
+      const mod = require('./lib/progress-view');
+      Provider = mod && mod.ProgressViewProvider;
+    } catch (err) {
+      this.log(this.t('ext.log.moduleFailed', { module: 'progress-view', error: errText(err) }));
+    }
+    if (typeof Provider === 'function') {
+      try {
+        this.progressView = new Provider(this.context, {
+          i18n: this.i18n,
+          log: (line) => this.log(line),
+          onDidChangeVisibility: () => this.updateViewDwell(),
+          onSelect: (key) => this.guard('select', () => this.userSelect(key)),
+          autoResume: this.autoResumeUi,
+        });
+      } catch (err) {
+        this.progressView = null;
+        this.log(this.t('ext.log.moduleFailed', { module: 'progress-view', error: errText(err) }));
+      }
+    }
+    const provider = this.progressView || fallbackAgentsView(this.t('ext.progressUnavailable'));
+    this.context.subscriptions.push(vscode.window.registerWebviewViewProvider(PROGRESS_VIEW, provider));
+    if (this.progressView && typeof this.progressView.dispose === 'function') this.context.subscriptions.push(this.progressView);
   }
 
   setupCompact() {
@@ -824,7 +866,8 @@ class Controller {
     });
     // the spinner goes where the user can see it (Refresh may come from the cswap side bar)
     const shown = (v) => !!(v && v.visible);
-    const viewId = shown(this.agentsView) ? AGENTS_VIEW : shown(this.treeView) ? TREE_VIEW : shown(this.cswapTree) ? CSWAP_TREE_VIEW : AGENTS_VIEW;
+    const viewId = shown(this.agentsView) ? AGENTS_VIEW : shown(this.progressView) ? PROGRESS_VIEW
+      : shown(this.treeView) ? TREE_VIEW : shown(this.cswapTree) ? CSWAP_TREE_VIEW : AGENTS_VIEW;
     return vscode.window.withProgress({ location: { viewId } }, () => next);
   }
 
@@ -1141,6 +1184,7 @@ class Controller {
     }));
     this.resolveShown();
     this.updateAgents(now);
+    this.guard('progress', () => this.updateProgress(now));
     this.guard('statusBar', () => this.updateStatusBar(now));
     this.updateChrome();
     this.sendFocus();
@@ -1249,6 +1293,7 @@ class Controller {
   lookingAt(key) {
     if (!this.windowFocused() || !this.last) return false;
     if (this.agentsView && this.agentsView.visible && this.shownKey === key) return true;
+    if (this.progressLooking(key)) return true;
     const info = scopeLib.classifyTab(this.activeTab(), this.tabTypes);
     return !!info && scopeLib.matchChatTab(info, this.last.sessions, this.ws()) === key;
   }
@@ -2070,6 +2115,39 @@ class Controller {
     }));
   }
 
+  /**
+   * Side-bar Progress view: every session's card (the panel list's sessions, in its order) and the shown session opened in
+   * place, with its details (shared selection: the same shownKey as the panel).
+   */
+  updateProgress(now) {
+    const v = this.progressView;
+    if (!v || typeof v.update !== 'function') return;
+    const st = this.settings();
+    if (!this.last) {
+      v.update({ arranged: null, loaded: false, now, settings: st });
+      return;
+    }
+    const key = this.shownKey;
+    const s = key ? this.byKey.get(key) || null : null;
+    v.update({
+      arranged: this.arranged,
+      lamps: this.lamps ? this.lamps.bySession : undefined,
+      shownKey: key,
+      session: s,
+      detail: (s && this.last.details && this.last.details[key]) || null,
+      now,
+      settings: st,
+      loaded: true,
+      emptyText: this.scoped.length ? undefined : emptyText(this.scope(), this.ws(), this.i18n),
+    });
+  }
+
+  /** The Progress view is on screen with this session's card open */
+  progressLooking(key) {
+    const v = this.progressView;
+    return !!(v && typeof v.lookingAt === 'function' && v.lookingAt(key));
+  }
+
   // Status-bar overall lamp: color = overall lamp; warning / error background on NeedsYou / Error (can be turned off)
   updateStatusBar(now) {
     const item = this.statusItem;
@@ -2205,10 +2283,10 @@ class Controller {
     this.dwell.set('tab', key);
   }
 
-  // The agents view shows that session, is visible, and the window is focused for 1.5 s -> seen
+  // The agents view (or the Progress view with its card open) shows that session, is visible, and the window is focused for 1.5 s -> seen
   updateViewDwell() {
     if (!this.dwell) return;
-    const visible = !!(this.agentsView && this.agentsView.visible);
+    const visible = !!(this.agentsView && this.agentsView.visible) || this.progressLooking(this.shownKey);
     this.dwell.set('view', visible && this.windowFocused() ? this.shownKey : null);
   }
 
@@ -2421,7 +2499,7 @@ function emptyText(scope, ws, i18n) {
   return fmt.formatScope(scope, i18n).empty;
 }
 
-// Placeholder page when the agents-view module fails to load: a single line of explanation (plain text, no scripts)
+// Placeholder page when a view's module fails to load (agents-view, progress-view): a single line of explanation (plain text, no scripts)
 function fallbackAgentsView(message) {
   return {
     resolveWebviewView(view) {
