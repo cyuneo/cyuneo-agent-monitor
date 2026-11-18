@@ -153,7 +153,7 @@
     const wfs = h('div', { class: 'c-wfs' });
     const plan = makePlan();
     const stream = h('ol', { class: 'steps c-stream', 'aria-label': t('webview.steps') });
-    const openLog = h('button', { type: 'button', class: 'link', 'data-act': 'openTranscript' }, [icon('go-to-file'), h('span', null, [t('webview.progress.openLog')])]);
+    const openLog = h('button', { type: 'button', class: 'link', 'data-act': 'openTranscript' }, [icon('go-to-file'), h('span', null, [t('webview.openTranscript')])]);
     const foot = h('div', { class: 'c-foot' }, [
       h('button', { type: 'button', class: 'link', 'data-act': 'show' }, [icon('layout-panel'), h('span', null, [t('webview.progress.openPanel')])]),
       openLog,
@@ -257,8 +257,24 @@
   }
 
   // ---------- Step stream: groups, blocks, lines, the quoted prompt, notes, earlier turns ----------
+  // A lone block that the next call turns into a group: its element moves into the group (kept open, keeps focus)
+  const adopt = new Map(); // block key -> its element, until the group that took it is drawn
   function syncStream(list, items, animate) {
     let fresh = 0;
+    const lone = new Set(items.filter((x) => x.type === 'block').map((x) => x.key));
+    let focused = null;
+    const mine = [];
+    for (const li of Array.from(list.children)) {
+      const S = li._s;
+      if (!S || !S.data || typeof li._key !== 'string' || li._key.indexOf('block|') !== 0 || lone.has(S.data.key)) continue;
+      const hasFocus = document.activeElement === S.head;
+      const g = S.open || hasFocus ? items.find((x) => x.type === 'group' && x.items.some((b) => b.key === S.data.key)) : null;
+      if (!g) continue;
+      adopt.set(S.data.key, li);
+      mine.push(S.data.key);
+      if (!isOpen(bodyKey, g.key, g.defaultOpen)) setOpen(bodyKey, g.key, true);
+      if (hasFocus) focused = S.head;
+    }
     syncKeyed(list, items, (x) => x.type + '|' + x.key, (x) => {
       const li = makeItem(x);
       if (animate) {
@@ -268,6 +284,8 @@
       }
       return li;
     }, updateItem);
+    for (const k of mine) adopt.delete(k);
+    if (focused && focused.isConnected !== false) focused.focus();
   }
   function makeItem(x) {
     switch (x.type) {
@@ -354,7 +372,11 @@
     show(F.items, open);
     if (!open) { F.filled = false; return; }
     if (isGroup) {
-      Steps.sync(F.items, x.items, 'main', F.filled);
+      Steps.sync(F.items, x.items, 'main', F.filled, (k) => {
+        const li = adopt.get(k);
+        if (li) { adopt.delete(k); li._key = k; }
+        return li || null;
+      });
       const kids = F.items.children;
       x.items.forEach((b, i) => { if (kids[i]) blockExtras(kids[i], b); });
     } else {

@@ -117,7 +117,7 @@
   "webview.progress.phase.done": "已完成",
   "webview.progress.phase.current": "進行中",
   "webview.progress.phase.pending": "未開始",
-  "webview.progress.nowStep": "正在 {step}",
+  "webview.progress.nowStep": "正在{step}",
   "webview.progress.childDone": "已完成 · {n} 個工具",
   "webview.progress.you": "你：{text}",
   "webview.progress.prevTurn": "上一輪 · 執行了 {n} 個工具",
@@ -126,7 +126,6 @@
   "webview.progress.ranN": "執行了 {n} 個工具",
   "webview.progress.failedN": "{n} 個失敗",
   "webview.progress.stoppedN": "{n} 個沒有結果",
-  "webview.progress.catsMore": "等",
-  "webview.progress.openPanel": "在面板中檢視",
-  "webview.progress.openLog": "開啟記錄"
+  "webview.progress.catsMore": "還有 {n} 類",
+  "webview.progress.openPanel": "在面板中檢視"
 }

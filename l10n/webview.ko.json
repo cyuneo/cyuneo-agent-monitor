@@ -109,7 +109,7 @@
   "webview.progress.plan": "계획",
   "webview.progress.tasksDone": "작업 {done}/{total} 완료",
   "webview.progress.planDone": "계획 {done}/{total} 완료",
-  "webview.progress.subagents": "하위 에이전트 {done}/{total} 완료",
+  "webview.progress.subagents": "서브에이전트 {done}/{total} 완료",
   "webview.progress.turn": "이번 턴 · {ago} · 도구 {n}개",
   "webview.progress.doneFold": "완료 {n}개",
   "webview.progress.more": "{n}개 더",
@@ -126,7 +126,6 @@
   "webview.progress.ranN": "도구 {n}개 실행",
   "webview.progress.failedN": "{n}개 실패",
   "webview.progress.stoppedN": "{n}개 결과 없음",
-  "webview.progress.catsMore": "외",
-  "webview.progress.openPanel": "패널에서 보기",
-  "webview.progress.openLog": "기록 열기"
+  "webview.progress.catsMore": "외 {n}개",
+  "webview.progress.openPanel": "패널에서 보기"
 }

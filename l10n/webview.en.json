@@ -126,7 +126,6 @@
   "webview.progress.ranN": "Ran tools: {n}",
   "webview.progress.failedN": "failed: {n}",
   "webview.progress.stoppedN": "without a result: {n}",
-  "webview.progress.catsMore": "and more",
-  "webview.progress.openPanel": "Show in panel",
-  "webview.progress.openLog": "Open transcript"
+  "webview.progress.catsMore": "+{n} more",
+  "webview.progress.openPanel": "Show in panel"
 }

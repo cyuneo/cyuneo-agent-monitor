@@ -151,8 +151,9 @@
     /**
      * Brings list (an <ol class="steps">) in line with the view model's steps of one row, keeping each step's element.
      * With animate, steps that are new since the last call slide in one after another (the first fill appears at once).
+     * reuse (optional): key -> an element from elsewhere to take for a step that has none here yet.
      */
-    function sync(list, items, rowId, animate) {
+    function sync(list, items, rowId, animate, reuse) {
       let fresh = 0;
       syncKeyed(list, items, (x) => x.key, (x) => {
         const li = x.block ? makeStep() : makeLine();
@@ -163,7 +164,7 @@
           li.addEventListener('animationend', () => { li.classList.remove('enter'); li.style.animationDelay = ''; }, { once: true });
         }
         return li;
-      }, (li, x) => (x.block ? updateStep(li, x, rowId) : updateLine(li, x)));
+      }, (li, x) => (x.block ? updateStep(li, x, rowId) : updateLine(li, x)), reuse);
     }
 
     return { makeLine, updateLine, makeStep, updateStep, toggleStep, fillStep, onStepLog, sync };

@@ -165,6 +165,7 @@ class Controller {
     this.leftKeys = [];          // session list keys in display order
     this.selectedKey = null;     // selected session in the list (clicked by the user or auto-selected by the rules); owned by the extension, pushed to the page
     this.shownKey = null;        // session currently shown in the content area
+    this.treeAsked = new Map();  // overview tree -> the session last revealed in it (syncTreeSelection)
     this.listWidth = null;       // session list width (globalState; sent back by the page after dragging)
     this.cmdTitles = null;       // command titles (package.nls; used by the "..." QuickPick, matching the context menu)
     this.focusSig = null;
@@ -273,7 +274,11 @@ class Controller {
       if (key && key !== this.selectedKey) this.guard('select', () => this.userSelect(key));
     };
     for (const tv of [this.treeView, this.cswapTree]) {
-      if (tv && typeof tv.onDidChangeSelection === 'function') sub(tv.onDidChangeSelection(onTreeSelect));
+      if (tv && typeof tv.onDidChangeSelection === 'function') sub(tv.onDidChangeSelection((e) => { this.treeAsked.delete(tv); onTreeSelect(e); }));
+      // Opened again: highlight the session shown now
+      if (tv && typeof tv.onDidChangeVisibility === 'function') {
+        sub(tv.onDidChangeVisibility(() => { this.treeAsked.delete(tv); this.guard('treeSelection', () => this.syncTreeSelection()); }));
+      }
     }
     this.updateCswapSidebar();
     if (vscode.extensions && typeof vscode.extensions.onDidChange === 'function') sub(vscode.extensions.onDidChange(() => this.updateCswapSidebar()));
@@ -1185,6 +1190,7 @@ class Controller {
     this.resolveShown();
     this.updateAgents(now);
     this.guard('progress', () => this.updateProgress(now));
+    this.guard('treeSelection', () => this.syncTreeSelection());
     this.guard('statusBar', () => this.updateStatusBar(now));
     this.updateChrome();
     this.sendFocus();
@@ -1200,6 +1206,24 @@ class Controller {
     const r = scopeLib.resolveSelection({ selectedKey: this.selectedKey, conversationKey: this.follower.key, keys });
     if (!this.selectedKey && r.key) this.select(r.key);
     this.shownKey = r.key;
+  }
+
+  /**
+   * The overview trees highlight the session shown in the Progress view and the panel, also when it was picked there or
+   * followed; otherwise a tree keeps its old row selected, and clicking that row again would change nothing.
+   * Only visible trees, and each session once until the tree's selection or visibility changes.
+   */
+  syncTreeSelection() {
+    const key = this.shownKey;
+    for (const tv of [this.treeView, this.cswapTree]) {
+      if (!tv || !tv.visible || typeof tv.reveal !== 'function' || !key) continue;
+      const cur = Array.isArray(tv.selection) && tv.selection[0] ? this.keyOf(tv.selection[0]) : null;
+      if (cur === key || this.treeAsked.get(tv) === key) continue;
+      const node = this.overview && this.overview.nodes ? this.overview.nodes.get(key) : null;
+      if (!node) continue;
+      this.treeAsked.set(tv, key);
+      Promise.resolve(tv.reveal(node, { select: true, focus: false, expand: false })).catch(noop);
+    }
   }
 
   /** Programmatic selection (following, auto-selecting the first row): not marked seen right away (left to the 1.5 s dwell timer); pushed to the page on the next render */

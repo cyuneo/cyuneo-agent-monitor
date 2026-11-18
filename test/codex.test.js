@@ -634,7 +634,7 @@ function statusTests() {
     fs.utimesSync(f, S(5) / 1000, S(5) / 1000);
     const p = new CodexProvider({ home, activeWindowMinutes: 100000 });
     const s = p.scan(S(6)).find((x) => x.key === KEY(0x91));
-    assert.deepStrictEqual(s.main.todo, { done: 1, total: 2, active: 'Edit' });
+    assert.deepStrictEqual(s.main.todo, { done: 1, total: 2, active: 'Edit', ms: S(2) });
     assert.deepStrictEqual(s.main.turn, { sinceMs: S(1), tools: 2, errors: s.main.toolErrors });
     const d = p.detail(KEY(0x91)).agents[id];
     assert.deepStrictEqual(d.plan.items.map((x) => x.status), ['completed', 'in_progress']);

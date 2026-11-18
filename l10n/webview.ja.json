@@ -126,7 +126,6 @@
   "webview.progress.ranN": "ツール{n}件を実行",
   "webview.progress.failedN": "{n}件失敗",
   "webview.progress.stoppedN": "{n}件結果なし",
-  "webview.progress.catsMore": "など",
-  "webview.progress.openPanel": "パネルで表示",
-  "webview.progress.openLog": "記録を開く"
+  "webview.progress.catsMore": "ほか {n} 種類",
+  "webview.progress.openPanel": "パネルで表示"
 }

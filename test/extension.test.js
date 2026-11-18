@@ -1623,6 +1623,42 @@ async function progressTests() {
       assert.strictEqual(ctl.selectedKey, BETA);
     });
 
+    await test('the overview trees follow a selection made elsewhere, so clicking the old row again selects it; hidden trees catch up when shown', async () => {
+      const tv = log.treeViews['agentMonitor.tree'];
+      const cv = log.treeViews['agentMonitor.cswapOverview'];
+      const node = (k) => tv.opts.treeDataProvider.getChildren().find((n) => n.key === k);
+      tv.userSelect(node(DELTA));
+      await tick();
+      assert.strictEqual(ctl.selectedKey, DELTA);
+      // a card picks ALPHA: the tree now highlights ALPHA (selected, not focused)
+      cv.setVisible(false);
+      const n = log.reveals.length;
+      pg.msg({ type: 'select', sessionKey: ALPHA });
+      await tick();
+      assert.strictEqual(ctl.selectedKey, ALPHA);
+      assert.deepStrictEqual(log.reveals.slice(n), [{ view: 'agentMonitor.tree', key: ALPHA, o: { select: true, focus: false, expand: false } }]);
+      assert.strictEqual(tv.selection[0].key, ALPHA);
+      // so clicking DELTA in the tree again is a change, and selects it everywhere
+      tv.userSelect(node(DELTA));
+      await tick();
+      assert.strictEqual(ctl.selectedKey, DELTA);
+      assert.strictEqual(pg.lastOf('cards').shownKey, DELTA);
+      // and ALPHA from a card once more is revealed again
+      pg.msg({ type: 'select', sessionKey: ALPHA });
+      await tick();
+      assert.strictEqual(tv.selection[0].key, ALPHA);
+      // the same selection on the next render is not revealed again
+      const m = log.reveals.length;
+      win.send(fixtures());
+      await tick();
+      assert.strictEqual(log.reveals.slice(m).length, 0);
+      // the hidden cswap tree catches up when shown
+      cv.setVisible(true);
+      await tick();
+      assert.deepStrictEqual(last(log.reveals), { view: 'agentMonitor.cswapOverview', key: ALPHA, o: { select: true, focus: false, expand: false } });
+      assert.strictEqual(ctl.selectedKey, ALPHA);
+    });
+
     await test('card buttons: Show in panel runs agentMonitor.show; Open transcript runs the command with a listed key only; the refresh spinner turns in the Progress view when only it is on screen', async () => {
       const n = log.executed.length;
       pg.msg({ type: 'show' });

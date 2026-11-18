@@ -87,6 +87,8 @@ i.lamp { color: var(--lamp, var(--c-icon)); flex: none; }
   color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground));
   outline: 1px dotted var(--vscode-contrastActiveBorder, transparent);
 }
+/* the selected head's dotted high-contrast outline must not hide the keyboard focus ring */
+.card.selected > .c-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .c-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .card.compact .c-title { font-weight: normal; }
 .c-cost, .c-ago { flex: none; white-space: nowrap; }

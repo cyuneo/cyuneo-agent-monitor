@@ -658,14 +658,14 @@ test('TodoWrite: the list becomes the plan (Agent.todo counts it); the next writ
     { text: 'Read the code', active: 'Reading the code', status: 'completed' },
     { text: 'Fix the bug', active: 'Fixing the bug', status: 'in_progress' },
     { text: 'Run tests', active: 'Running tests', status: 'pending' }] });
-  assert.deepStrictEqual(S.todoOf(s.plan), { done: 1, total: 3, active: 'Fixing the bug' });
+  assert.deepStrictEqual(S.todoOf(s.plan), { done: 1, total: 3, active: 'Fixing the bug', ms: T(0, 1) });
   // The tool result carries the list Claude Code stored: it wins over the input
   _internal.ingest(s, resultLine(T(0, 2), 'td1', 'Todos have been modified', false, { toolUseResult: { oldTodos: [], newTodos: todos(['Stored', 'in_progress', null]) } }));
   assert.deepStrictEqual(s.plan.items, [{ text: 'Stored', active: null, status: 'in_progress' }]);
-  assert.deepStrictEqual(S.todoOf(s.plan), { done: 0, total: 1, active: 'Stored' }, 'no activeForm: the text');
+  assert.deepStrictEqual(S.todoOf(s.plan), { done: 0, total: 1, active: 'Stored', ms: T(0, 2) }, 'no activeForm: the text');
   // A later write replaces the whole list
   _internal.ingest(s, askLine(T(0, 3), 'm2', [{ type: 'tool_use', id: 'td2', name: 'TodoWrite', input: { todos: todos(['A', 'completed', 'a'], ['B', 'completed', 'b']) } }]));
-  assert.deepStrictEqual([s.plan.ms, s.plan.items.map((x) => x.text), S.todoOf(s.plan)], [T(0, 3), ['A', 'B'], { done: 2, total: 2, active: null }]);
+  assert.deepStrictEqual([s.plan.ms, s.plan.items.map((x) => x.text), S.todoOf(s.plan)], [T(0, 3), ['A', 'B'], { done: 2, total: 2, active: null, ms: T(0, 3) }]);
   // Another shape: not an array, or no usable item → unchanged
   _internal.ingest(s, askLine(T(0, 4), 'm3', [{ type: 'tool_use', id: 'td3', name: 'TodoWrite', input: { todos: 'nope' } }]));
   _internal.ingest(s, askLine(T(0, 5), 'm4', [{ type: 'tool_use', id: 'td4', name: 'TodoWrite', input: { todos: [{ content: 'x', status: 'later' }] } }]));
@@ -709,7 +709,7 @@ test('turns: a real prompt starts one, a tool result does not; calls and failure
   assert.strictEqual(sub.turn.dropped.tools, 35);
 });
 
-test('declared workflow phases: literal titles only (quotes, quoted keys, brackets inside strings); a computed title or none gives []; 12 titles of 40 characters at most', () => {
+test('declared workflow phases: literal titles only (quotes, quoted keys, brackets and "title:" inside strings); a computed title or none gives []; 12 titles, whitespace normalised but whole', () => {
   const { declaredPhasesOf } = require('../lib/providers/claude');
   const script = `export const meta = {
     name: 'synth-flow',
@@ -730,7 +730,10 @@ test('declared workflow phases: literal titles only (quotes, quoted keys, bracke
   assert.deepStrictEqual(declaredPhasesOf(null), []);
   const many = 'meta = { phases: [' + Array.from({ length: 15 }, (_, i) => `{ title: '${'P'.repeat(50)}${i}' }`).join(', ') + '] }';
   const got = declaredPhasesOf(many);
-  assert.deepStrictEqual([got.length, got[0].length], [12, 40]);
+  assert.deepStrictEqual([got.length, got[0].length], [12, 51], 'kept whole: they are matched against the agents\' phase');
+  assert.deepStrictEqual(declaredPhasesOf('meta = { phases: [{ title: `Implement  the\nfix` }] }'), ['Implement the fix']);
+  // "title:" inside a string value is not a key
+  assert.deepStrictEqual(declaredPhasesOf("meta = { phases: [{ title: 'Review', detail: 'check title: and body' }, { title: 'B', detail: \"a \\\"title\\\": x\" }] }"), ['Review', 'B']);
 });
 
 test('workflow phase states: current while one of its agents runs; done when its agents are all done and a later phase started (or the run completed); pending otherwise', () => {
@@ -742,6 +745,12 @@ test('workflow phase states: current while one of its agents runs; done when its
   assert.deepStrictEqual(st(list, [a('Plan', 'done'), a('Build', 'done'), a('Check', 'done')], 'completed'), ['Plan:done:1/1', 'Build:done:1/1', 'Check:done:1/1']);
   assert.deepStrictEqual(st(list, [a('Plan', 'apiError'), a('Build', 'thinking')]), ['Plan:pending:0/1', 'Build:current:0/1', 'Check:pending:0/0'], 'a failed agent keeps its phase from done');
   assert.deepStrictEqual(st([], [a('Plan', 'tool')]), []);
+  // A title over 40 characters, or with doubled spaces, still matches the agents' phase; only the shown title is clipped
+  const long = 'Implement the fix and write regression tests';
+  const lst = ['Explore', long, 'Verify'];
+  const got = _internal.phaseStatesOf(lst, [a('Explore', 'done'), a('Implement  the fix and write\nregression tests', 'tool')], 'running');
+  assert.deepStrictEqual(got.map((p) => `${p.state}:${p.done}/${p.started}`), ['done:1/1', 'current:0/1', 'pending:0/0']);
+  assert.strictEqual(got[1].title, long.slice(0, 39) + '…');
 });
 
 test('provider: subagent parentRef is the parent\'s Agent call; the workflow carries its Workflow call (ref) and declared phases; Agent.todo / turn; detail plan / turn; main details keep timelineMainSent, others timelineSent', () => {
@@ -798,7 +807,7 @@ test('provider: subagent parentRef is the parent\'s Agent call; the workflow car
     { title: 'Implement', state: 'done', done: 1, started: 1 },
     { title: 'Review', state: 'current', done: 0, started: 1 },
     { title: 'Ship', state: 'pending', done: 0, started: 0 }]);
-  assert.deepStrictEqual(s.main.todo, { done: 0, total: 2, active: 'Launching' });
+  assert.deepStrictEqual(s.main.todo, { done: 0, total: 2, active: 'Launching', ms: T(20, 1) });
   const dd = p.detail('claude:' + sid);
   assert.deepStrictEqual(dd.agents.main.plan.items.map((x) => x.text), ['Launch', 'Report']);
   // The run's state file, once written, gives the phases
