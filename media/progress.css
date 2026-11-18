@@ -199,7 +199,8 @@ progress.bar::-webkit-progress-value { background: var(--vscode-progressBar-back
 .f-items { padding: 2px 4px 4px 8px; }
 /* Blocks in a side bar: the raw tool name is in the tooltip, and the title gives way before the state icon does */
 .c-stream .st-tool { display: none; }
-.c-stream .st-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The category label stays readable (up to half the row); the detail after it is what gets cut */
+.c-stream .st-title { flex: 0 0 auto; max-width: 50%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step.group > .f-items { border-top: 1px solid var(--vscode-widget-border, var(--line)); }
 /* What runs now: a 2px bar on the left */
 .step.group.current, .step.block.current { box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }

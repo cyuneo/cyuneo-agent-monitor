@@ -200,8 +200,8 @@ test('nesting: an Agent block carries its subagent\'s line (parentRef), a Workfl
   });
   const out = vmOf([prompt('x'), call('Agent', 'ag'), call('Agent', 'ag2'), ok('Agent', 'ag2'), call('Workflow', 'wf'), ok('Workflow', 'wf')], s);
   const blocks = out[1].items;
-  // the subagent's step as the card's "now" line says it (it already reads "Read oauth.js", "Thinking"…: no "now" in front)
-  assert.strictEqual(blocks[0].nest.text, i18n.t('step.tool', { tool: F.toolLabel('Read', i18n), detail: 'oauth.js' }));
+  // the subagent's step as the card's "now" line says it, with the blocks' category label ("Reading oauth.js", not "Read oauth.js")
+  assert.strictEqual(blocks[0].nest.text, i18n.t('step.tool', { tool: i18n.t('webview.step.read'), detail: 'oauth.js' }));
   assert.strictEqual(blocks[0].nest.lamp, 'working');
   assert.strictEqual(blocks[1].nest.text, i18n.t('webview.progress.childDone', { n: 4 }));
   assert.strictEqual(blocks[2].nest.text, i18n.t('workflow.phaseOf', { index: 2, count: 3, title: 'Review' }) + SEP + i18n.t('workflow.started', { total: 8, done: 5 }));
@@ -287,6 +287,10 @@ test('card progress line: plan > workflow with phases > workflow without > subag
   });
   const p1 = card(all).prog;
   assert.deepStrictEqual(p1, { kind: 'todo', text: i18n.t('webview.progress.tasksDone', { done: 3, total: 7 }), value: 3, max: 7 });
+  // open, the plan and the phase bar below say it in full: no second "3/7" on the card itself
+  assert.strictEqual(card(all, { shownKey: all.key }).prog, null);
+  assert.strictEqual(card({ ...all, main: working({ turn: all.main.turn }) }, { shownKey: all.key }).prog, null, 'phases too');
+  assert.strictEqual(card({ ...all, main: working({ turn: all.main.turn }), workflows: [] }, { shownKey: all.key }).prog.kind, 'subagents', 'nothing below says that');
   assert.strictEqual(card(session({ ...all, provider: 'codex', key: 'codex:x' })).prog.text, i18n.t('webview.progress.planDone', { done: 3, total: 7 }));
   const noTodo = { ...all, main: working({ turn: all.main.turn }) };
   const p2 = card(noTodo).prog;
@@ -323,7 +327,11 @@ test('cards: a finished session that is not open is one compact line; the open o
   assert.deepStrictEqual([open.compact, open.expanded], [false, true]);
   const run = session({ main: working({ turn: { sinceMs: NOW - 20e3, tools: 2, errors: 0 } }) });
   const a = card(run);
-  assert.strictEqual(a.now.text, i18n.t('step.tool', { tool: F.toolLabel('Bash', i18n), detail: 'npm test' }));
+  // the category label the step blocks use, not the tool's own name ("Bash npm test")
+  assert.strictEqual(a.now.text, i18n.t('step.tool', { tool: i18n.t('webview.step.run'), detail: 'npm test' }));
+  // a tool without a category keeps its own name
+  assert.strictEqual(card(session({ main: working({ step: { kind: 'tool', tool: 'SomeTool', detail: 'x', parallel: 1, sinceMs: NOW - 2000 } }) })).now.text,
+    i18n.t('step.tool', { tool: 'SomeTool', detail: 'x' }));
   assert.ok(a.now.spin);
   assert.strictEqual(JSON.stringify(a), JSON.stringify(PV.cardVm(run, L(run), i18n, { now: NOW + 1000 })));
   // the menu context is the panel list's, for the same session menu
@@ -474,6 +482,8 @@ test('media/progress.js and progress.css: DOM from text only, no network; string
   }
   for (const st of ['done', 'current', 'pending']) assert.ok(('webview.progress.phase.' + st) in en);
   const css = fs.readFileSync(path.join(ROOT, 'media', 'progress.css'), 'utf8');
+  // a block's category label ("运行命令") is not squeezed away: it keeps its width up to half the row, the detail is cut instead
+  assert.match(css, /\.c-stream \.st-title \{ flex: 0 0 auto; max-width: 50%;/);
   assert.ok(!/opacity\s*:/.test(css), 'no opacity dimming');
   assert.ok(!/@media[^{]*width/.test(css), 'no viewport-width rules');
   assert.ok(/container-type: inline-size;/.test(css) && /@container progress \(max-width: 280px\)/.test(css));
